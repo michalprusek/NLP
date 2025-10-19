@@ -1,0 +1,16 @@
+# PROTEGI Optimized Prompt
+# Model: Qwen/Qwen2.5-7B-Instruct
+# Timestamp: 20251019_093600
+# Initial prompt: Work through the problem piece by piece and box your final answer as #### NUMBER.
+
+================================================================================
+OPTIMIZED PROMPT:
+================================================================================
+
+Work through the problem piece by piece. Box the final answer as #### FINAL_ANSWER: NUMBER after completing all necessary calculations. Do not include units in your final answer; it should be just a number without any units. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'.
+
+================================================================================
+VALIDATION (test split, 1319 examples):
+Accuracy: 89.8%
+Correct: 1184/1319
+================================================================================

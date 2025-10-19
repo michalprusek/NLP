@@ -1,0 +1,85 @@
+{
+  "method": "protegi",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "backend": "vllm",
+  "timestamp": "20251018_235120",
+  "config": {
+    "iterations": 10,
+    "minibatch_size": 1500,
+    "beam_size": 4,
+    "num_candidates": null,
+    "train_split": "train",
+    "val_split": "test",
+    "train_size": 7473,
+    "val_size": 1319
+  },
+  "best_prompt": "Solve this math problem and present a structured solution. State your final answer clearly at the end using the \"#### NUMBER\" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER",
+  "history": [
+    {
+      "iteration": 0,
+      "prompt": "Solve this math problem",
+      "score": 0.8,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 1,
+      "prompt": "Solve this math problem and present a structured solution. State your final answer clearly at the end using the \"#### NUMBER\" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER",
+      "score": 0.9433333333333334,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 2,
+      "prompt": "Solve this math problem and present a structured solution. Use unique markers such as \"Step 1:\", \"Step 2:\", and \"Final Answer:\" to distinguish each part. Clearly state your final answer using the \"#### NUMBER\" format at the end. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER (e.g., 730)",
+      "score": 0.938,
+      "selected_idx": 1
+    },
+    {
+      "iteration": 3,
+      "prompt": "Solve this math problem step-by-step, clearly labeling your final answer as \"#### Final Answer: NUMBER\". Present each calculation in a structured format, such as \"Step 1: Calculation X; Step 2: Calculation Y; Final Answer: #### NUMBER\". Always box or highlight the final answer.",
+      "score": 0.94,
+      "selected_idx": 2
+    },
+    {
+      "iteration": 4,
+      "prompt": "Solve this math problem step-by-step, presenting each calculation in a structured format such as \"Step 1: Calculation X; Step 2: Calculation Y\". Use distinct formatting to clearly highlight the Final Answer: #### NUMBER at the end of each solution. Follow the order: all steps first, then Final Answer: #### NUMBER. Include an example like: \"Step 1: Calculation X; Step 2: Calculation Y; Final Answer: #### 50\".",
+      "score": 0.9406666666666667,
+      "selected_idx": 1
+    },
+    {
+      "iteration": 5,
+      "prompt": "Solve this math problem and present a structured solution. State your final answer clearly at the end using the \"#### NUMBER\" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER",
+      "score": 0.938,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 6,
+      "prompt": "Solve this math problem step-by-step, presenting each calculation in a structured format such as \"Step 1: Calculation X; Step 2: Calculation Y\". Use distinct formatting to clearly highlight the Final Answer: #### NUMBER at the end of each solution. Follow the order: all steps first, then Final Answer: #### NUMBER. Include an example like: \"Step 1: Calculation X; Step 2: Calculation Y; Final Answer: #### 50\".",
+      "score": 0.928,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 7,
+      "prompt": "Solve this math problem and present a structured solution. Use unique markers such as \"Step 1:\", \"Step 2:\", and \"Final Answer:\" to distinguish each part. Clearly state your final answer using the \"#### NUMBER\" format at the end. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER (e.g., 730)",
+      "score": 0.93,
+      "selected_idx": 1
+    },
+    {
+      "iteration": 8,
+      "prompt": "Solve this math problem step-by-step, clearly labeling your final answer as \"#### Final Answer: NUMBER\". Present each calculation in a structured format, such as \"Step 1: Calculation X; Step 2: Calculation Y; Final Answer: #### NUMBER\". Always box or highlight the final answer.",
+      "score": 0.928,
+      "selected_idx": 1
+    },
+    {
+      "iteration": 9,
+      "prompt": "Solve this math problem and present a structured solution. State your final answer clearly at the end using the \"#### NUMBER\" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER",
+      "score": 0.9373333333333334,
+      "selected_idx": 0
+    }
+  ],
+  "validation": {
+    "split": "test",
+    "accuracy": 0.8794541319181198,
+    "correct": 1160,
+    "total": 1319
+  }
+}

@@ -1,0 +1,15 @@
+[project]
+name = "nlp"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.9,<3.14"
+dependencies = [
+    "accelerate>=1.10.1",
+    "anthropic>=0.71.0",
+    "datasets>=4.2.0",
+    "openai>=2.5.0",
+    "setuptools>=65.0.0",
+    "torch>=2.0.0",
+    "transformers>=4.57.1",
+    "vllm>=0.5.0,<0.6.0",
+]

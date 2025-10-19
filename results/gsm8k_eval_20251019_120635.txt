@@ -1,0 +1,24 @@
+GSM8K Evaluation Results
+================================================================================
+
+Model: Qwen/Qwen2.5-7B-Instruct
+Backend: vllm
+Evaluator: standard
+Dataset: datasets/gsm8k (test)
+Timestamp: 20251019_120635
+
+Configuration:
+  Samples per question: 1
+  Temperature: 1.0
+  Self-consistency: Disabled
+
+Prompt Template:
+--------------------------------------------------------------------------------
+Solve this math problem and present a structured solution. State your final answer clearly at the end using the "#### NUMBER" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER
+--------------------------------------------------------------------------------
+
+Results:
+  Accuracy: 87.87%
+  Correct: 1159/1319
+  Failed extractions: 0
+  Extraction rate: 100.00%

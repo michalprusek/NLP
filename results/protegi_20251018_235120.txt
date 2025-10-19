@@ -1,0 +1,16 @@
+# PROTEGI Optimized Prompt
+# Model: Qwen/Qwen2.5-7B-Instruct
+# Timestamp: 20251018_235120
+# Initial prompt: Solve this math problem
+
+================================================================================
+OPTIMIZED PROMPT:
+================================================================================
+
+Solve this math problem and present a structured solution. State your final answer clearly at the end using the "#### NUMBER" format. Step 1: Perform calculation X; Step 2: Perform calculation Y; Final Answer: #### NUMBER
+
+================================================================================
+VALIDATION (test split, 1319 examples):
+Accuracy: 87.9%
+Correct: 1160/1319
+================================================================================

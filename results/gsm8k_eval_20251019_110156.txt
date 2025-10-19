@@ -1,0 +1,24 @@
+GSM8K Evaluation Results
+================================================================================
+
+Model: Qwen/Qwen2.5-7B-Instruct
+Backend: vllm
+Evaluator: standard
+Dataset: datasets/gsm8k (test)
+Timestamp: 20251019_110156
+
+Configuration:
+  Samples per question: 5
+  Temperature: 0.7
+  Self-consistency: Enabled
+
+Prompt Template:
+--------------------------------------------------------------------------------
+Let's think step-by-step.
+--------------------------------------------------------------------------------
+
+Results:
+  Accuracy: 68.69%
+  Correct: 906/1319
+  Failed extractions: 0
+  Extraction rate: 100.00%

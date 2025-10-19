@@ -1,0 +1,20 @@
+{
+  "name": "CLAUDETTE/UNFAIR-ToS",
+  "source": "mteb/UnfairTOSLegalBenchClassification",
+  "description": "Classification of potentially unfair clauses in Terms of Service",
+  "labels": {
+    "0": "Limitation of liability",
+    "1": "Unilateral termination",
+    "2": "Unilateral change",
+    "3": "Arbitration",
+    "4": "Content removal",
+    "5": "Choice of law",
+    "6": "Other",
+    "7": "Contract by using",
+    "8": "Jurisdiction"
+  },
+  "splits": {
+    "train": 9,
+    "test": 2048
+  }
+}

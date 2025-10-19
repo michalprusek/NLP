@@ -1,0 +1,25 @@
+GSM8K Evaluation Results
+================================================================================
+
+Model: Qwen/Qwen2.5-7B-Instruct
+Backend: vllm
+Evaluator: standard
+Dataset: datasets/gsm8k (test)
+Timestamp: 20251019_104714
+
+Configuration:
+  Samples per question: 5
+  Temperature: 0.7
+  Self-consistency: Enabled
+
+Prompt Template:
+--------------------------------------------------------------------------------
+Work through the problem piece by piece. Box the final answer as #### FINAL_ANSWER: NUMBER after completing all necessary calculations. Do not include units in your final answer; it should be just a number without any units. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'.
+
+--------------------------------------------------------------------------------
+
+Results:
+  Accuracy: 92.87%
+  Correct: 1225/1319
+  Failed extractions: 0
+  Extraction rate: 100.00%

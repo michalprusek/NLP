@@ -1,0 +1,55 @@
+{
+  "method": "protegi",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "backend": "vllm",
+  "timestamp": "20251019_093600",
+  "config": {
+    "iterations": 5,
+    "minibatch_size": 150,
+    "beam_size": 4,
+    "num_candidates": null,
+    "train_split": "train",
+    "val_split": "test",
+    "train_size": 7473,
+    "val_size": 1319
+  },
+  "best_prompt": "Work through the problem piece by piece. Box the final answer as #### FINAL_ANSWER: NUMBER after completing all necessary calculations. Do not include units in your final answer; it should be just a number without any units. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'.",
+  "history": [
+    {
+      "iteration": 0,
+      "prompt": "Work through the problem piece by piece and box your final answer as #### NUMBER.",
+      "score": 0.9133333333333333,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 1,
+      "prompt": "Work through the problem piece by piece. Use \"Result #\" for intermediate steps and explicitly state \"Final Answer:\" before boxing the #### NUMBER.",
+      "score": 0.8933333333333333,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 2,
+      "prompt": "Work through the problem piece by piece. Only box the final result using '#### FINAL_ANSWER: NUMBER'. After completing all necessary calculations, state 'Final Calculation:' followed by the boxed final answer. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'. Do not include units in your final answer.",
+      "score": 0.9266666666666666,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 3,
+      "prompt": "Work through the problem piece by piece. Box the final answer as #### FINAL_ANSWER: NUMBER after completing all necessary calculations. Do not include units in your final answer; it should be just a number without any units. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'.",
+      "score": 0.94,
+      "selected_idx": 0
+    },
+    {
+      "iteration": 4,
+      "prompt": "Work through the problem piece by piece. After completing all necessary calculations, state 'Final Calculation:' followed by the boxed final answer: #### FINAL_ANSWER. Only box the final result using '#### FINAL_ANSWER: NUMBER', and do not include units in your final answer. Once you have found the solution, conclude with 'Final Answer: #### NUMBER'.",
+      "score": 0.9133333333333333,
+      "selected_idx": 2
+    }
+  ],
+  "validation": {
+    "split": "test",
+    "accuracy": 0.8976497346474602,
+    "correct": 1184,
+    "total": 1319
+  }
+}
