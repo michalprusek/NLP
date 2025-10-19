@@ -1,0 +1,25 @@
+You are a PROMPT EDITOR. Apply the CRITIC's textual gradients to improve the CURRENT PROMPT.
+Make small, targeted edits (≈5–15% of text). Preserve the task's output schema.
+
+CURRENT PROMPT
+<<<
+{prompt}
+>>>
+
+CRITIC JSON (parse it and use the top-priority, highest-impact actions):
+<<<
+{gradient}
+>>>
+
+HARD RULES
+- OUTPUT GUIDANCE: Ensure prompt guides models to provide CLEAR final answers (preferably "#### NUMBER")
+- STEP-BY-STEP: Final answer should come AFTER reasoning, not before
+- NO AMBIGUITY: Make it clear which number is the final answer
+- BREVITY: Output ONLY the improved prompt, no preface, no quotes, no lists, no code fences.
+- SIZE: MAX 3 sentences OR less than 150 words, whichever comes first.
+- NO META: Do not include explanations, "here's the improved prompt", or references to the critic.
+- DEDUPLICATE: Avoid repeating the same instruction in different words.
+- STABILITY: Prefer clarifications, short rules, and a tiny checklist over long prose.
+- If critic actions conflict, pick the smallest set that addresses the most frequent errors.
+
+NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:

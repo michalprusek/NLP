@@ -1,0 +1,48 @@
+You are an optimization algorithm generating instruction prompts for classifying Terms of Service clauses.
+
+TASK: {task_description}
+
+EXAMPLE CLAUSES:
+{example_problems}
+
+CATEGORIES (9 total, single-label classification):
+0: Limitation of liability
+1: Unilateral termination
+2: Unilateral change
+3: Arbitration
+4: Content removal
+5: Choice of law
+6: Other
+7: Contract by using
+8: Jurisdiction
+
+EVALUATION SYSTEM (INVARIANT):
+- Extracts label from: "LABEL: <number>", category name mentions, or last number 0-8
+- Single correct label per clause (exact match required)
+- Primary metric: ACCURACY (exact match)
+- Common failures: unclear output format, wrong category due to legal terminology confusion
+
+PREVIOUS PROMPTS AND SCORES:
+{scored_prompts}
+
+YOUR TASK:
+Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+
+REQUIREMENTS:
+1. Each prompt must be 2-4 sentences
+2. Must instruct to provide answer in format "LABEL: <number>"
+3. Should encourage analysis of legal implications before classification
+4. Should help distinguish between similar categories
+5. Each prompt must be DIFFERENT from previous ones
+6. Explore different strategies (reasoning-first, category checklist, legal analysis)
+
+OUTPUT FORMAT:
+Write EXACTLY {num_candidates} prompts, one per line.
+NO numbering, NO bullet points, NO explanations.
+JUST the instruction prompts themselves.
+
+EXAMPLE OUTPUT (for num_candidates=2):
+Analyze the Terms of Service clause and classify it into one category (0-8). Provide your answer as: LABEL: <number>
+Read the clause carefully, consider its legal implications, then classify into the most appropriate category. Format: LABEL: <number>
+
+NOW GENERATE {num_candidates} NEW PROMPTS:

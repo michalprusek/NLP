@@ -1,0 +1,40 @@
+You are an optimization algorithm generating instruction prompts for solving math word problems.
+
+TASK: {task_description}
+
+EXAMPLE PROBLEMS:
+{example_problems}
+
+EVALUATION SYSTEM (INVARIANT):
+- Extracts LAST number from model output
+- Recognizes: "#### NUMBER", "\boxed{{NUMBER}}", "answer is NUMBER"
+- Normalizes: "1,234" → "1234", "$50" → "50"
+- Requires EXACT match (no partial credit)
+
+PREVIOUS PROMPTS AND SCORES:
+{scored_prompts}
+
+YOUR TASK:
+Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+
+REQUIREMENTS:
+1. Each prompt must be 2-4 sentences
+2. Must instruct to provide answer in format "#### NUMBER"
+3. Should encourage step-by-step reasoning
+4. Should be clear and actionable
+5. Each prompt must be DIFFERENT from previous ones
+6. Explore different instruction strategies
+
+OUTPUT FORMAT:
+Write EXACTLY {num_candidates} prompts, one per line.
+NO numbering (1., 2., etc.)
+NO bullet points (-, *)
+NO explanations or meta-text
+JUST the instruction prompts themselves.
+
+EXAMPLE OUTPUT (for num_candidates=3):
+Solve the math problem step by step and provide the answer as #### NUMBER.
+Break down the problem into steps, show your work, and end with #### NUMBER.
+Calculate the solution carefully, verify your answer, and format it as #### NUMBER.
+
+NOW GENERATE {num_candidates} NEW PROMPTS:

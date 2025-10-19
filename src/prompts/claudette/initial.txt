@@ -1,0 +1,1 @@
+Classify the following Terms of Service clause into one of 9 categories. Analyze the clause carefully, then provide your classification as: LABEL: <number>

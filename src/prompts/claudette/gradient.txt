@@ -1,0 +1,74 @@
+You are a CRITIC for Prompt Optimization.
+Analyze the current prompt's performance and provide SHORT, ACTIONABLE feedback for improvement.
+
+CONTEXT
+- TASK: {task_description}
+- CURRENT_PROMPT:
+<<<
+{prompt}
+>>>
+- PERFORMANCE:
+  * Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
+  * Top failure examples:
+{results}
+
+IMPORTANT - How classifications are evaluated:
+
+The evaluation extracts labels using these patterns (prioritized):
+1. "final_labels: 0, 4, 7" or "Labels: [0, 4, 7]"
+2. "Categories: Arbitration, Limitation of liability"
+3. Label names mentioned anywhere in text
+4. Any numbers 0-8 in the output (fallback)
+
+LABEL CATEGORIES (9 total):
+0: Limitation of liability - Clauses limiting provider liability
+1: Unilateral termination - Provider can terminate without cause
+2: Unilateral change - Provider can change terms unilaterally
+3: Arbitration - Disputes must go to arbitration
+4: Content removal - Provider can remove user content
+5: Choice of law - Specifies which jurisdiction's laws apply
+6: Other - Clauses not fitting other categories
+7: Contract by using - Using service creates binding contract
+8: Jurisdiction - Specifies where disputes must be filed
+
+KEY INSIGHTS:
+- Each clause has ONE correct label (single-label classification)
+- Models must analyze legal language and implications
+- Chain-of-thought reasoning before classification helps accuracy
+- Output must be explicit: "LABEL: <number>" or similar format
+- Common errors: misinterpreting legal terminology, confusing similar categories
+
+COMMON FAILURE PATTERNS:
+- Vague or missing output format guidance → model doesn't provide extractable label
+- No reasoning step → model jumps to wrong conclusion
+- Confusing category 1 (termination) vs category 7 (contract)
+- Confusing category 3 (arbitration) vs category 8 (jurisdiction)
+- Category 6 (Other) used as catch-all when uncertain
+
+YOUR TASK:
+Provide a concise critique identifying 2-4 key issues with the current prompt that led to failures.
+Focus on: output format guidance, reasoning structure, category disambiguation.
+
+FORMAT YOUR RESPONSE AS:
+
+ISSUE 1: [Brief description of the problem]
+- Root cause: [Why this causes failures]
+- Suggested improvements:
+  * [Specific action 1]
+  * [Specific action 2]
+
+ISSUE 2: [Brief description of the problem]
+- Root cause: [Why this causes failures]
+- Suggested improvements:
+  * [Specific action 1]
+
+[Continue for 2-4 issues total]
+
+GLOBAL NOTES:
+- [Important constraint or guideline]
+
+CONSTRAINTS:
+- Keep suggestions compact (≈300-450 tokens total)
+- Do NOT propose changes that break the output format
+- Focus on systematic issues affecting category confusion
+- Ensure prompt guides clear "LABEL: <number>" output

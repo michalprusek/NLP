@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import json
 import re
 from difflib import SequenceMatcher
+from pathlib import Path
 
 
 @dataclass
@@ -47,6 +48,24 @@ class PromptCandidate:
         if self.num_evals == 0:
             return float('inf')
         return self.score + c * np.sqrt(np.log(total_evals) / self.num_evals)
+
+
+def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
+    """
+    Load prompt template from file if exists, otherwise return default.
+
+    Args:
+        task_type: Type of task (e.g., 'claudette', 'gsm8k')
+        template_name: Name of template file (e.g., 'gradient', 'edit')
+        default_template: Default template to use if file doesn't exist
+
+    Returns:
+        Prompt template string
+    """
+    prompt_file = Path(__file__).parent / 'prompts' / task_type / f'{template_name}.txt'
+    if prompt_file.exists():
+        return prompt_file.read_text(encoding='utf-8')
+    return default_template
 
 
 class ProTeGi:
@@ -324,6 +343,17 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
         self.best_val_score = 0.0
         self.patience_counter = 0
 
+        # Detect task type from evaluator and load appropriate templates
+        task_type = getattr(evaluator, 'task_type', 'regression')
+        if task_type == 'classification':
+            # Load Claudette templates from files
+            self.gradient_prompt_template = load_prompt_template('claudette', 'gradient', self.GRADIENT_PROMPT)
+            self.edit_prompt_template = load_prompt_template('claudette', 'edit', self.EDIT_PROMPT)
+        else:
+            # Use default GSM8K templates
+            self.gradient_prompt_template = self.GRADIENT_PROMPT
+            self.edit_prompt_template = self.EDIT_PROMPT
+
     def _stratified_sample(self, dataset_size: int, sample_size: int) -> List[int]:
         """
         Stratified sampling to ensure better coverage of the dataset.
@@ -481,15 +511,18 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
             Textual gradient (critique)
         """
         # Format results for the gradient prompt
-        error_examples = [
-            f"Question: {d['question']}\nPredicted: {d['predicted']}\nCorrect: {d['ground_truth']}"
-            for d in results['details'][:20]  # Show first 10 examples
-            if not d['correct']
-        ]
+        # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
+        error_examples = []
+        for d in results['details'][:20]:
+            if not d['correct']:
+                question_field = d.get('question') or d.get('text', 'N/A')
+                error_examples.append(
+                    f"Question: {question_field}\nPredicted: {d['predicted']}\nCorrect: {d['ground_truth']}"
+                )
 
         results_text = "\n\n".join(error_examples) if error_examples else "All examples correct!"
 
-        gradient_prompt = self.GRADIENT_PROMPT.format(
+        gradient_prompt = self.gradient_prompt_template.format(
             prompt=candidate.prompt,
             task_description=self.task_description,
             num_examples=results['total'],
@@ -534,7 +567,7 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
         Returns:
             New improved prompt, or None if generation/validation fails
         """
-        edit_prompt = self.EDIT_PROMPT.format(
+        edit_prompt = self.edit_prompt_template.format(
             prompt=candidate.prompt,
             gradient=gradient,
         )

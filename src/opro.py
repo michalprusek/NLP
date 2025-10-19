@@ -6,6 +6,25 @@ https://arxiv.org/abs/2309.03409
 """
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
+    """
+    Load prompt template from file if exists, otherwise return default.
+
+    Args:
+        task_type: Type of task (e.g., 'claudette', 'gsm8k')
+        template_name: Name of the template file (without .txt extension)
+        default_template: Default template to use if file doesn't exist
+
+    Returns:
+        Loaded or default template string
+    """
+    prompt_file = Path(__file__).parent / 'prompts' / task_type / f'{template_name}.txt'
+    if prompt_file.exists():
+        return prompt_file.read_text(encoding='utf-8')
+    return default_template
 
 
 @dataclass
@@ -96,11 +115,21 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         self.scored_prompts: List[ScoredPrompt] = []
         self.history = []
 
+        # Detect task type from evaluator and load appropriate templates
+        task_type = getattr(evaluator, 'task_type', 'regression')
+        if task_type == 'classification':
+            # Load Claudette template from file
+            self.meta_prompt_template = load_prompt_template('claudette', 'opro_meta', self.META_PROMPT)
+        else:
+            # Use default GSM8K template
+            self.meta_prompt_template = self.META_PROMPT
+
         # CRITICAL FIX: Get example problems from dataset for meta-prompt
         # This helps LLM understand the task better
         example_batch = evaluator.get_batch(0, 5)
+        # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
         self.example_problems = "\n\n".join([
-            f"Example {i+1}:\nQ: {ex['question'][:150]}...\nA: {ex['answer'][:100]}..."
+            f"Example {i+1}:\nQ: {ex.get('question', ex.get('text', ''))[:150]}...\nA: {ex.get('answer', ex.get('label', ''))}"
             for i, ex in enumerate(example_batch)
         ])
 
@@ -117,8 +146,8 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         """
         batch = self.evaluator.get_batch(start_idx, self.minibatch_size)
 
-        # Generate answers
-        questions = [example['question'] for example in batch]
+        # Generate answers (handle both 'question' and 'text' fields)
+        questions = [example.get('question', example.get('text', '')) for example in batch]
         prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
         outputs = self.llm.generate_batch(prompts, temperature=0.1)
 
@@ -144,7 +173,7 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         else:
             scored_prompts_text = "(No prompts evaluated yet)"
 
-        meta_prompt = self.META_PROMPT.format(
+        meta_prompt = self.meta_prompt_template.format(
             task_description=self.task_description,
             example_problems=self.example_problems,  # CRITICAL FIX: Add examples
             scored_prompts=scored_prompts_text,

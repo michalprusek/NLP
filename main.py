@@ -14,12 +14,22 @@ from datetime import datetime
 from src.llm_client import create_llm_client
 from src.evaluator import GSM8KEvaluator
 from src.math_verify_evaluator import MathVerifyEvaluator
+from src.claudette_evaluator import ClaudetteEvaluator
 from src.protegi import ProTeGi
 from src.opro import OPRO
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prompt optimization for GSM8K")
+    parser = argparse.ArgumentParser(description="Prompt optimization for GSM8K and Claudette")
+
+    # Task selection
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="gsm8k",
+        choices=["gsm8k", "claudette"],
+        help="Task to optimize: gsm8k (math problems) or claudette (ToS classification)",
+    )
 
     # Method selection
     parser.add_argument(
@@ -80,8 +90,8 @@ def main():
     parser.add_argument(
         "--dataset-path",
         type=str,
-        default="datasets/gsm8k",
-        help="Path to GSM8K dataset",
+        default=None,
+        help="Path to dataset (defaults: datasets/gsm8k for GSM8K, tommasobonomo/sem_eval_2023_task_4 for Claudette)",
     )
 
     parser.add_argument(
@@ -132,8 +142,8 @@ def main():
     parser.add_argument(
         "--initial-prompt",
         type=str,
-        default="Solve the following math problem step by step. Show your reasoning and provide the final numerical answer.",
-        help="Initial prompt for ProTeGi",
+        default=None,
+        help="Initial prompt (defaults to task-specific prompt from src/prompts/<task>/initial.txt)",
     )
 
     # Evaluator selection
@@ -167,6 +177,25 @@ def main():
 
     args = parser.parse_args()
 
+    # Set task-specific defaults
+    if args.dataset_path is None:
+        if args.task == "gsm8k":
+            args.dataset_path = "datasets/gsm8k"
+        elif args.task == "claudette":
+            args.dataset_path = "tommasobonomo/sem_eval_2023_task_4"
+
+    # Load initial prompt from file if not provided
+    if args.initial_prompt is None:
+        prompt_file = Path(__file__).parent / "src" / "prompts" / args.task / "initial.txt"
+        if prompt_file.exists():
+            args.initial_prompt = prompt_file.read_text(encoding='utf-8').strip()
+        else:
+            # Fallback defaults
+            if args.task == "gsm8k":
+                args.initial_prompt = "Solve the following math problem step by step. Show your reasoning and provide the final numerical answer."
+            elif args.task == "claudette":
+                args.initial_prompt = "Classify the following Terms of Service clause into one of 9 categories. Analyze the clause carefully, then provide your classification as: LABEL: <number>"
+
     # Set GPU visibility
     import os
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids
@@ -179,6 +208,7 @@ def main():
     print("\n" + "="*80)
     print("PROMPT OPTIMIZATION CONFIGURATION")
     print("="*80)
+    print(f"Task: {args.task.upper()}")
     print(f"Method: {args.method.upper()}")
     print(f"Model: {args.model}")
     print(f"Backend: {args.backend}")
@@ -223,31 +253,46 @@ def main():
     llm_client = create_llm_client(**llm_kwargs)
 
     # Initialize evaluators for training and validation
-    print(f"Loading GSM8K dataset from {args.dataset_path}")
+    print(f"Loading {args.task.upper()} dataset from {args.dataset_path}")
     print(f"  Training split: {args.train_split}")
     print(f"  Validation split: {args.val_split}")
-    print(f"  Evaluator: {args.evaluator}")
 
-    # Select evaluator class
-    if args.evaluator == "math-verify":
-        EvaluatorClass = MathVerifyEvaluator
-        print("  Using Math-Verify evaluator (robust symbolic verification)")
-    else:
-        EvaluatorClass = GSM8KEvaluator
-        print("  Using Strict EM evaluator (exact string matching)")
+    # Select evaluator class based on task
+    if args.task == "claudette":
+        EvaluatorClass = ClaudetteEvaluator
+        print(f"  Evaluator: ClaudetteEvaluator (ToS classification)")
+        train_evaluator = ClaudetteEvaluator(
+            dataset_name=args.dataset_path,
+            split=args.train_split,
+            debug=args.debug,
+        )
+        val_evaluator = ClaudetteEvaluator(
+            dataset_name=args.dataset_path,
+            split=args.val_split,
+            debug=args.debug,
+        )
+    else:  # gsm8k
+        print(f"  Evaluator: {args.evaluator}")
+        # Select evaluator class for GSM8K
+        if args.evaluator == "math-verify":
+            EvaluatorClass = MathVerifyEvaluator
+            print("  Using Math-Verify evaluator (robust symbolic verification)")
+        else:
+            EvaluatorClass = GSM8KEvaluator
+            print("  Using Strict EM evaluator (exact string matching)")
 
-    train_evaluator = EvaluatorClass(
-        dataset_path=args.dataset_path,
-        split=args.train_split,
-        debug=args.debug,
-    )
+        train_evaluator = EvaluatorClass(
+            dataset_path=args.dataset_path,
+            split=args.train_split,
+            debug=args.debug,
+        )
+        val_evaluator = EvaluatorClass(
+            dataset_path=args.dataset_path,
+            split=args.val_split,
+            debug=args.debug,
+        )
+
     print(f"  Training dataset size: {len(train_evaluator)} examples")
-
-    val_evaluator = EvaluatorClass(
-        dataset_path=args.dataset_path,
-        split=args.val_split,
-        debug=args.debug,
-    )
     print(f"  Validation dataset size: {len(val_evaluator)} examples\n")
 
     if args.debug:
@@ -255,6 +300,12 @@ def main():
 
     # Run optimization
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Set task description based on task
+    if args.task == "claudette":
+        task_description = "Classify Terms of Service clauses into 9 categories (0-8): Limitation of liability, Unilateral termination, Unilateral change, Arbitration, Content removal, Choice of law, Other, Contract by using, Jurisdiction."
+    else:
+        task_description = "Solve math word problems step by step and provide the final numerical answer."
 
     if args.method == "protegi":
         print(f"Running ProTeGi optimization on {args.train_split} split...")
@@ -264,6 +315,7 @@ def main():
             beam_size=args.beam_size,
             num_iterations=args.iterations,
             minibatch_size=args.minibatch_size,
+            task_description=task_description,
         )
         best_prompt, history = optimizer.optimize(
             initial_prompt=args.initial_prompt,
@@ -271,7 +323,7 @@ def main():
         )
 
         # Save results
-        output_file = output_dir / f"protegi_{timestamp}.json"
+        output_file = output_dir / f"protegi_{args.task}_{timestamp}.json"
 
     elif args.method == "opro":
         print(f"Running OPRO optimization on {args.train_split} split...")
@@ -281,6 +333,7 @@ def main():
             num_iterations=args.iterations,
             num_candidates_per_iter=args.num_candidates,
             minibatch_size=args.minibatch_size,
+            task_description=task_description,
         )
         best_prompt, history = optimizer.optimize(
             initial_prompts=[args.initial_prompt],
@@ -288,7 +341,7 @@ def main():
         )
 
         # Save results
-        output_file = output_dir / f"opro_{timestamp}.json"
+        output_file = output_dir / f"opro_{args.task}_{timestamp}.json"
 
     # Convert history to JSON-serializable format (handle numpy types)
     def make_json_serializable(obj):
@@ -306,6 +359,7 @@ def main():
 
     # Save results to JSON
     results = {
+        "task": args.task,
         "method": args.method,
         "model": args.model,
         "backend": args.backend,
@@ -354,7 +408,8 @@ def main():
 
     # Get all examples at once
     batch = val_evaluator.get_batch(0, val_size)
-    questions = [example['question'] for example in batch]
+    # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
+    questions = [example.get('question', example.get('text', '')) for example in batch]
     prompts = [f"{best_prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
 
     # Generate all outputs in one batch (vLLM handles this efficiently)
