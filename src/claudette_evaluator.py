@@ -111,13 +111,36 @@ def get_ground_truth_labels(example: Dict[str, Any]) -> Set[int]:
     """
     Extract ground truth labels from Claudette dataset example.
 
-    The dataset has a 'label' field which is a single integer (0-8).
+    The dataset has boolean fields for each category:
+    - ltd (0): Limitation of liability
+    - ter (1): Unilateral termination
+    - ch (2): Unilateral change
+    - a (3): Arbitration
+    - cr (4): Content removal
+    - law (5): Choice of law
+    - pinc (6): Other
+    - use (7): Contract by using
+    - j (8): Jurisdiction
     """
-    # Claudette dataset has 'label' field with single integer
-    label = example.get('label')
-    if label is not None and isinstance(label, int) and 0 <= label <= 8:
-        return {label}
-    return set()
+    # Map boolean fields to label indices
+    field_to_idx = {
+        'ltd': 0,
+        'ter': 1,
+        'ch': 2,
+        'a': 3,
+        'cr': 4,
+        'law': 5,
+        'pinc': 6,
+        'use': 7,
+        'j': 8,
+    }
+
+    labels = set()
+    for field, idx in field_to_idx.items():
+        if example.get(field, False):
+            labels.add(idx)
+
+    return labels
 
 
 def compute_metrics(pred_labels: Set[int], true_labels: Set[int]) -> Dict[str, float]:
@@ -244,14 +267,16 @@ class ClaudetteEvaluator:
             # Debug output
             if (verbose or self.debug) and i < 3:
                 print(f"\n--- Example {i+1} ---")
-                print(f"Text: {example['text'][:150]}...")
+                # Get sentence from dataset
+                text = example.get('sentence', '')
+                print(f"Text: {text[:150]}...")
                 print(f"Output: {output[:200]}...")
                 print(f"True: {sorted(true_labels)} | Pred: {sorted(pred_labels)} | Match: {is_correct}")
                 print(f"Metrics: P={metrics['precision']:.2f} R={metrics['recall']:.2f} F1={metrics['f1']:.2f}")
 
             details.append({
                 'idx': idx,
-                'text': example['text'],
+                'text': example.get('sentence', ''),
                 'ground_truth': sorted(true_labels),
                 'predicted': sorted(pred_labels),
                 'correct': is_correct,
@@ -279,16 +304,32 @@ class ClaudetteEvaluator:
         Returns examples in format compatible with main.py:
         {'idx': int, 'question': str, 'answer': str}
 
-        Note: 'question' is aliased to 'text' field, 'answer' to label
+        Note: 'question' is aliased to 'sentence' field, 'answer' to labels
         """
         end_idx = min(start_idx + batch_size, len(self.dataset))
         return [
             {
                 'idx': i,
-                'question': self.dataset[i]['text'],  # Alias for compatibility
-                'answer': str(self.dataset[i]['label']),  # Convert to string
+                'question': self.dataset[i]['sentence'],  # Alias for compatibility
+                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),  # Convert labels to string
             }
             for i in range(start_idx, end_idx)
+        ]
+
+    def get_batch_by_indices(self, indices: List[int]) -> List[Dict[str, Any]]:
+        """
+        Get batch of examples by specific indices.
+
+        Returns examples in format compatible with main.py:
+        {'idx': int, 'question': str, 'answer': str}
+        """
+        return [
+            {
+                'idx': i,
+                'question': self.dataset[i]['sentence'],  # Alias for compatibility
+                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),  # Convert labels to string
+            }
+            for i in indices
         ]
 
     def __len__(self) -> int:

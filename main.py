@@ -182,7 +182,7 @@ def main():
         if args.task == "gsm8k":
             args.dataset_path = "datasets/gsm8k"
         elif args.task == "claudette":
-            args.dataset_path = "tommasobonomo/sem_eval_2023_task_4"
+            args.dataset_path = "datasets/claudette"
 
     # Load initial prompt from file if not provided
     if args.initial_prompt is None:
@@ -262,12 +262,12 @@ def main():
         EvaluatorClass = ClaudetteEvaluator
         print(f"  Evaluator: ClaudetteEvaluator (ToS classification)")
         train_evaluator = ClaudetteEvaluator(
-            dataset_name=args.dataset_path,
+            dataset_path=args.dataset_path,
             split=args.train_split,
             debug=args.debug,
         )
         val_evaluator = ClaudetteEvaluator(
-            dataset_name=args.dataset_path,
+            dataset_path=args.dataset_path,
             split=args.val_split,
             debug=args.debug,
         )

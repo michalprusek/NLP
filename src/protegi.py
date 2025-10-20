@@ -50,22 +50,27 @@ class PromptCandidate:
         return self.score + c * np.sqrt(np.log(total_evals) / self.num_evals)
 
 
-def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
+def load_prompt_template(task_type: str, template_name: str, default_template: str = None) -> str:
     """
-    Load prompt template from file if exists, otherwise return default.
+    Load prompt template from file.
 
     Args:
         task_type: Type of task (e.g., 'claudette', 'gsm8k')
         template_name: Name of template file (e.g., 'gradient', 'edit')
-        default_template: Default template to use if file doesn't exist
+        default_template: Optional default template to use if file doesn't exist
 
     Returns:
         Prompt template string
+
+    Raises:
+        FileNotFoundError: If template file doesn't exist and no default provided
     """
     prompt_file = Path(__file__).parent / 'prompts' / task_type / f'{template_name}.txt'
     if prompt_file.exists():
         return prompt_file.read_text(encoding='utf-8')
-    return default_template
+    if default_template is not None:
+        return default_template
+    raise FileNotFoundError(f"Prompt template not found: {prompt_file}")
 
 
 class ProTeGi:
@@ -186,116 +191,6 @@ class ProTeGi:
 
         return prompt.strip()
 
-    # Meta-prompt for generating textual gradients (criticism)
-    GRADIENT_PROMPT = """
-You are a CRITIC for Prompt Optimization.
-Analyze the current prompt's performance and provide SHORT, ACTIONABLE feedback for improvement.
-
-CONTEXT
-- TASK: {task_description}
-- CURRENT_PROMPT:
-<<<
-{prompt}
->>>
-- PERFORMANCE:
-  * Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
-  * Top failure examples (truncated):
-{results}
-
-IMPORTANT - How answers are evaluated (Math-Verify approach):
-The evaluation uses a 3-step robust verification process:
-
-STEP 1 - EXTRACTION (prioritized patterns, prefers LATER matches):
-  * Highest priority: "\boxed{{NUMBER}}", "#### NUMBER", "final_answer: NUMBER"
-  * Medium priority: "the answer is NUMBER", "therefore NUMBER"
-  * Fallback: last number in output
-  * Units are IGNORED (e.g., "42 km" → "42")
-
-STEP 2 - PARSING (normalization to SymPy):
-  * Removes: commas (1,234 → 1234), currency symbols ($50 → 50), units
-  * Handles: percentages (50% → 0.5), fractions (1/3), decimals (3.14)
-  * Converts to symbolic representation for smart comparison
-
-STEP 3 - VERIFICATION (multiple strategies):
-  * Numerical equality with tolerance (1/3 ≈ 0.333...)
-  * Symbolic simplification (checks if predicted - ground_truth = 0)
-  * Expression equivalence (different forms of same answer)
-
-KEY INSIGHT: This is MORE FORGIVING than strict string matching!
-- "1/3" and "0.333" are considered EQUIVALENT
-- "42 km" and "42" are considered EQUIVALENT
-- Different mathematical representations of same value are EQUIVALENT
-
-Therefore, the prompt should:
-1. Guide models to provide CLEAR final answers (preferably "#### NUMBER" format)
-2. Ensure step-by-step work comes BEFORE the final answer
-3. Avoid ambiguity about which number is the final answer
-4. Don't worry too much about exact format - Math-Verify handles various formats
-
-YOUR TASK:
-Provide a concise critique identifying 2-4 key issues with the current prompt that led to failures.
-For each issue, suggest 1-3 specific, testable improvements.
-
-FORMAT YOUR RESPONSE AS:
-
-ISSUE 1: [Brief description of the problem]
-- Root cause: [Why this causes failures]
-- Suggested improvements:
-  * [Specific action 1]
-  * [Specific action 2]
-
-ISSUE 2: [Brief description of the problem]
-- Root cause: [Why this causes failures]
-- Suggested improvements:
-  * [Specific action 1]
-
-[Continue for 2-4 issues total]
-
-GLOBAL NOTES:
-- [Important constraint or guideline]
-- [Another important note]
-
-CONSTRAINTS:
-- Keep suggestions compact (≈300-450 tokens total)
-- Do NOT propose changes that break the output format
-- Focus on systematic issues, not individual examples
-- Ensure the prompt guides models to provide answers in recognizable formats (#### NUMBER)
-"""
-
-
-
-
-
-
-    # Meta-prompt for applying textual gradients (editing)
-    EDIT_PROMPT = """
-You are a PROMPT EDITOR. Apply the CRITIC's textual gradients to improve the CURRENT PROMPT.
-Make small, targeted edits (≈5–15% of text). Preserve the task's output schema.
-
-CURRENT PROMPT
-<<<
-{prompt}
->>>
-
-CRITIC JSON (parse it and use the top-priority, highest-impact actions):
-<<<
-{gradient}
->>>
-
-HARD RULES
-- OUTPUT GUIDANCE: Ensure prompt guides models to provide CLEAR final answers (preferably "#### NUMBER")
-- STEP-BY-STEP: Final answer should come AFTER reasoning, not before
-- NO AMBIGUITY: Make it clear which number is the final answer
-- BREVITY: Output ONLY the improved prompt, no preface, no quotes, no lists, no code fences.
-- SIZE: MAX 3 sentences OR less than 150 words, whichever comes first.
-- NO META: Do not include explanations, “here’s the improved prompt”, or references to the critic.
-- DEDUPLICATE: Avoid repeating the same instruction in different words.
-- STABILITY: Prefer clarifications, short rules, and a tiny checklist over long prose.
-- If critic actions conflict, pick the smallest set that addresses the most frequent errors.
-
-NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
-"""
-
 
     def __init__(
         self,
@@ -347,17 +242,20 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
         task_type = getattr(evaluator, 'task_type', 'regression')
         if task_type == 'classification':
             # Load Claudette templates from files
-            self.gradient_prompt_template = load_prompt_template('claudette', 'gradient', self.GRADIENT_PROMPT)
-            self.edit_prompt_template = load_prompt_template('claudette', 'edit', self.EDIT_PROMPT)
+            self.gradient_prompt_template = load_prompt_template('claudette', 'gradient')
+            self.edit_prompt_template = load_prompt_template('claudette', 'edit')
         else:
-            # Use default GSM8K templates
-            self.gradient_prompt_template = self.GRADIENT_PROMPT
-            self.edit_prompt_template = self.EDIT_PROMPT
+            # Load GSM8K templates from files
+            self.gradient_prompt_template = load_prompt_template('gsm8k', 'gradient')
+            self.edit_prompt_template = load_prompt_template('gsm8k', 'edit')
 
     def _stratified_sample(self, dataset_size: int, sample_size: int) -> List[int]:
         """
         Stratified sampling to ensure better coverage of the dataset.
         Divides dataset into strata and samples from each without replacement.
+
+        For classification tasks with labels (e.g., Claudette), uses label-based stratification.
+        For other tasks (e.g., GSM8K), uses sequential stratification.
 
         Args:
             dataset_size: Total size of the dataset
@@ -367,6 +265,11 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
             List of sampled indices
         """
         import random
+
+        # Check if evaluator has label-based stratification (Claudette)
+        if hasattr(self.evaluator, 'dataset') and hasattr(self.evaluator.dataset, 'column_names'):
+            if 'label' in self.evaluator.dataset.column_names:
+                return self._stratified_sample_by_label(dataset_size, sample_size)
 
         # Calculate how many strata we can have
         num_strata = min(10, dataset_size // sample_size) if sample_size > 0 else 1
@@ -399,6 +302,80 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
         # Reset used indices if we've used too many (>80% of dataset)
         if len(self.used_indices) > 0.8 * dataset_size:
             self.used_indices.clear()
+
+        return indices[:sample_size]
+
+    def _stratified_sample_by_label(self, dataset_size: int, sample_size: int) -> List[int]:
+        """
+        Stratified sampling by label for classification tasks (e.g., Claudette).
+        Samples 50% from neutral examples (no labels) and 50% from unfair examples (1+ labels).
+
+        This ensures balanced representation despite 90% of dataset being neutral.
+
+        Args:
+            dataset_size: Total size of dataset
+            sample_size: Number of samples to draw
+
+        Returns:
+            List of sampled indices stratified by neutral vs unfair
+        """
+        import random
+        from src.claudette_evaluator import get_ground_truth_labels
+
+        if sample_size >= dataset_size:
+            return list(range(dataset_size))
+
+        # Group indices into neutral (no labels) vs unfair (1+ labels)
+        neutral_indices = []  # NONE labels
+        unfair_indices = []   # 1+ labels
+
+        for idx in range(dataset_size):
+            example = self.evaluator.dataset[idx]
+            labels = get_ground_truth_labels(example)
+
+            if len(labels) == 0:
+                neutral_indices.append(idx)
+            else:
+                unfair_indices.append(idx)
+
+        # Sample 50% from neutral, 50% from unfair
+        neutral_sample_size = sample_size // 2
+        unfair_sample_size = sample_size - neutral_sample_size
+
+        indices = []
+
+        # Sample from neutral examples
+        if len(neutral_indices) > 0:
+            # Prefer unused indices
+            unused_neutral = [idx for idx in neutral_indices if idx not in self.used_indices]
+            if len(unused_neutral) >= neutral_sample_size:
+                sampled_neutral = random.sample(unused_neutral, neutral_sample_size)
+            else:
+                # If not enough unused, sample from all available
+                sampled_neutral = random.sample(neutral_indices, min(neutral_sample_size, len(neutral_indices)))
+
+            indices.extend(sampled_neutral)
+            self.used_indices.update(sampled_neutral)
+
+        # Sample from unfair examples
+        if len(unfair_indices) > 0:
+            # Prefer unused indices
+            unused_unfair = [idx for idx in unfair_indices if idx not in self.used_indices]
+            if len(unused_unfair) >= unfair_sample_size:
+                sampled_unfair = random.sample(unused_unfair, unfair_sample_size)
+            else:
+                # If not enough unused, sample from all available
+                sampled_unfair = random.sample(unfair_indices, min(unfair_sample_size, len(unfair_indices)))
+
+            indices.extend(sampled_unfair)
+            self.used_indices.update(sampled_unfair)
+
+        # Reset used indices if we've used too many (>80% of dataset)
+        if len(self.used_indices) > 0.8 * dataset_size:
+            self.used_indices.clear()
+
+        # Shuffle to mix neutral and unfair examples
+        random.shuffle(indices)
 
         return indices[:sample_size]
 
@@ -476,14 +453,28 @@ NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
             # Use stratified sampling for better dataset coverage
             dataset_size = len(self.evaluator)
             indices = self._stratified_sample(dataset_size, min(self.minibatch_size, dataset_size))
-            batch = [
-                {
+            # Use get_batch to handle different dataset formats (GSM8K vs Claudette)
+            batch = []
+            for idx in indices:
+                example = self.evaluator.dataset[idx]
+                # Handle both GSM8K (question/answer) and Claudette (sentence/labels) formats
+                question = example.get('question', example.get('sentence', example.get('text', '')))
+
+                # For Claudette, extract labels from boolean fields
+                if 'sentence' in example:
+                    # Import get_ground_truth_labels from claudette_evaluator
+                    from src.claudette_evaluator import get_ground_truth_labels
+                    labels = get_ground_truth_labels(example)
+                    answer = str(sorted(labels))
+                else:
+                    # GSM8K format
+                    answer = example.get('answer', str(example.get('label', '')))
+
+                batch.append({
                     'idx': idx,
-                    'question': self.evaluator.dataset[idx]['question'],
-                    'answer': self.evaluator.dataset[idx]['answer']
-                }
-                for idx in indices
-            ]
+                    'question': question,
+                    'answer': answer
+                })
         else:
             # Sequential sampling (for final evaluation)
             batch = self.evaluator.get_batch(0, self.minibatch_size)

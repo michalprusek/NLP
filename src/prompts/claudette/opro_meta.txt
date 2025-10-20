@@ -5,22 +5,29 @@ TASK: {task_description}
 EXAMPLE CLAUSES:
 {example_problems}
 
-CATEGORIES (9 total, single-label classification):
-0: Limitation of liability
-1: Unilateral termination
-2: Unilateral change
-3: Arbitration
-4: Content removal
-5: Choice of law
-6: Other
-7: Contract by using
-8: Jurisdiction
+CATEGORIES (9 total, MULTI-LABEL classification):
+0: Limitation of liability (ltd) - Clauses limiting provider liability
+1: Unilateral termination (ter) - Provider can terminate without cause
+2: Unilateral change (ch) - Provider can change terms unilaterally
+3: Arbitration (a) - Disputes must go to arbitration
+4: Content removal (cr) - Provider can remove user content
+5: Choice of law (law) - Specifies which jurisdiction's laws apply
+6: Other (pinc) - Potentially unfair clauses not fitting other categories
+7: Contract by using (use) - Using service creates binding contract
+8: Jurisdiction (j) - Specifies where disputes must be filed
+
+CRITICAL DATASET CHARACTERISTICS:
+- **90% of clauses have NO labels** (LABELS: NONE) - they are neutral/informational text (headers, metadata, general info)
+- **9% have exactly 1 label** - single unfair clause type
+- **<1% have 2+ labels** - multiple unfair clause types (e.g., [3, 5, 8] for arbitration in California)
+- Models must distinguish unfair clauses from neutral text - don't over-classify!
+- Empty label set is VALID and COMMON
 
 EVALUATION SYSTEM (INVARIANT):
-- Extracts label from: "LABEL: <number>", category name mentions, or last number 0-8
-- Single correct label per clause (exact match required)
-- Primary metric: ACCURACY (exact match)
-- Common failures: unclear output format, wrong category due to legal terminology confusion
+- Extracts labels from: "LABELS: 0, 3, 5", "LABELS: NONE", "Labels: [0, 3]", category name mentions, or numbers 0-8
+- EXACT MATCH required: ALL predicted labels must match ALL true labels (no more, no less)
+- Primary metric: ACCURACY (exact match - missing or adding even one label = 0% for that example)
+- Common failures: over-classifying neutral text, unclear output format, missing secondary labels, treating as single-label task, confusing similar categories, not outputting NONE for neutral clauses
 
 PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
@@ -30,11 +37,15 @@ Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accur
 
 REQUIREMENTS:
 1. Each prompt must be 2-4 sentences
-2. Must instruct to provide answer in format "LABEL: <number>"
-3. Should encourage analysis of legal implications before classification
-4. Should help distinguish between similar categories
-5. Each prompt must be DIFFERENT from previous ones
-6. Explore different strategies (reasoning-first, category checklist, legal analysis)
+2. Must instruct to provide answer in format "LABELS: <comma-separated numbers>" or "LABELS: NONE"
+3. Must emphasize that MOST clauses are neutral (90%) - only label unfair clauses
+4. Must emphasize that MULTIPLE labels can apply to one clause (but rare)
+5. Should encourage analysis of legal implications before classification
+6. Should guide model to identify ALL applicable categories, not just primary one
+7. Should help distinguish unfair clauses from neutral/informational text
+8. Should help distinguish between similar categories
+9. Each prompt must be DIFFERENT from previous ones
+10. Explore different strategies (reasoning-first, category checklist, legal analysis, systematic multi-label evaluation, neutral-vs-unfair distinction)
 
 OUTPUT FORMAT:
 Write EXACTLY {num_candidates} prompts, one per line.
@@ -42,7 +53,7 @@ NO numbering, NO bullet points, NO explanations.
 JUST the instruction prompts themselves.
 
 EXAMPLE OUTPUT (for num_candidates=2):
-Analyze the Terms of Service clause and classify it into one category (0-8). Provide your answer as: LABEL: <number>
-Read the clause carefully, consider its legal implications, then classify into the most appropriate category. Format: LABEL: <number>
+Analyze the Terms of Service clause. Most clauses (90%) are neutral - only label unfair clauses. A clause can have multiple labels. Provide ALL applicable labels as: LABELS: <comma-separated numbers> or LABELS: NONE
+Read the clause carefully. If it's neutral/informational, output LABELS: NONE. If unfair, identify ALL applicable categories (multiple may apply), then provide: LABELS: <comma-separated numbers>
 
 NOW GENERATE {num_candidates} NEW PROMPTS:

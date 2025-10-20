@@ -1,1 +1,1 @@
-Classify the following Terms of Service clause into one of 9 categories. Analyze the clause carefully, then provide your classification as: LABEL: <number>
+Classify the following Terms of Service clause into one or more of 9 categories (multi-label classification). Most clauses (90%) are neutral/informational and should be labeled as NONE. Only identify unfair clauses. A clause can have multiple applicable categories. Analyze the clause carefully to identify ALL applicable categories, then provide your classification as: LABELS: <comma-separated numbers> or LABELS: NONE

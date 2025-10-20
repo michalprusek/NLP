@@ -1,5 +1,5 @@
 You are a PROMPT EDITOR. Apply the CRITIC's textual gradients to improve the CURRENT PROMPT.
-Make small, targeted edits (≈5–15% of text). Preserve the output format requirement.
+Make small, targeted edits (≈5–10% of previous prompt replaced). Preserve the output format requirement.
 
 CURRENT PROMPT
 <<<
@@ -12,11 +12,15 @@ CRITIC FEEDBACK (parse it and use the top-priority, highest-impact actions):
 >>>
 
 HARD RULES
-- OUTPUT FORMAT: Ensure prompt guides models to provide explicit "LABEL: <number>" format
+- MULTI-LABEL: Ensure prompt emphasizes that MULTIPLE labels can apply to one clause
+- NONE IS COMMON: Emphasize that 90% of clauses are neutral (LABELS: NONE) - don't over-classify!
+- OUTPUT FORMAT: Ensure prompt guides models to provide explicit "LABELS: 0, 3, 5" or "LABELS: NONE" format
 - REASONING FIRST: Encourage chain-of-thought before final classification
+- COMPLETENESS: Prompt should guide model to identify ALL applicable categories, not just primary one
 - CATEGORY CLARITY: Help distinguish between similar categories (e.g., arbitration vs jurisdiction)
+- NEUTRAL TEXT: Emphasize distinguishing unfair clauses from informational/neutral text
 - BREVITY: Output ONLY the improved prompt, no preface, no quotes, no code fences
-- SIZE: MAX 4 sentences OR less than 200 words, whichever comes first
+- SIZE: MAX 5 sentences OR less than 300 words, whichever comes first
 - NO META: Do not include explanations, "here's the improved prompt", or references to the critic
 - STABILITY: Prefer clarifications and structured instructions
 
