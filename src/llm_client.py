@@ -442,7 +442,7 @@ def create_llm_client(
     Factory function to create LLM client.
 
     Args:
-        model_name: Model identifier
+        model_name: Model identifier (supports aliases: 'haiku' -> latest Haiku, 'sonnet' -> latest Sonnet)
         backend: Backend to use ('transformers', 'vllm', 'claude', or 'auto')
                  'auto' will detect Claude models automatically
         **kwargs: Additional arguments for the client
@@ -450,6 +450,18 @@ def create_llm_client(
     Returns:
         LLMClient instance
     """
+    # Model aliases for Claude models (always use latest versions)
+    MODEL_ALIASES = {
+        "haiku": "claude-haiku-4-5-20251001",      # Latest Haiku (4.5)
+        "sonnet": "claude-sonnet-4-5-20251022",    # Latest Sonnet (4.5)
+    }
+
+    # Resolve alias if present
+    original_model_name = model_name
+    if model_name.lower() in MODEL_ALIASES:
+        model_name = MODEL_ALIASES[model_name.lower()]
+        print(f"Resolved model alias '{original_model_name}' -> '{model_name}'")
+
     # Auto-detect Claude models
     if backend == "auto":
         if "claude" in model_name.lower():

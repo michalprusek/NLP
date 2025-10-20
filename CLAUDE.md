@@ -45,25 +45,32 @@ uv run python main.py \
     --method protegi \
     --model Qwen/Qwen2.5-7B-Instruct \
     --backend vllm \
-    --meta-model claude-3-5-sonnet-20241022 \
+    --meta-model sonnet \
     --iterations 10
 
 # Use small local model for task, Claude Haiku for meta-optimization (cost-effective)
 uv run python main.py \
     --method protegi \
     --model Qwen/Qwen2.5-3B-Instruct \
-    --meta-model claude-3-haiku-20240307 \
+    --meta-model haiku \
     --iterations 10
 ```
 
-**Shell scripts (with environment variables):**
+**Shell scripts (with environment variables and aliases):**
 ```bash
-# Single GPU with separate models
-META_MODEL="claude-3-5-sonnet-20241022" ./run_single_gpu.sh protegi 5 20
+# Single GPU with separate models (using aliases)
+META_MODEL="sonnet" ./run_single_gpu.sh protegi 5 20
 
-# Dual GPU
-TASK_MODEL="Qwen/Qwen2.5-7B-Instruct" META_MODEL="claude-3-haiku-20240307" ./run_dual_gpu.sh
+# Dual GPU (using aliases)
+TASK_MODEL="Qwen/Qwen2.5-7B-Instruct" META_MODEL="haiku" ./run_dual_gpu.sh
+
+# Or with full model names
+META_MODEL="claude-sonnet-4-5-20251022" ./run_single_gpu.sh protegi 5 20
 ```
+
+**Claude Model Aliases:**
+- `haiku` → `claude-haiku-4-5-20251001` (latest Haiku 4.5)
+- `sonnet` → `claude-sonnet-4-5-20251022` (latest Sonnet 4.5)
 
 **Evaluation only (no optimization):**
 ```bash
