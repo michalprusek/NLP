@@ -3,6 +3,11 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class LLMClient(ABC):
@@ -346,9 +351,91 @@ class VLLMClient(LLMClient):
         return [output.outputs[0].text for output in outputs]
 
 
+class ClaudeClient(LLMClient):
+    """LLM client using Anthropic's Claude API"""
+
+    def __init__(
+        self,
+        model_name: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+    ):
+        """
+        Initialize Claude client.
+
+        Args:
+            model_name: Claude model identifier (e.g., 'claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022')
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Environment variables required:
+            ANTHROPIC_API_KEY: Your Anthropic API key
+        """
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            raise ImportError(
+                "anthropic package not installed. Install with: pip install anthropic"
+            )
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+
+        # Get API key from environment
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "ANTHROPIC_API_KEY not found in environment variables. "
+                "Please add it to your .env file or set it as an environment variable."
+            )
+
+        self.client = Anthropic(api_key=api_key)
+        print(f"Initialized Claude client with model: {model_name}")
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text from a single prompt"""
+        return self.generate_batch([prompt], **kwargs)[0]
+
+    def generate_batch(self, prompts: List[str], **kwargs) -> List[str]:
+        """
+        Generate text for multiple prompts.
+
+        Args:
+            prompts: List of prompts
+            **kwargs: Override default generation parameters
+
+        Returns:
+            List of generated texts
+        """
+        # Override defaults with kwargs
+        max_new_tokens = kwargs.get('max_new_tokens', self.max_new_tokens)
+        temperature = kwargs.get('temperature', self.temperature)
+
+        results = []
+        for prompt in prompts:
+            try:
+                response = self.client.messages.create(
+                    model=self.model_name,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                # Extract text from response
+                text = response.content[0].text
+                results.append(text)
+            except Exception as e:
+                print(f"Error generating with Claude: {e}")
+                results.append("")
+
+        return results
+
+
 def create_llm_client(
     model_name: str,
-    backend: str = "transformers",
+    backend: str = "auto",
     **kwargs
 ) -> LLMClient:
     """
@@ -356,12 +443,20 @@ def create_llm_client(
 
     Args:
         model_name: Model identifier
-        backend: Backend to use ('transformers' or 'vllm')
+        backend: Backend to use ('transformers', 'vllm', 'claude', or 'auto')
+                 'auto' will detect Claude models automatically
         **kwargs: Additional arguments for the client
 
     Returns:
         LLMClient instance
     """
+    # Auto-detect Claude models
+    if backend == "auto":
+        if "claude" in model_name.lower():
+            backend = "claude"
+        else:
+            backend = "transformers"
+
     if backend == "transformers":
         return TransformersClient(model_name, **kwargs)
     elif backend == "vllm":
@@ -371,5 +466,12 @@ def create_llm_client(
             if k in ['max_new_tokens', 'temperature', 'tensor_parallel_size']
         }
         return VLLMClient(model_name, **vllm_kwargs)
+    elif backend == "claude":
+        # Filter out parameters not supported by ClaudeClient
+        claude_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in ['max_new_tokens', 'temperature']
+        }
+        return ClaudeClient(model_name, **claude_kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend}")
+        raise ValueError(f"Unknown backend: {backend}. Choose from: transformers, vllm, claude, auto")

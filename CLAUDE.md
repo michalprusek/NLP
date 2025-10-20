@@ -11,36 +11,58 @@ Framework for automatic prompt optimization using **ProTeGi** (Prompt Optimizati
 
 ## Common Commands
 
-### Dependencies
-```bash
-# Install/sync dependencies
-uv sync
+### Setup
 
-# Run with uv
-uv run python main.py [args]
+**Install dependencies:**
+```bash
+uv sync
+```
+
+**Configure API keys:**
+```bash
+# Copy the example .env file
+cp .env.example .env
+
+# Edit .env and add your Anthropic API key for Claude models
+# ANTHROPIC_API_KEY=your_key_here
 ```
 
 ### Running Optimizations
 
-**Basic optimization:**
+**Basic optimization (same model for task and meta-optimization):**
 ```bash
-# ProTeGi
+# ProTeGi with Qwen
 uv run python main.py --method protegi --model Qwen/Qwen2.5-7B-Instruct --iterations 10
 
-# OPRO
-uv run python main.py --method opro --model Qwen/Qwen2.5-7B-Instruct --iterations 10
+# OPRO with SaulLM
+uv run python main.py --method opro --model SaulLM/SaulLM-7B --iterations 10
 ```
 
-**Dual GPU optimization (tensor parallelism):**
+**Separate task and meta-optimizer models:**
 ```bash
-# Uses both GPUs for single run (faster inference)
-./run_dual_gpu.sh [method] [iterations] [minibatch_size]
-# Example: ./run_dual_gpu.sh protegi 5 150
+# Use Qwen for task evaluation, Claude Sonnet for meta-optimization
+uv run python main.py \
+    --method protegi \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --backend vllm \
+    --meta-model claude-3-5-sonnet-20241022 \
+    --iterations 10
+
+# Use small local model for task, Claude Haiku for meta-optimization (cost-effective)
+uv run python main.py \
+    --method protegi \
+    --model Qwen/Qwen2.5-3B-Instruct \
+    --meta-model claude-3-haiku-20240307 \
+    --iterations 10
 ```
 
-**Single GPU optimization:**
+**Shell scripts (with environment variables):**
 ```bash
-./run_single_gpu.sh
+# Single GPU with separate models
+META_MODEL="claude-3-5-sonnet-20241022" ./run_single_gpu.sh protegi 5 20
+
+# Dual GPU
+TASK_MODEL="Qwen/Qwen2.5-7B-Instruct" META_MODEL="claude-3-haiku-20240307" ./run_dual_gpu.sh
 ```
 
 **Evaluation only (no optimization):**
@@ -52,13 +74,46 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt here" --num-samples 5
 uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 ```
 
+### Supported Models
+
+**Task Models (--model):**
+- `Qwen/Qwen2.5-7B-Instruct` - General-purpose model, good performance
+- `Qwen/Qwen2.5-3B-Instruct` - Smaller, faster, lower memory
+- `SaulLM/SaulLM-7B` - Legal domain-specialized model
+- `meta-llama/Llama-3.1-8B-Instruct` - Meta's Llama 3.1
+- `claude-3-haiku-20240307` - Fast Claude model (API)
+- `claude-3-5-sonnet-20241022` - Most capable Claude model (API)
+
+**Meta-optimizer Models (--meta-model):**
+- Same as task models, plus recommended:
+- `claude-3-5-sonnet-20241022` - Best for complex meta-optimization
+- `claude-3-haiku-20240307` - Cost-effective for meta-optimization
+
 ### Important Parameters
 
-- `--backend`: `transformers` (CPU/GPU) or `vllm` (GPU only, faster)
+**Model Selection:**
+- `--model`: Task model (being optimized)
+- `--backend`: Backend for task model (`auto`, `transformers`, `vllm`, `claude`)
+- `--meta-model`: Meta-optimizer model for gradient generation/editing (optional, defaults to --model)
+- `--meta-backend`: Backend for meta-optimizer model (`auto` detects Claude models)
+
+**Optimization:**
+- `--method`: `protegi` or `opro`
+- `--iterations`: Number of optimization iterations (default: 10)
+- `--minibatch-size`: Examples per evaluation (default: 20)
+- `--beam-size`: Beam size for ProTeGi (default: 4)
+- `--num-candidates`: Candidates per iteration for OPRO (default: 4)
+
+**Evaluation:**
 - `--evaluator`: `strict-em` (exact match) or `math-verify` (robust symbolic verification, recommended)
 - `--train-split` / `--val-split`: Which GSM8K split to use for training/validation
+
+**Hardware:**
+- `--device`: `auto`, `cuda`, `mps`, `cpu` (for transformers backend)
 - `--tensor-parallel-size`: Number of GPUs for tensor parallelism (vLLM only)
 - `--gpu-ids`: Comma-separated GPU IDs (e.g., "0,1")
+
+**Debug:**
 - `--debug`: Show model outputs and extraction details
 
 ## Architecture
@@ -77,10 +132,22 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 **LLM Clients** (src/llm_client.py):
 - `TransformersClient`: HuggingFace transformers backend (CPU/GPU/MPS)
 - `VLLMClient`: vLLM backend (GPU only, much faster)
+- `ClaudeClient`: Anthropic Claude API backend (requires ANTHROPIC_API_KEY in .env)
 - Auto-detects and applies chat templates for Instruct models
 - Handles device selection, dtype optimization, and batch generation
+- Supports separate task and meta-optimizer models for hybrid optimization
 
 ### Key Design Patterns
+
+**Dual-Model Architecture:**
+Both ProTeGi and OPRO now support separate models for different roles:
+- **Task Model**: The model being optimized - evaluates prompts on actual task (e.g., solving math problems)
+- **Meta-optimizer Model**: Generates gradients, edits prompts, creates new candidates
+- **Benefits**:
+  - Use powerful API models (Claude Sonnet) for meta-optimization while keeping local models for task evaluation
+  - Cost-effective: Small local model for task + Claude Haiku for meta-optimization
+  - Better meta-optimization: Claude models excel at critique and prompt engineering
+- **Implementation**: Both models share the same LLMClient interface, allowing seamless mixing of backends
 
 **ProTeGi Workflow:**
 1. Maintain beam of top-K prompt candidates
@@ -158,10 +225,16 @@ JSON includes: method, model, config, best_prompt, history (all iterations), val
 
 ## Important Constraints
 
+**API Keys:**
+- Claude models require `ANTHROPIC_API_KEY` in `.env` file
+- Copy `.env.example` to `.env` and add your API key
+- Local models (Qwen, Llama, SaulLM) don't require API keys
+
 **Memory Management:**
 - Small models (3B-7B) recommended for 16GB RAM systems
 - Use `--device mps` on Apple Silicon, `--torch-dtype bfloat16`
 - vLLM requires CUDA GPU
+- Claude API models have no local memory requirements
 
 **Answer Format:**
 - Models should output final answer as `#### NUMBER` (preferred)

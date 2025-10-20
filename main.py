@@ -40,20 +40,36 @@ def main():
         help="Optimization method to use",
     )
 
-    # Model selection
+    # Model selection - Task model (being optimized)
     parser.add_argument(
         "--model",
         type=str,
         required=True,
-        help="Model name (e.g., meta-llama/Llama-3.1-8B-Instruct, Qwen/Qwen2.5-7B-Instruct)",
+        help="Task model name - the model being optimized (e.g., Qwen/Qwen2.5-7B-Instruct, SaulLM/SaulLM-7B)",
     )
 
     parser.add_argument(
         "--backend",
         type=str,
-        default="transformers",
-        choices=["transformers", "vllm"],
-        help="LLM backend to use",
+        default="auto",
+        choices=["transformers", "vllm", "claude", "auto"],
+        help="LLM backend for task model (auto detects Claude models)",
+    )
+
+    # Meta-optimizer model (for gradient generation, prompt editing)
+    parser.add_argument(
+        "--meta-model",
+        type=str,
+        default=None,
+        help="Meta-optimizer model for gradient generation and prompt editing. If not specified, uses --model. Examples: claude-3-5-sonnet-20241022, claude-3-haiku-20240307",
+    )
+
+    parser.add_argument(
+        "--meta-backend",
+        type=str,
+        default="auto",
+        choices=["transformers", "vllm", "claude", "auto"],
+        help="Backend for meta-optimizer model (auto detects Claude models)",
     )
 
     parser.add_argument(
@@ -219,8 +235,17 @@ def main():
     print(f"Minibatch Size: {args.minibatch_size}")
     print("="*80 + "\n")
 
-    # Initialize LLM client
-    print(f"Initializing {args.backend} client with model: {args.model}")
+    # Set meta-model defaults
+    if args.meta_model is None:
+        args.meta_model = args.model
+        args.meta_backend = args.backend
+        print(f"\nMeta-optimizer model not specified, using task model: {args.model}")
+    else:
+        print(f"\nUsing separate meta-optimizer model: {args.meta_model}")
+
+    # Initialize Task LLM client (the model being optimized)
+    print(f"\nInitializing TASK model ({args.backend}):")
+    print(f"  Model: {args.model}")
 
     # Warning for small models
     if any(size in args.model.lower() for size in ['0.5b', '1.5b', '1b']):
@@ -228,7 +253,6 @@ def main():
         print("⚠️  WARNING: You are using a very small model (<2B parameters)")
         print("="*80)
         print("Small models often struggle with:")
-        print("  • Meta-prompt generation (creating good gradients/critiques)")
         print("  • Math reasoning (solving GSM8K problems)")
         print("  • Following complex instructions")
         print()
@@ -236,8 +260,8 @@ def main():
         print("  --model Qwen/Qwen2.5-3B-Instruct")
         print("="*80 + "\n")
 
-    # Prepare LLM client kwargs
-    llm_kwargs = {
+    # Prepare Task LLM client kwargs
+    task_llm_kwargs = {
         "model_name": args.model,
         "backend": args.backend,
         "device": args.device,
@@ -248,9 +272,37 @@ def main():
 
     # Add tensor parallelism for vLLM
     if args.backend == "vllm":
-        llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
+        task_llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
 
-    llm_client = create_llm_client(**llm_kwargs)
+    task_llm_client = create_llm_client(**task_llm_kwargs)
+
+    # Initialize Meta-optimizer LLM client (for gradient generation, prompt editing)
+    print(f"\nInitializing META-OPTIMIZER model ({args.meta_backend}):")
+    print(f"  Model: {args.meta_model}")
+
+    # Prepare Meta LLM client kwargs
+    meta_llm_kwargs = {
+        "model_name": args.meta_model,
+        "backend": args.meta_backend,
+        "max_new_tokens": 4000,  # Higher for meta-prompts
+        "temperature": 0.7,
+    }
+
+    # Only add device/dtype for non-Claude backends
+    if args.meta_backend not in ["claude", "auto"] or "claude" not in args.meta_model.lower():
+        meta_llm_kwargs["device"] = args.device
+        meta_llm_kwargs["torch_dtype"] = args.torch_dtype
+
+    # Add tensor parallelism for vLLM (not for Claude)
+    if args.meta_backend == "vllm":
+        meta_llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
+
+    # Create meta-optimizer client (can be same as task client if same model)
+    if args.meta_model == args.model and args.meta_backend == args.backend:
+        meta_llm_client = task_llm_client
+        print("  (Using same client as task model)")
+    else:
+        meta_llm_client = create_llm_client(**meta_llm_kwargs)
 
     # Initialize evaluators for training and validation
     print(f"Loading {args.task.upper()} dataset from {args.dataset_path}")
@@ -310,7 +362,8 @@ def main():
     if args.method == "protegi":
         print(f"Running ProTeGi optimization on {args.train_split} split...")
         optimizer = ProTeGi(
-            llm_client=llm_client,
+            task_llm_client=task_llm_client,
+            meta_llm_client=meta_llm_client,
             evaluator=train_evaluator,
             beam_size=args.beam_size,
             num_iterations=args.iterations,
@@ -328,7 +381,8 @@ def main():
     elif args.method == "opro":
         print(f"Running OPRO optimization on {args.train_split} split...")
         optimizer = OPRO(
-            llm_client=llm_client,
+            task_llm_client=task_llm_client,
+            meta_llm_client=meta_llm_client,
             evaluator=train_evaluator,
             num_iterations=args.iterations,
             num_candidates_per_iter=args.num_candidates,
@@ -361,8 +415,10 @@ def main():
     results = {
         "task": args.task,
         "method": args.method,
-        "model": args.model,
-        "backend": args.backend,
+        "task_model": args.model,
+        "task_backend": args.backend,
+        "meta_model": args.meta_model,
+        "meta_backend": args.meta_backend,
         "timestamp": timestamp,
         "config": {
             "iterations": args.iterations,
@@ -413,7 +469,7 @@ def main():
     prompts = [f"{best_prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
 
     # Generate all outputs in one batch (vLLM handles this efficiently)
-    outputs = llm_client.generate_batch(prompts, temperature=1.0)
+    outputs = task_llm_client.generate_batch(prompts, temperature=1.0)
 
     # Evaluate
     indices = [example['idx'] for example in batch]

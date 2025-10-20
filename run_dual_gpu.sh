@@ -5,30 +5,51 @@
 
 set -e
 
+# Configuration
+TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}
+META_MODEL=${META_MODEL:-""}  # Leave empty to use same as task model
+METHOD=${METHOD:-"protegi"}
+TASK=${TASK:-"gsm8k"}
+
 echo "=========================================="
 echo "Dual GPU Prompt Optimization"
 echo "Backend: vLLM (with tensor parallelism)"
 echo "=========================================="
-echo "Model: Qwen/Qwen2.5-7B-Instruct"
-echo "GPUs: 0, 1 (both L40S)"
+echo "Task: $TASK"
+echo "Method: $METHOD"
+echo "Task Model: $TASK_MODEL"
+if [ -n "$META_MODEL" ]; then
+    echo "Meta-optimizer Model: $META_MODEL"
+else
+    echo "Meta-optimizer Model: (same as task model)"
+fi
+echo "GPUs: 0, 1"
 echo "Tensor Parallel Size: 2"
 echo "=========================================="
 echo ""
 
 export PATH="$HOME/.local/bin:$PATH"
 
-uv run python main.py \
-    --task claudette \
-    --method protegi \
-    --model Qwen/Qwen2.5-7B-Instruct \
+# Build command with optional meta-model
+CMD="uv run python main.py \
+    --task $TASK \
+    --method $METHOD \
+    --model $TASK_MODEL \
     --backend vllm \
     --tensor-parallel-size 2 \
-    --gpu-ids "0,1" \
+    --gpu-ids \"0,1\" \
     --iterations 5 \
-    --minibatch-size 1500 \
+    --minibatch-size 150 \
     --beam-size 4 \
-    --num-candidates 8 \
-    --initial-prompt 'Identify key provisions related to contractual obligations, liability limits, and dispute resolution methods, then report all fitting labels as: LABELS: <comma-separated numbers>'
+    --num-candidates 8"
+
+# Add meta-model if specified
+if [ -n "$META_MODEL" ]; then
+    CMD="$CMD --meta-model $META_MODEL"
+fi
+
+# Execute
+eval $CMD
 
 echo ""
 echo "=========================================="

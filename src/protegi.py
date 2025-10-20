@@ -194,7 +194,7 @@ class ProTeGi:
 
     def __init__(
         self,
-        llm_client,
+        task_llm_client,
         evaluator,
         beam_size: int = 4,
         num_iterations: int = 10,
@@ -204,12 +204,13 @@ class ProTeGi:
         task_description: str = "Solve math word problems step by step and provide the final numerical answer.",
         validation_evaluator = None,
         early_stopping_patience: int = 3,
+        meta_llm_client = None,
     ):
         """
         Initialize ProTeGi optimizer.
 
         Args:
-            llm_client: LLM client for generation
+            task_llm_client: LLM client for task evaluation (the model being optimized)
             evaluator: GSM8K evaluator for training
             beam_size: Number of prompt candidates to maintain
             num_iterations: Number of optimization iterations
@@ -219,8 +220,11 @@ class ProTeGi:
             task_description: Description of the task for meta-prompts
             validation_evaluator: Optional separate evaluator for validation set
             early_stopping_patience: Number of iterations without improvement before stopping
+            meta_llm_client: Optional separate LLM client for meta-optimization (gradient generation, editing).
+                           If None, uses task_llm_client for both.
         """
-        self.llm = llm_client
+        self.task_llm = task_llm_client
+        self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
         self.evaluator = evaluator
         self.validation_evaluator = validation_evaluator
         self.beam_size = beam_size
@@ -482,7 +486,7 @@ class ProTeGi:
         # Generate answers
         questions = [example['question'] for example in batch]
         prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
-        outputs = self.llm.generate_batch(prompts, temperature=0.7)
+        outputs = self.task_llm.generate_batch(prompts, temperature=0.7)
 
         # Evaluate
         indices = [example['idx'] for example in batch]
@@ -523,7 +527,7 @@ class ProTeGi:
             total=results['total'],
         )
 
-        gradient = self.llm.generate(gradient_prompt, temperature=0.7, max_new_tokens=4000)
+        gradient = self.meta_llm.generate(gradient_prompt, temperature=0.7, max_new_tokens=4000)
         return gradient
 
     def validate_prompt(self, prompt: str) -> bool:
@@ -564,7 +568,7 @@ class ProTeGi:
         )
 
         # Lower temperature and max_new_tokens to reduce repetition and verbosity
-        new_prompt = self.llm.generate(edit_prompt, temperature=0.5, max_new_tokens=1200)
+        new_prompt = self.meta_llm.generate(edit_prompt, temperature=0.5, max_new_tokens=1200)
 
         # Post-processing: remove common artifacts
         new_prompt = new_prompt.strip().strip('"\'')

@@ -141,3 +141,4 @@ results/
 # *.pth
 # *.bin
 # *.safetensors
+.env

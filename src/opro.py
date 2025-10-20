@@ -84,19 +84,22 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
 
     def __init__(
         self,
-        llm_client,
+        task_llm_client,
         evaluator,
         num_iterations: int = 10,
         num_candidates_per_iter: int = 4,
         minibatch_size: int = 20,
         keep_top_k: int = 8,
         task_description: str = "Solve math word problems step by step and provide the final numerical answer.",
+        meta_llm_client = None,
     ):
         """
         Initialize OPRO optimizer.
 
         Args:
-            llm_client: LLM client for generation and meta-optimization
+            task_llm_client: LLM client for task evaluation (the model being optimized)
+            meta_llm_client: Optional separate LLM client for meta-optimization (prompt generation).
+                           If None, uses task_llm_client for both.
             evaluator: GSM8K evaluator
             num_iterations: Number of optimization iterations
             num_candidates_per_iter: Number of new candidates to generate per iteration
@@ -104,7 +107,8 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
             keep_top_k: Number of top prompts to keep in memory
             task_description: Description of the task
         """
-        self.llm = llm_client
+        self.task_llm = task_llm_client
+        self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
         self.evaluator = evaluator
         self.num_iterations = num_iterations
         self.num_candidates_per_iter = num_candidates_per_iter
@@ -149,7 +153,7 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         # Generate answers (handle both 'question' and 'text' fields)
         questions = [example.get('question', example.get('text', '')) for example in batch]
         prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
-        outputs = self.llm.generate_batch(prompts, temperature=0.1)
+        outputs = self.task_llm.generate_batch(prompts, temperature=0.1)
 
         # Evaluate
         indices = [example['idx'] for example in batch]
@@ -181,7 +185,7 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         )
 
         # Generate candidates
-        response = self.llm.generate(meta_prompt, temperature=0.9, max_new_tokens=500)
+        response = self.meta_llm.generate(meta_prompt, temperature=0.9, max_new_tokens=500)
 
         # Parse candidates (each on a new line)
         candidates = [
