@@ -9,6 +9,7 @@ import numpy as np
 from dataclasses import dataclass
 import json
 import re
+import random
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -486,7 +487,8 @@ class ProTeGi:
         # Generate answers
         questions = [example['question'] for example in batch]
         prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
-        outputs = self.task_llm.generate_batch(prompts, temperature=0.7)
+        # Paper uses temperature=0.0 for task evaluation (few-shot classification)
+        outputs = self.task_llm.generate_batch(prompts, temperature=0.0)
 
         # Evaluate
         indices = [example['idx'] for example in batch]
@@ -507,8 +509,9 @@ class ProTeGi:
         """
         # Format results for the gradient prompt
         # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
+        # Paper uses groups of 4 errors per gradient (Section 3.2)
         error_examples = []
-        for d in results['details'][:20]:
+        for d in results['details'][:4]:  # Use only 4 errors as per paper
             if not d['correct']:
                 question_field = d.get('question') or d.get('text', 'N/A')
                 error_examples.append(
@@ -527,8 +530,42 @@ class ProTeGi:
             total=results['total'],
         )
 
-        gradient = self.meta_llm.generate(gradient_prompt, temperature=0.7, max_new_tokens=4000)
+        # Paper uses temperature=1.0 for gradient generation (exploration)
+        gradient = self.meta_llm.generate(gradient_prompt, temperature=1.0, max_new_tokens=4000)
         return gradient
+
+    def _generate_paraphrases(self, prompt: str, num_paraphrases: int = 2) -> List[str]:
+        """
+        Generate Monte Carlo paraphrases of a prompt (Algorithm 2 line 5 from paper).
+
+        Args:
+            prompt: Prompt to paraphrase
+            num_paraphrases: Number of paraphrases to generate
+
+        Returns:
+            List of paraphrased prompts
+        """
+        # Paraphrasing prompt from paper Appendix 1.1
+        paraphrase_template = """Generate a variation of the following instruction while keeping the semantic meaning.
+
+Input: {prompt_instruction}
+
+Output:"""
+
+        paraphrases = []
+        for _ in range(num_paraphrases):
+            paraphrase_prompt = paraphrase_template.format(prompt_instruction=prompt)
+            # Use temperature=1.0 for diversity
+            paraphrase = self.meta_llm.generate(paraphrase_prompt, temperature=1.0, max_new_tokens=512)
+
+            # Clean the paraphrase
+            paraphrase = self.clean_prompt(paraphrase)
+
+            # Validate
+            if self.validate_prompt(paraphrase) and paraphrase != prompt:
+                paraphrases.append(paraphrase)
+
+        return paraphrases
 
     def validate_prompt(self, prompt: str) -> bool:
         """
@@ -546,7 +583,7 @@ class ProTeGi:
         # Basic checks
         if len(clean_prompt) < 10:
             return False
-            
+
         return True
 
     def apply_gradient(self, candidate: PromptCandidate, gradient: str, verbose: bool = False, candidate_num: int = 1) -> Optional[str]:
@@ -567,8 +604,8 @@ class ProTeGi:
             gradient=gradient,
         )
 
-        # Lower temperature and max_new_tokens to reduce repetition and verbosity
-        new_prompt = self.meta_llm.generate(edit_prompt, temperature=0.5, max_new_tokens=1200)
+        # Paper uses temperature=1.0 for prompt editing (exploration)
+        new_prompt = self.meta_llm.generate(edit_prompt, temperature=1.0, max_new_tokens=1200)
 
         # Post-processing: remove common artifacts
         new_prompt = new_prompt.strip().strip('"\'')
@@ -749,16 +786,36 @@ class ProTeGi:
                 'selected_idx': selected_idx,
             })
 
-            # Generate gradient (critique)
-            gradient = self.generate_gradient(candidate, results)
+            # Generate multiple gradients (m=4 as per paper Algorithm 2)
+            # Sample different error groups for diversity
+            error_details = [d for d in results['details'] if not d['correct']]
 
-            if verbose:
-                print(f"Gradient: {gradient}")
+            num_gradients = min(4, max(1, len(error_details) // 4))  # m=4 gradients
 
-            # Generate multiple new candidates from this gradient
-            for i in range(self.num_candidates_per_gradient):
-                # Apply gradient to generate new prompt
-                new_prompt = self.apply_gradient(candidate, gradient, verbose=verbose, candidate_num=i+1)
+            for grad_idx in range(num_gradients):
+                # Sample a small group of errors (4 errors per gradient as per paper)
+                if len(error_details) >= 4:
+                    error_sample_indices = random.sample(range(len(error_details)), min(4, len(error_details)))
+                    error_sample = [error_details[i] for i in error_sample_indices]
+                else:
+                    error_sample = error_details
+
+                # Create mini results dict for this error group
+                mini_results = {
+                    'details': error_sample,
+                    'total': len(error_sample),
+                    'correct': 0,
+                    'accuracy': 0.0
+                }
+
+                # Generate gradient from this error group
+                gradient = self.generate_gradient(candidate, mini_results)
+
+                if verbose:
+                    print(f"Gradient {grad_idx+1}/{num_gradients}: {gradient[:100]}...")
+
+                # Apply gradient to generate new prompt (q=1 per gradient as per paper)
+                new_prompt = self.apply_gradient(candidate, gradient, verbose=verbose, candidate_num=grad_idx+1)
 
                 # Skip if validation failed
                 if new_prompt is None:
@@ -767,25 +824,39 @@ class ProTeGi:
                 # Skip if duplicate
                 if new_prompt in [c.prompt for c in beam]:
                     if verbose:
-                        print(f"   Candidate {i+1} skipped (duplicate)")
+                        print(f"   Candidate {grad_idx+1} skipped (duplicate)")
                     continue
 
-                # CRITICAL FIX: Evaluate BEFORE adding to beam
-                new_results = self.evaluate_prompt(new_prompt, random_sample=True)
+                # Generate Monte Carlo paraphrases (p=2 as per paper Algorithm 2 line 5)
+                paraphrases = self._generate_paraphrases(new_prompt, num_paraphrases=2)
 
-                # Create candidate with proper score
-                new_candidate = PromptCandidate(
-                    prompt=new_prompt,
-                    history=candidate.history + [new_prompt]
-                )
-                new_candidate.update_score(new_results['accuracy'])
-                self.total_evals += 1
+                # Evaluate all candidates (original + paraphrases)
+                all_new_prompts = [new_prompt] + paraphrases
 
-                if verbose:
-                    print(f"  Score: {new_results['accuracy']:.1%}")
+                for i, prompt_variant in enumerate(all_new_prompts):
+                    # Skip duplicates
+                    if prompt_variant in [c.prompt for c in beam]:
+                        if verbose:
+                            print(f"   Variant {i+1} skipped (duplicate)")
+                        continue
 
-                # Add to beam
-                beam.append(new_candidate)
+                    # Evaluate BEFORE adding to beam
+                    new_results = self.evaluate_prompt(prompt_variant, random_sample=True)
+
+                    # Create candidate with proper score
+                    new_candidate = PromptCandidate(
+                        prompt=prompt_variant,
+                        history=candidate.history + [prompt_variant]
+                    )
+                    new_candidate.update_score(new_results['accuracy'])
+                    self.total_evals += 1
+
+                    if verbose:
+                        variant_type = "original" if i == 0 else f"paraphrase {i}"
+                        print(f"  Gradient {grad_idx+1} {variant_type}: {new_results['accuracy']:.1%}")
+
+                    # Add to beam
+                    beam.append(new_candidate)
 
             # Keep only top beam_size candidates with diversity penalty
             beam = self._select_diverse_beam(beam, self.beam_size)
