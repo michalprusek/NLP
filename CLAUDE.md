@@ -84,7 +84,7 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 ### Supported Models
 
 **Task Models (--model):**
-- `Qwen/Qwen2.5-7B-Instruct` - General-purpose model, good performance
+- `Qwen/Qwen2.5-7B-Instruct` - **Default model**, general-purpose, good performance (~85% GSM8K)
 - `Qwen/Qwen2.5-3B-Instruct` - Smaller, faster, lower memory
 - `SaulLM/SaulLM-7B` - Legal domain-specialized model
 - `meta-llama/Llama-3.1-8B-Instruct` - Meta's Llama 3.1
@@ -215,7 +215,8 @@ ProTeGi includes aggressive prompt cleaning (`apply_gradient` method):
 ```
 datasets/
 ├── gsm8k/          # GSM8K dataset (7,473 train, 1,319 test)
-└── claudette/      # Claudette dataset (ToS analysis, not actively used)
+└── claudette/      # Claudette dataset from joelniklaus/online_terms_of_service
+                    # (19,942 train, 1,690 val, 4,297 test - ToS fairness classification)
 ```
 
 ## Results Output

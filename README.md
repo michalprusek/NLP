@@ -38,56 +38,81 @@ uv sync
 
 ## Datasets
 
-The framework supports two datasets:
+The framework supports two datasets. Both are already included in the repository.
+
+### Downloading Datasets (if needed)
+
+If you need to re-download the datasets:
+
+**GSM8K:**
+```bash
+# GSM8K is included in the repository at datasets/gsm8k/
+# To re-download from HuggingFace:
+from datasets import load_dataset
+ds = load_dataset("openai/gsm8k", "main")
+ds.save_to_disk("datasets/gsm8k")
+```
+
+**Claudette:**
+```bash
+# Claudette is included in the repository at datasets/claudette/
+# To re-download from HuggingFace:
+from datasets import load_dataset
+ds = load_dataset("joelniklaus/online_terms_of_service")
+ds.save_to_disk("datasets/claudette")
+```
 
 ### GSM8K (Grade School Math 8K)
 Math word problems requiring multi-step reasoning:
 - **7,473 training examples**
 - **1,319 test examples**
 - Task: Extract final numerical answer from step-by-step solutions
+- Source: HuggingFace dataset [`openai/gsm8k`](https://huggingface.co/datasets/openai/gsm8k)
 - Dataset location: `datasets/gsm8k/` (already downloaded)
 
 ### Claudette (ToS Fairness Classification)
 Terms of Service clause classification into 9 potentially unfair categories:
-- **9 training examples** (few-shot setting)
-- **2,048 test examples**
-- Task: Classify clauses into categories (0-8)
+- **19,942 training examples** (2,295 labeled with unfair categories)
+- **1,690 validation examples** (191 labeled)
+- **4,297 test examples** (417 labeled)
+- Task: Multi-label classification of clauses into unfair categories (0-8)
 - Categories:
-  - 0: Limitation of liability
-  - 1: Unilateral termination
-  - 2: Unilateral change
-  - 3: Arbitration
-  - 4: Content removal
-  - 5: Choice of law
-  - 6: Other
-  - 7: Contract by using
-  - 8: Jurisdiction
-- Dataset: Loaded from HuggingFace (`tommasobonomo/sem_eval_2023_task_4`)
+  - 0: Limitation of liability (ltd)
+  - 1: Unilateral termination (ter)
+  - 2: Unilateral change (ch)
+  - 3: Arbitration (a)
+  - 4: Content removal (cr)
+  - 5: Choice of law (law)
+  - 6: Other (pinc)
+  - 7: Contract by using (use)
+  - 8: Jurisdiction (j)
+- Source: HuggingFace dataset [`joelniklaus/online_terms_of_service`](https://huggingface.co/datasets/joelniklaus/online_terms_of_service)
+- Dataset location: `datasets/claudette/` (local preprocessed version)
 
 ## Usage
 
-### 🚀 Dual GPU Optimization (DOPORUČENO pro 2x NVIDIA L40S)
+### 🚀 Dual GPU Optimization (Recommended for 2x NVIDIA L40S)
 
-Využijte tensor parallelism pro rychlejší inferenci na dvou GPU:
+Utilize tensor parallelism for faster inference on two GPUs:
 
 ```bash
-# Dual GPU s tensor parallelismem (obě GPU pro jeden běh - rychlejší)
+# Dual GPU with tensor parallelism (both GPUs for one run - faster)
 ./run_dual_gpu.sh [method] [iterations] [minibatch_size]
 
-# Příklady:
+# Examples:
 ./run_dual_gpu.sh protegi 5 150
 ./run_dual_gpu.sh opro 10 100
 
-# Single GPU (pokud chcete použít jen jedno GPU)
+# Single GPU (if you want to use only one GPU)
 ./run_single_gpu.sh [method] [iterations] [minibatch_size]
 ```
 
-**Výhody dual GPU s tensor parallelismem:**
-- ⚡ Rychlejší inference (model rozdělen na 2 GPU)
-- 💪 Podporuje větší modely
-- 🔧 Automatická konfigurace vLLM
+**Benefits of dual GPU with tensor parallelism:**
+- ⚡ Faster inference (model split across 2 GPUs)
+- 💪 Supports larger models
+- 🔧 Automatic vLLM configuration
 
-**Poznámka:** Tensor parallelism rozděluje model na více GPU pro rychlejší inferenci jednoho běhu. Pokud chcete spustit ProTeGi a OPRO současně, spusťte dva terminály s `--gpu-ids` parametrem.
+**Note:** Tensor parallelism splits the model across multiple GPUs for faster inference of a single run. If you want to run ProTeGi and OPRO simultaneously, launch two terminals with the `--gpu-ids` parameter.
 
 ### Basic Commands
 
@@ -164,7 +189,9 @@ uv run python main.py \
 
 ## Supported Models
 
-The framework supports any HuggingFace model. **Recommended models for systems with 16GB RAM:**
+The framework supports any HuggingFace model. This project primarily uses **Qwen/Qwen2.5-7B-Instruct** for optimization tasks.
+
+**Recommended models for systems with 16GB RAM:**
 
 ### Qwen2.5 3B Instruct (RECOMMENDED for limited RAM)
 - Good math performance (~70-75% on GSM8K)
@@ -191,8 +218,8 @@ The framework supports any HuggingFace model. **Recommended models for systems w
 ```
 
 **For systems with 32GB+ RAM (more powerful but need more memory):**
+- `Qwen/Qwen2.5-7B-Instruct` (~15GB RAM, ~85% on GSM8K) - **Default model used in this project**
 - `meta-llama/Llama-3.1-8B-Instruct` (~16GB RAM, ~84% on GSM8K)
-- `Qwen/Qwen2.5-7B-Instruct` (~15GB RAM, ~85% on GSM8K)
 
 ### Claude API Models (via Anthropic API)
 
@@ -387,7 +414,7 @@ Correct: 1148/1319
 
 ### GSM8K Evaluation
 
-Pro evaluaci konkrétního promptu bez optimalizace použijte `evaluate_gsm8k.py`.
+To evaluate a specific prompt without optimization, use `evaluate_gsm8k.py`.
 
 **Note:** The script now correctly uses evaluator-specific comparison methods:
 - With `--evaluator math-verify`: Uses symbolic verification (recommended)
@@ -426,7 +453,7 @@ Or use `--prompt "Your custom prompt"` for custom prompts.
 
 ### Claudette Evaluation
 
-Pro evaluaci promptů na Claudette datasetu použijte `evaluate_claudette.py`:
+To evaluate prompts on the Claudette dataset, use `evaluate_claudette.py`:
 
 ```bash
 # Basic evaluation (single response per clause)
@@ -594,10 +621,15 @@ uv run python main.py \
 
 ## References
 
+**Optimization Methods:**
 - ProTeGi: [arXiv:2305.03495](https://arxiv.org/abs/2305.03495) - Automatic Prompt Optimization with Gradient Descent and Beam Search
 - OPRO: [arXiv:2309.03409](https://arxiv.org/abs/2309.03409) - Large Language Models as Optimizers
+
+**Datasets:**
 - GSM8K: [arXiv:2110.14168](https://arxiv.org/abs/2110.14168) - Training Verifiers to Solve Math Word Problems
-- Claudette: SemEval-2023 Task 4 - Legal Extractive Question Answering ([HuggingFace](https://huggingface.co/datasets/tommasobonomo/sem_eval_2023_task_4))
+  - HuggingFace: [`openai/gsm8k`](https://huggingface.co/datasets/openai/gsm8k)
+- CLAUDETTE: [arXiv:1805.01217](https://arxiv.org/abs/1805.01217) - Automated Detector of Potentially Unfair Clauses in Online Terms of Service
+  - HuggingFace: [`joelniklaus/online_terms_of_service`](https://huggingface.co/datasets/joelniklaus/online_terms_of_service)
 
 ## License
 
