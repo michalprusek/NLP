@@ -7,6 +7,7 @@ https://arxiv.org/abs/2309.03409
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+import random
 
 
 def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
@@ -58,38 +59,34 @@ PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
 YOUR TASK:
-Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+Generate a NEW instruction prompt that will achieve HIGHER accuracy than previous ones.
 
 REQUIREMENTS:
-1. Each prompt must be 2-4 sentences
+1. Prompt must be 2-4 sentences
 2. Must instruct to provide answer in format "#### NUMBER"
 3. Should encourage step-by-step reasoning
 4. Should be clear and actionable
-5. Each prompt must be DIFFERENT from previous ones
-6. Explore different instruction strategies
+5. Must be DIFFERENT from previous prompts
+6. Explore different instruction strategies based on what worked well before
 
 OUTPUT FORMAT:
-Write EXACTLY {num_candidates} prompts, one per line.
-NO numbering (1., 2., etc.)
-NO bullet points (-, *)
-NO explanations or meta-text
-JUST the instruction prompts themselves.
+Write EXACTLY ONE prompt.
+NO numbering, NO bullet points, NO explanations.
+JUST the instruction prompt itself.
 
-EXAMPLE OUTPUT (for num_candidates=3):
+EXAMPLE OUTPUT:
 Solve the math problem step by step and provide the answer as #### NUMBER.
-Break down the problem into steps, show your work, and end with #### NUMBER.
-Calculate the solution carefully, verify your answer, and format it as #### NUMBER.
 
-NOW GENERATE {num_candidates} NEW PROMPTS:"""
+NOW GENERATE YOUR NEW PROMPT:"""
 
     def __init__(
         self,
         task_llm_client,
         evaluator,
         num_iterations: int = 10,
-        num_candidates_per_iter: int = 4,
+        num_candidates_per_iter: int = 8,  # Paper uses 8 per iteration
         minibatch_size: int = 20,
-        keep_top_k: int = 8,
+        keep_top_k: int = 20,  # Paper keeps top 20 prompts in memory
         task_description: str = "Solve math word problems step by step and provide the final numerical answer.",
         meta_llm_client = None,
     ):
@@ -128,14 +125,32 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
             # Use default GSM8K template
             self.meta_prompt_template = self.META_PROMPT
 
-        # CRITICAL FIX: Get example problems from dataset for meta-prompt
-        # This helps LLM understand the task better
-        example_batch = evaluator.get_batch(0, 5)
-        # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
-        self.example_problems = "\n\n".join([
-            f"Example {i+1}:\nQ: {ex.get('question', ex.get('text', ''))[:150]}...\nA: {ex.get('answer', ex.get('label', ''))}"
-            for i, ex in enumerate(example_batch)
-        ])
+    def _get_random_examples(self, num_examples: int = 3) -> str:
+        """
+        Get random examples from dataset for meta-prompt.
+        Paper uses 3 randomly picked exemplars at each step.
+
+        Args:
+            num_examples: Number of random examples to pick (default: 3 as in paper)
+
+        Returns:
+            Formatted string with example problems
+        """
+        dataset_size = len(self.evaluator)
+        random_indices = random.sample(range(dataset_size), min(num_examples, dataset_size))
+
+        examples = []
+        for i, idx in enumerate(random_indices):
+            # Get example from dataset
+            example_batch = self.evaluator.get_batch(idx, 1)
+            if example_batch:
+                ex = example_batch[0]
+                # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
+                question = ex.get('question', ex.get('text', ''))[:150]
+                answer = ex.get('answer', ex.get('label', ''))
+                examples.append(f"Example {i+1}:\nQ: {question}...\nA: {answer}")
+
+        return "\n\n".join(examples)
 
     def evaluate_prompt(self, prompt: str, start_idx: int) -> float:
         """
@@ -165,10 +180,13 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         """
         Generate new prompt candidates using LLM as meta-optimizer.
 
+        Paper implementation: Makes N independent calls to the optimizer LLM
+        (each at temperature 1.0) to generate N diverse instructions.
+
         Returns:
             List of new prompt candidates
         """
-        # Format scored prompts for the meta-prompt
+        # Format scored prompts for the meta-prompt (keep top 20 as in paper)
         if self.scored_prompts:
             scored_prompts_text = "\n".join([
                 f"Score: {sp.score:.1%} | Prompt: \"{sp.prompt}\""
@@ -177,44 +195,42 @@ NOW GENERATE {num_candidates} NEW PROMPTS:"""
         else:
             scored_prompts_text = "(No prompts evaluated yet)"
 
-        meta_prompt = self.meta_prompt_template.format(
-            task_description=self.task_description,
-            example_problems=self.example_problems,  # CRITICAL FIX: Add examples
-            scored_prompts=scored_prompts_text,
-            num_candidates=self.num_candidates_per_iter,
-        )
-
-        # Generate candidates
-        response = self.meta_llm.generate(meta_prompt, temperature=0.9, max_new_tokens=500)
-
-        # Parse candidates (each on a new line)
-        candidates = [
-            line.strip()
-            for line in response.strip().split('\n')
-            if line.strip() and not line.strip().startswith(('#', '-', '*', '1.', '2.', '3.', '4.'))
-        ]
-
-        # Clean up any numbered prefixes
-        cleaned = []
-        for c in candidates:
-            # Remove common prefixes
-            for prefix in ['1. ', '2. ', '3. ', '4. ', '- ', '* ']:
-                if c.startswith(prefix):
-                    c = c[len(prefix):]
-            cleaned.append(c.strip())
-
-        # Return up to num_candidates unique prompts
-        unique_candidates = []
+        # Generate N candidates with N independent calls (paper method)
+        candidates = []
         seen = set(sp.prompt for sp in self.scored_prompts)
 
-        for c in cleaned:
-            if c and c not in seen:
-                unique_candidates.append(c)
-                seen.add(c)
-                if len(unique_candidates) >= self.num_candidates_per_iter:
-                    break
+        for i in range(self.num_candidates_per_iter):
+            # Get 3 random examples for this generation (paper uses 3 random exemplars)
+            example_problems = self._get_random_examples(num_examples=3)
 
-        return unique_candidates
+            # Format meta-prompt with random examples
+            meta_prompt = self.meta_prompt_template.format(
+                task_description=self.task_description,
+                example_problems=example_problems,
+                scored_prompts=scored_prompts_text,
+                num_candidates=1,  # Generate 1 candidate per call
+            )
+
+            # Generate candidate (temperature=1.0 as in paper for diversity)
+            response = self.meta_llm.generate(meta_prompt, temperature=1.0, max_new_tokens=500)
+
+            # Extract the prompt (remove numbering, bullets, etc.)
+            candidate = response.strip()
+
+            # Clean up common artifacts
+            for prefix in ['1. ', '2. ', '3. ', '4. ', '- ', '* ', 'Prompt: ', '"']:
+                if candidate.startswith(prefix):
+                    candidate = candidate[len(prefix):]
+
+            # Remove trailing quotes
+            candidate = candidate.strip().strip('"').strip()
+
+            # Skip if empty or duplicate
+            if candidate and candidate not in seen:
+                candidates.append(candidate)
+                seen.add(candidate)
+
+        return candidates
 
     def optimize(
         self,
