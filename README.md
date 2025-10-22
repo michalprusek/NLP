@@ -154,7 +154,7 @@ uv run python main.py \
 - `--iterations`: Number of optimization iterations (default: 10)
 - `--minibatch-size`: Examples per evaluation (default: 20)
 - `--beam-size`: Beam size for ProTeGi (default: 4)
-- `--num-candidates`: Candidates per iteration for OPRO (default: 4)
+- `--num-candidates`: Candidates per iteration for OPRO (default: 8, as per paper)
 - `--initial-prompt`: Starting prompt (default: loaded from `src/prompts/<task>/initial.txt`)
 - `--output-dir`: Results directory (default: `results`)
 - `--tensor-parallel-size`: Number of GPUs for tensor parallelism (vLLM only, default: 1)
@@ -194,6 +194,63 @@ The framework supports any HuggingFace model. **Recommended models for systems w
 - `meta-llama/Llama-3.1-8B-Instruct` (~16GB RAM, ~84% on GSM8K)
 - `Qwen/Qwen2.5-7B-Instruct` (~15GB RAM, ~85% on GSM8K)
 
+### Claude API Models (via Anthropic API)
+
+The framework supports Anthropic's Claude models via API for both task execution and meta-optimization:
+
+**Setup:**
+```bash
+# Copy example .env file
+cp .env.example .env
+
+# Add your Anthropic API key to .env
+# ANTHROPIC_API_KEY=your_key_here
+```
+
+**Model Aliases:**
+- `haiku` → `claude-haiku-4-5-20251001` (latest Haiku 4.5)
+- `sonnet` → `claude-sonnet-4-5-20251022` (latest Sonnet 4.5)
+
+**Usage Examples:**
+```bash
+# Use Claude Sonnet for both task and meta-optimization
+uv run python main.py \
+  --method protegi \
+  --model sonnet \
+  --iterations 10
+
+# Hybrid: Local model for task, Claude for meta-optimization (RECOMMENDED)
+uv run python main.py \
+  --method protegi \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --backend vllm \
+  --meta-model sonnet \
+  --iterations 10
+
+# Cost-effective: Small local model + Claude Haiku for meta-optimization
+uv run python main.py \
+  --method opro \
+  --model Qwen/Qwen2.5-3B-Instruct \
+  --meta-model haiku \
+  --iterations 10
+```
+
+**Dual-Model Architecture:**
+
+Both ProTeGi and OPRO support separate models for different roles:
+- **Task Model** (`--model`): Evaluates prompts on actual task (solving math problems)
+- **Meta-optimizer Model** (`--meta-model`): Generates gradients, edits prompts, creates new candidates
+
+**Benefits:**
+- 💡 Use powerful API models (Claude Sonnet) for meta-optimization while keeping local models for task evaluation
+- 💰 Cost-effective: Small local model for task + Claude Haiku for meta-optimization
+- 🚀 Better meta-optimization: Claude models excel at critique and prompt engineering
+- 🔧 No local memory requirements for API models
+
+**Available Parameters:**
+- `--meta-model`: Meta-optimizer model (optional, defaults to `--model`)
+- `--meta-backend`: Backend for meta-optimizer (`auto`, `transformers`, `vllm`, `claude`)
+
 ## How It Works
 
 ### ProTeGi Pipeline
@@ -210,8 +267,13 @@ The framework supports any HuggingFace model. **Recommended models for systems w
 1. **Initialize**: Start with one or more seed prompts
 2. **Evaluate**: Score each prompt on minibatch
 3. **Generate Candidates**: LLM analyzes scored prompts and generates new candidates
-4. **Update Memory**: Keep top-k prompts based on scores
+   - Makes N independent calls to meta-optimizer (temperature=1.0 for diversity)
+   - Each call uses 3 randomly sampled examples from training set
+   - Generates 8 candidates per iteration (default, as per paper)
+4. **Update Memory**: Keep top-20 prompts based on scores (paper default)
 5. **Iterate**: Repeat, allowing LLM to learn patterns from successful prompts
+
+**Paper-Compliant Implementation:** Our OPRO follows the original paper (arXiv:2309.03409) with temperature=1.0, random examples, and independent generation calls for maximum diversity.
 
 ### Answer Evaluation (Math-Verify)
 
@@ -325,7 +387,12 @@ Correct: 1148/1319
 
 ### GSM8K Evaluation
 
-Pro evaluaci konkrétního promptu bez optimalizace použijte `evaluate_gsm8k.py`:
+Pro evaluaci konkrétního promptu bez optimalizace použijte `evaluate_gsm8k.py`.
+
+**Note:** The script now correctly uses evaluator-specific comparison methods:
+- With `--evaluator math-verify`: Uses symbolic verification (recommended)
+- With `--evaluator standard`: Uses numerical tolerance comparison
+- Both are more robust than simple string matching
 
 ```bash
 # Basic evaluation (single response per question)
