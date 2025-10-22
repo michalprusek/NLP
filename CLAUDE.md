@@ -109,7 +109,7 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 - `--iterations`: Number of optimization iterations (default: 10)
 - `--minibatch-size`: Examples per evaluation (default: 20)
 - `--beam-size`: Beam size for ProTeGi (default: 4)
-- `--num-candidates`: Candidates per iteration for OPRO (default: 4)
+- `--num-candidates`: Candidates per iteration for OPRO (default: 8, as per paper)
 
 **Evaluation:**
 - `--evaluator`: `strict-em` (exact match) or `math-verify` (robust symbolic verification, recommended)

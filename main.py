@@ -151,8 +151,8 @@ def main():
     parser.add_argument(
         "--num-candidates",
         type=int,
-        default=4,
-        help="Number of candidates per iteration for OPRO",
+        default=8,
+        help="Number of candidates per iteration for OPRO (paper uses 8)",
     )
 
     parser.add_argument(
