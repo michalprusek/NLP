@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -34,7 +35,7 @@ from collections import Counter
 import sys
 
 from src.llm_client import create_llm_client
-from src.evaluator import GSM8KEvaluator, extract_answer, extract_ground_truth
+from src.evaluator import GSM8KEvaluator, extract_answer, extract_ground_truth, compare_numbers
 from src.math_verify_evaluator import MathVerifyEvaluator
 
 
@@ -161,8 +162,14 @@ def evaluate_with_self_consistency(
             for sample_idx, response in enumerate(responses):
                 print(f"  Sample {sample_idx + 1}: {response[:100]}...")
 
-        # Extract answers from all responses
-        extracted_answers = extract_answers_from_responses(responses, verbose=(verbose and idx < 3))
+        # Extract answers from all responses using evaluator-specific extraction
+        if isinstance(evaluator, MathVerifyEvaluator):
+            # Use MathVerifyEvaluator's extraction method
+            extracted_answers = [evaluator.extract_answer(resp, verbose=(verbose and idx < 3 and i < 3))
+                                 for i, resp in enumerate(responses)]
+        else:
+            # Use standard extraction (from GSM8KEvaluator)
+            extracted_answers = extract_answers_from_responses(responses, verbose=(verbose and idx < 3))
 
         # Apply majority voting if using self-consistency
         if num_samples > 1:
@@ -173,11 +180,30 @@ def evaluate_with_self_consistency(
         else:
             predicted_answer = extracted_answers[0]
 
-        # Extract ground truth from the dataset
-        gt_answer = extract_ground_truth(example['answer'])
+        # Extract ground truth and compare using evaluator-specific logic
+        if isinstance(evaluator, MathVerifyEvaluator):
+            # Math-Verify: Parse to SymPy and use symbolic verification
+            gt_text = example['answer']
+            gt_match = re.search(r'####\s*([-+]?\d+(?:[.,]\d+)?)', gt_text)
+            if gt_match:
+                gt_str = gt_match.group(1)
+            else:
+                nums = re.findall(r'[-+]?\d+(?:[.,]\d+)?', gt_text)
+                gt_str = nums[-1] if nums else None
 
-        # Check if predicted answer matches ground truth
-        is_correct = (predicted_answer is not None and predicted_answer == gt_answer)
+            # Parse both to SymPy
+            gt_expr = evaluator.parse_to_sympy(gt_str, verbose=(verbose and idx < 3)) if gt_str else None
+            pred_expr = evaluator.parse_to_sympy(predicted_answer, verbose=(verbose and idx < 3)) if predicted_answer else None
+
+            # Verify using symbolic comparison
+            is_correct = evaluator.verify(pred_expr, gt_expr, verbose=(verbose and idx < 3))
+
+            # Store string representations for logging
+            gt_answer = gt_str
+        else:
+            # Standard GSM8K: Extract and compare with numerical tolerance
+            gt_answer = extract_ground_truth(example['answer'])
+            is_correct = (predicted_answer is not None and compare_numbers(predicted_answer, gt_answer))
 
         if predicted_answer is None:
             failed_extractions += 1
