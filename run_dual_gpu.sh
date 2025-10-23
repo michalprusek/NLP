@@ -8,7 +8,7 @@ set -e
 # Configuration
 TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}
 META_MODEL=${META_MODEL:-""}  # Leave empty to use same as task model, or use "haiku"/"sonnet" aliases
-METHOD=${METHOD:-"protegi"}
+METHOD=${METHOD:-"opro"}
 TASK=${TASK:-"gsm8k"}
 
 echo "=========================================="
