@@ -777,6 +777,9 @@ Output:"""
 
             if verbose:
                 print(f"Accuracy: {results['accuracy']:.1%} ({results['correct']}/{results['total']})")
+                # Show comprehensive metrics for classification tasks (e.g., Claudette)
+                if 'micro_f1' in results:
+                    print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%} | Hamming: {results['hamming_loss']:.3f}")
 
             # Record history
             self.history.append({
@@ -853,7 +856,10 @@ Output:"""
 
                     if verbose:
                         variant_type = "original" if i == 0 else f"paraphrase {i}"
-                        print(f"  Gradient {grad_idx+1} {variant_type}: {new_results['accuracy']:.1%}")
+                        print(f"  Gradient {grad_idx+1} {variant_type}: {new_results['accuracy']:.1%}", end='')
+                        if 'micro_f1' in new_results:
+                            print(f" (Micro-F1: {new_results['micro_f1']:.1%})", end='')
+                        print()
 
                     # Add to beam
                     beam.append(new_candidate)
@@ -898,6 +904,8 @@ Output:"""
 
                 if verbose:
                     print(f"Validation accuracy: {val_accuracy:.1%}")
+                    if 'micro_f1' in val_results:
+                        print(f"  Micro-F1: {val_results['micro_f1']:.1%} | Macro-F1: {val_results['macro_f1']:.1%}")
 
                 # Early stopping check
                 if val_accuracy > self.best_val_score:
@@ -931,6 +939,8 @@ Output:"""
                 print(f"\nCandidate {i+1}:")
                 print(f"Prompt: {candidate.prompt}")
                 print(f"Score: {results['accuracy']:.1%}")
+                if 'micro_f1' in results:
+                    print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}")
 
         # Return best
         best_candidate = max(beam, key=lambda c: c.score)

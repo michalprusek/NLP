@@ -475,16 +475,45 @@ def main():
     indices = [example['idx'] for example in batch]
     val_results = val_evaluator.evaluate_batch(outputs, indices)
 
-    print(f"\nValidation Accuracy: {val_results['accuracy']:.1%}")
-    print(f"Correct: {val_results['correct']}/{val_results['total']}")
+    # Display results - check if Claudette task for comprehensive metrics
+    if args.task == "claudette":
+        print(f"\nValidation Results:")
+        print(f"  Subset Accuracy: {val_results['accuracy']:.1%} ({val_results['correct']}/{val_results['total']})")
+        print(f"\n  Micro F1:    {val_results.get('micro_f1', 0.0):.1%}")
+        print(f"  Macro F1:    {val_results.get('macro_f1', 0.0):.1%}")
+        print(f"  Weighted F1: {val_results.get('weighted_f1', 0.0):.1%}")
+        print(f"  Hamming Loss: {val_results.get('hamming_loss', 0.0):.4f}")
+    else:
+        print(f"\nValidation Accuracy: {val_results['accuracy']:.1%}")
+        print(f"Correct: {val_results['correct']}/{val_results['total']}")
 
     # Update results with validation evaluation
-    results["validation"] = {
+    validation_dict = {
         "split": args.val_split,
         "accuracy": val_results['accuracy'],
         "correct": val_results['correct'],
         "total": val_results['total'],
     }
+
+    # Add comprehensive metrics for Claudette
+    if args.task == "claudette":
+        validation_dict.update({
+            "micro_f1": val_results.get('micro_f1', 0.0),
+            "micro_precision": val_results.get('micro_precision', 0.0),
+            "micro_recall": val_results.get('micro_recall', 0.0),
+            "macro_f1": val_results.get('macro_f1', 0.0),
+            "macro_precision": val_results.get('macro_precision', 0.0),
+            "macro_recall": val_results.get('macro_recall', 0.0),
+            "weighted_f1": val_results.get('weighted_f1', 0.0),
+            "weighted_precision": val_results.get('weighted_precision', 0.0),
+            "weighted_recall": val_results.get('weighted_recall', 0.0),
+            "hamming_loss": val_results.get('hamming_loss', 0.0),
+            "per_class": val_results.get('per_class', {}),
+            "confusion_matrix": val_results.get('confusion_matrix', []),
+            "support": val_results.get('support', []),
+        })
+
+    results["validation"] = validation_dict
 
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
@@ -493,8 +522,25 @@ def main():
     with open(prompt_file, "a") as f:
         f.write(f"\n{'='*80}\n")
         f.write(f"VALIDATION ({args.val_split} split, {val_size} examples):\n")
-        f.write(f"Accuracy: {val_results['accuracy']:.1%}\n")
-        f.write(f"Correct: {val_results['correct']}/{val_results['total']}\n")
+
+        if args.task == "claudette":
+            f.write(f"Subset Accuracy: {val_results['accuracy']:.1%}\n")
+            f.write(f"Correct: {val_results['correct']}/{val_results['total']}\n\n")
+            f.write(f"Comprehensive Metrics:\n")
+            f.write(f"  Micro F1:         {val_results.get('micro_f1', 0.0):.1%}\n")
+            f.write(f"  Micro Precision:  {val_results.get('micro_precision', 0.0):.1%}\n")
+            f.write(f"  Micro Recall:     {val_results.get('micro_recall', 0.0):.1%}\n\n")
+            f.write(f"  Macro F1:         {val_results.get('macro_f1', 0.0):.1%}\n")
+            f.write(f"  Macro Precision:  {val_results.get('macro_precision', 0.0):.1%}\n")
+            f.write(f"  Macro Recall:     {val_results.get('macro_recall', 0.0):.1%}\n\n")
+            f.write(f"  Weighted F1:      {val_results.get('weighted_f1', 0.0):.1%}\n")
+            f.write(f"  Weighted Precision: {val_results.get('weighted_precision', 0.0):.1%}\n")
+            f.write(f"  Weighted Recall:  {val_results.get('weighted_recall', 0.0):.1%}\n\n")
+            f.write(f"  Hamming Loss:     {val_results.get('hamming_loss', 0.0):.4f}\n")
+        else:
+            f.write(f"Accuracy: {val_results['accuracy']:.1%}\n")
+            f.write(f"Correct: {val_results['correct']}/{val_results['total']}\n")
+
         f.write(f"{'='*80}\n")
 
 
