@@ -149,8 +149,8 @@ def compute_metrics(pred_labels: Set[int], true_labels: Set[int]) -> Dict[str, f
     """
     Compute metrics for multi-label classification.
 
-    For Claudette, it's actually single-label classification (one label per example),
-    but we handle it as multi-label for generality.
+    Claudette is a multi-label dataset (examples can have multiple ToS categories),
+    though most examples have a single label in practice.
     """
     # Exact match (all labels correct)
     exact_match = pred_labels == true_labels

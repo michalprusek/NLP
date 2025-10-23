@@ -127,7 +127,14 @@ def evaluate_with_self_consistency(
     for idx in range(num_examples):
         example = dataset[idx]
         # Use 'sentence' field from Arrow dataset format
-        clause = example.get('sentence', example.get('text', ''))
+        clause = example.get('sentence')
+        if clause is None:
+            clause = example.get('text')
+        if clause is None or not clause.strip():
+            raise ValueError(
+                f"Example {idx} has no valid text content. "
+                f"Available fields: {list(example.keys())}"
+            )
         # Create prompt directly (like in main.py) - more robust
         prompt = f"{prompt_template}\n\nQuestion: {clause}\nAnswer:"
         all_prompts.append(prompt)
@@ -138,9 +145,26 @@ def evaluate_with_self_consistency(
 
     for sample_idx in range(num_samples):
         print(f"  Generating sample {sample_idx + 1}/{num_samples} for all {num_examples} clauses...")
-        # Generate responses for ALL clauses in one batch
-        batch_responses = llm_client.generate_batch(all_prompts, temperature=temperature)
-        all_responses.append(batch_responses)
+        try:
+            # Generate responses for ALL clauses in one batch
+            batch_responses = llm_client.generate_batch(all_prompts, temperature=temperature)
+
+            # Validate response count
+            if len(batch_responses) != num_examples:
+                raise ValueError(
+                    f"Expected {num_examples} responses, got {len(batch_responses)} "
+                    f"in sample {sample_idx + 1}"
+                )
+
+            all_responses.append(batch_responses)
+
+        except Exception as e:
+            print(f"ERROR: Failed to generate sample {sample_idx + 1}/{num_samples}")
+            print(f"  Error: {e}")
+            raise RuntimeError(
+                f"Batch generation failed for sample {sample_idx + 1}. "
+                f"Generated {len(all_responses)}/{num_samples} samples before failure."
+            ) from e
 
     # Now process results with majority voting
     print("\nProcessing results and applying majority voting...")
@@ -151,7 +175,15 @@ def evaluate_with_self_consistency(
     for idx in range(num_examples):
         example = dataset[idx]
         # Use 'sentence' field from Arrow dataset format
-        clause = example.get('sentence', example.get('text', ''))
+        # Validate dataset fields - fail fast on missing text
+        clause = example.get('sentence')
+        if clause is None:
+            clause = example.get('text')
+        if clause is None or not clause.strip():
+            raise ValueError(
+                f"Example {idx} has no valid text content. "
+                f"Available fields: {list(example.keys())}"
+            )
 
         # Collect all N responses for this clause
         responses = [all_responses[sample_idx][idx] for sample_idx in range(num_samples)]

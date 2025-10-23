@@ -164,12 +164,33 @@ def _sets_to_binary(label_sets: List[Set[int]], num_classes: int) -> np.ndarray:
 
     Returns:
         Binary matrix of shape (num_samples, num_classes)
+
+    Raises:
+        TypeError: If labels are not in correct format
+        ValueError: If any label is out of valid range [0, num_classes)
     """
     binary = np.zeros((len(label_sets), num_classes), dtype=np.int32)
+    invalid_labels = []
+
     for i, labels in enumerate(label_sets):
+        if not isinstance(labels, (set, list, tuple)):
+            raise TypeError(f"Sample {i}: labels must be set/list/tuple, got {type(labels)}")
+
         for label in labels:
+            if not isinstance(label, (int, np.integer)):
+                raise TypeError(f"Sample {i}: label must be int, got {type(label)}: {label}")
+
             if 0 <= label < num_classes:
                 binary[i, label] = 1
+            else:
+                invalid_labels.append((i, label))
+
+    if invalid_labels:
+        # Log first few invalid labels for debugging
+        sample_errors = invalid_labels[:5]
+        error_msg = f"Found {len(invalid_labels)} invalid labels out of range [0, {num_classes}). Examples: {sample_errors}"
+        raise ValueError(error_msg)
+
     return binary
 
 
@@ -221,7 +242,25 @@ def _compute_per_class_metrics(
     Compute precision, recall, F1 for each class independently.
 
     Returns dict mapping class index to metrics dict.
+
+    Raises:
+        ValueError: If array shapes are invalid or mismatched
     """
+    # Validate input shapes
+    if y_true.ndim != 2:
+        raise ValueError(f"y_true must be 2D, got shape {y_true.shape}")
+    if y_pred.ndim != 2:
+        raise ValueError(f"y_pred must be 2D, got shape {y_pred.shape}")
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"Shape mismatch: y_true {y_true.shape} != y_pred {y_pred.shape}")
+
+    actual_classes = y_true.shape[1]
+    if actual_classes != num_classes:
+        raise ValueError(
+            f"Expected {num_classes} classes based on num_classes parameter, "
+            f"but data has {actual_classes} classes. Shape: {y_true.shape}"
+        )
+
     per_class = {}
 
     for class_idx in range(num_classes):
@@ -317,6 +356,10 @@ def _compute_confusion_matrix(
 
     For multi-label, we count co-occurrences: if true label is i and predicted j,
     increment matrix[i][j]. Multiple true/pred labels contribute multiple counts.
+
+    Note: Currently only records confusions when both true and predicted labels exist.
+    Cases where either is empty (pure false positives/negatives) are not reflected
+    in the confusion matrix.
 
     Returns:
         Confusion matrix of shape (num_classes, num_classes)
