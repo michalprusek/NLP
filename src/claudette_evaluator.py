@@ -7,6 +7,8 @@ import re
 from typing import Dict, List, Any, Optional, Set
 from datasets import load_from_disk
 
+from src.metrics import compute_multilabel_metrics, format_metrics_table, format_metrics_compact
+
 
 # Label mapping from metadata.json
 LABEL_MAP = {
@@ -147,8 +149,8 @@ def compute_metrics(pred_labels: Set[int], true_labels: Set[int]) -> Dict[str, f
     """
     Compute metrics for multi-label classification.
 
-    For Claudette, it's actually single-label classification (one label per example),
-    but we handle it as multi-label for generality.
+    Claudette is a multi-label dataset (examples can have multiple ToS categories),
+    though most examples have a single label in practice.
     """
     # Exact match (all labels correct)
     exact_match = pred_labels == true_labels
@@ -222,7 +224,7 @@ class ClaudetteEvaluator:
         verbose: bool = False
     ) -> Dict[str, Any]:
         """
-        Evaluate batch of model outputs.
+        Evaluate batch of model outputs with comprehensive multi-label metrics.
 
         Args:
             outputs: List of model outputs
@@ -230,18 +232,23 @@ class ClaudetteEvaluator:
             verbose: Print detailed output
 
         Returns:
-            Dictionary with accuracy, metrics, and details
+            Dictionary with:
+            - accuracy (subset accuracy/exact match)
+            - micro/macro/weighted F1, precision, recall
+            - per-class metrics
+            - confusion matrix
+            - hamming loss
+            - details (per-example results)
+            - failed_extractions count
         """
         if len(outputs) != len(indices):
             raise ValueError("outputs and indices must have same length")
 
-        correct = 0
+        # Collect all predictions and ground truths
+        y_true = []
+        y_pred = []
         details = []
         failed_extractions = 0
-
-        total_precision = 0.0
-        total_recall = 0.0
-        total_f1 = 0.0
 
         for i, (output, idx) in enumerate(zip(outputs, indices)):
             example = self.dataset[idx]
@@ -250,29 +257,24 @@ class ClaudetteEvaluator:
             pred_labels = extract_labels_from_output(output, verbose=(verbose and i < 3))
             true_labels = get_ground_truth_labels(example)
 
-            # Compute metrics
-            metrics = compute_metrics(pred_labels, true_labels)
-            is_correct = metrics['exact_match'] == 1.0
+            y_true.append(true_labels)
+            y_pred.append(pred_labels)
+
+            # Compute per-example metrics (for backward compatibility)
+            per_example_metrics = compute_metrics(pred_labels, true_labels)
+            is_correct = per_example_metrics['exact_match'] == 1.0
 
             if not pred_labels:
                 failed_extractions += 1
 
-            if is_correct:
-                correct += 1
-
-            total_precision += metrics['precision']
-            total_recall += metrics['recall']
-            total_f1 += metrics['f1']
-
             # Debug output
             if (verbose or self.debug) and i < 3:
                 print(f"\n--- Example {i+1} ---")
-                # Get sentence from dataset
                 text = example.get('sentence', '')
                 print(f"Text: {text[:150]}...")
                 print(f"Output: {output[:200]}...")
                 print(f"True: {sorted(true_labels)} | Pred: {sorted(pred_labels)} | Match: {is_correct}")
-                print(f"Metrics: P={metrics['precision']:.2f} R={metrics['recall']:.2f} F1={metrics['f1']:.2f}")
+                print(f"Metrics: P={per_example_metrics['precision']:.2f} R={per_example_metrics['recall']:.2f} F1={per_example_metrics['f1']:.2f}")
 
             details.append({
                 'idx': idx,
@@ -281,21 +283,58 @@ class ClaudetteEvaluator:
                 'predicted': sorted(pred_labels),
                 'correct': is_correct,
                 'output': output,
-                'metrics': metrics,
+                'metrics': per_example_metrics,
             })
 
-        total = len(outputs)
+        # Compute comprehensive multi-label metrics
+        multilabel_metrics = compute_multilabel_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            num_classes=9,
+            label_names=LABEL_MAP,
+        )
 
-        return {
-            'accuracy': correct / total if total > 0 else 0.0,
+        # Combine with details for full output
+        total = len(outputs)
+        correct = int(multilabel_metrics['subset_accuracy'] * total)
+
+        # Build result dict with backward compatibility + new metrics
+        result = {
+            # Backward compatible fields (used by optimizers)
+            'accuracy': multilabel_metrics['subset_accuracy'],
             'correct': correct,
             'total': total,
             'failed_extractions': failed_extractions,
-            'avg_precision': total_precision / total if total > 0 else 0.0,
-            'avg_recall': total_recall / total if total > 0 else 0.0,
-            'avg_f1': total_f1 / total if total > 0 else 0.0,
+
+            # Legacy per-example averaged metrics (for compatibility)
+            'avg_precision': sum(d['metrics']['precision'] for d in details) / total if total > 0 else 0.0,
+            'avg_recall': sum(d['metrics']['recall'] for d in details) / total if total > 0 else 0.0,
+            'avg_f1': sum(d['metrics']['f1'] for d in details) / total if total > 0 else 0.0,
+
+            # New comprehensive metrics
+            'micro_f1': multilabel_metrics['micro_f1'],
+            'micro_precision': multilabel_metrics['micro_precision'],
+            'micro_recall': multilabel_metrics['micro_recall'],
+
+            'macro_f1': multilabel_metrics['macro_f1'],
+            'macro_precision': multilabel_metrics['macro_precision'],
+            'macro_recall': multilabel_metrics['macro_recall'],
+
+            'weighted_f1': multilabel_metrics['weighted_f1'],
+            'weighted_precision': multilabel_metrics['weighted_precision'],
+            'weighted_recall': multilabel_metrics['weighted_recall'],
+
+            'hamming_loss': multilabel_metrics['hamming_loss'],
+
+            'per_class': multilabel_metrics['per_class'],
+            'confusion_matrix': multilabel_metrics['confusion_matrix'],
+            'support': multilabel_metrics['support'],
+
+            # Per-example details
             'details': details,
         }
+
+        return result
 
     def get_batch(self, start_idx: int, batch_size: int) -> List[Dict[str, Any]]:
         """

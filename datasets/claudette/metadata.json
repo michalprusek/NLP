@@ -1,7 +1,7 @@
 {
   "name": "CLAUDETTE/UNFAIR-ToS",
-  "source": "mteb/UnfairTOSLegalBenchClassification",
-  "description": "Classification of potentially unfair clauses in Terms of Service",
+  "source": "joelniklaus/online_terms_of_service",
+  "description": "Multi-label classification of potentially unfair clauses in Terms of Service. Dataset from HuggingFace covering 100 English ToS from 25 companies.",
   "labels": {
     "0": "Limitation of liability",
     "1": "Unilateral termination",
@@ -14,7 +14,14 @@
     "8": "Jurisdiction"
   },
   "splits": {
-    "train": 9,
-    "test": 2048
-  }
+    "train": 19942,
+    "validation": 1690,
+    "test": 4297
+  },
+  "labeled_examples": {
+    "train": 2295,
+    "validation": 191,
+    "test": 417
+  },
+  "license": "CC-BY-NC-2.5"
 }
