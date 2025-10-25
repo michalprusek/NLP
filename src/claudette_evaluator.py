@@ -5,7 +5,7 @@ Evaluates multi-label classification for Terms of Service fairness analysis.
 """
 import re
 from typing import Dict, List, Any, Optional, Set
-from datasets import load_from_disk
+from pathlib import Path
 
 from src.metrics import compute_multilabel_metrics, format_metrics_table, format_metrics_compact
 
@@ -184,10 +184,11 @@ class ClaudetteEvaluator:
 
     # Task metadata (for template selection)
     task_type = "classification"
+    task_name = "claudette"  # For prompt template loading
 
     def __init__(
         self,
-        dataset_path: str = "datasets/claudette",
+        dataset_path: str = "datasets/tos_local",
         split: str = "test",
         debug: bool = False
     ):
@@ -195,11 +196,25 @@ class ClaudetteEvaluator:
         Initialize Claudette evaluator.
 
         Args:
-            dataset_path: Path to Claudette dataset
+            dataset_path: Path to Claudette dataset (supports both Arrow and JSON formats)
             split: 'train', 'validation', or 'test'
             debug: Enable verbose logging
         """
-        ds = load_from_disk(dataset_path)
+        dataset_dir = Path(dataset_path)
+
+        # Detect format: check if directory contains .json files
+        json_files = list(dataset_dir.glob("*.json"))
+        has_json = len([f for f in json_files if f.stem in ['train', 'validation', 'test']]) > 0
+
+        if has_json:
+            # Load JSON dataset using wrapper
+            from src.json_dataset_wrapper import JSONDatasetDict
+            ds = JSONDatasetDict.load_from_disk(dataset_path)
+        else:
+            # Load HuggingFace Arrow format
+            from datasets import load_from_disk
+            ds = load_from_disk(dataset_path)
+
         if split not in ds:
             # Handle split mismatch - use available split
             available_splits = list(ds.keys())

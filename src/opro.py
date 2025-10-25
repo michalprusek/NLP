@@ -116,14 +116,44 @@ NOW GENERATE YOUR NEW PROMPT:"""
         self.scored_prompts: List[ScoredPrompt] = []
         self.history = []
 
+        # Determine which metric to optimize based on task
+        task_name_for_metric = getattr(evaluator, 'task_name', None)
+        if task_name_for_metric == 'claudette':
+            self.optimization_metric = 'micro_f1'  # Multi-label: use micro F1
+            print(f"  Optimization metric: Micro F1 (multi-label classification)")
+        elif task_name_for_metric == 'claudette_binary':
+            self.optimization_metric = 'f1'  # Binary: use F1 for unfair class
+            print(f"  Optimization metric: F1 (binary classification)")
+        else:
+            self.optimization_metric = 'accuracy'  # Default: accuracy (GSM8K, etc.)
+            print(f"  Optimization metric: Accuracy")
+
         # Detect task type from evaluator and load appropriate templates
+        # Prefer task_name (specific) over task_type (generic) for template selection
+        task_name = getattr(evaluator, 'task_name', None)
         task_type = getattr(evaluator, 'task_type', 'regression')
-        if task_type == 'classification':
-            # Load Claudette template from file
+
+        if task_name:
+            # Use specific task name if provided (e.g., 'claudette_binary')
+            self.meta_prompt_template = load_prompt_template(task_name, 'opro_meta', self.META_PROMPT)
+        elif task_type == 'classification':
+            # Default to 'claudette' for generic classification
             self.meta_prompt_template = load_prompt_template('claudette', 'opro_meta', self.META_PROMPT)
         else:
             # Use default GSM8K template
             self.meta_prompt_template = self.META_PROMPT
+
+    def _get_score(self, results: Dict[str, Any]) -> float:
+        """
+        Get optimization score from evaluation results based on task type.
+
+        Args:
+            results: Evaluation results dictionary
+
+        Returns:
+            Score to optimize (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
+        """
+        return results.get(self.optimization_metric, results.get('accuracy', 0.0))
 
     def _get_random_examples(self, num_examples: int = 3) -> str:
         """
@@ -161,7 +191,7 @@ NOW GENERATE YOUR NEW PROMPT:"""
             start_idx: Starting index in dataset
 
         Returns:
-            Accuracy score
+            Optimization score (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
         """
         batch = self.evaluator.get_batch(start_idx, self.minibatch_size)
 
@@ -174,7 +204,7 @@ NOW GENERATE YOUR NEW PROMPT:"""
         indices = [example['idx'] for example in batch]
         results = self.evaluator.evaluate_batch(outputs, indices)
 
-        return results['accuracy']
+        return self._get_score(results)
 
     def generate_candidates(self) -> List[str]:
         """

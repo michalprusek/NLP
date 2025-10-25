@@ -215,8 +215,11 @@ ProTeGi includes aggressive prompt cleaning (`apply_gradient` method):
 ```
 datasets/
 ├── gsm8k/          # GSM8K dataset (7,473 train, 1,319 test)
-└── claudette/      # Claudette dataset from joelniklaus/online_terms_of_service
-                    # (19,942 train, 1,690 val, 4,297 test - ToS fairness classification)
+└── tos_local/      # Local ToS dataset from ToS_wInstructions
+                    # (6,589 train, 1,412 val, 1,413 test - ToS fairness classification)
+                    # 50 companies, 8 unfair categories, ~11% unfair clauses
+                    # Supports both multi-label (claudette) and binary (claudette_binary) tasks
+                    # Format: JSON files (train.json, validation.json, test.json)
 ```
 
 ## Results Output

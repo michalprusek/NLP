@@ -1,0 +1,58 @@
+You are an optimization algorithm generating instruction prompts for binary classification of Terms of Service clauses.
+
+TASK: {task_description}
+
+EXAMPLE CLAUSES:
+{example_problems}
+
+BINARY CLASSIFICATION:
+- FAIR (0): Neutral, standard, or informational clauses with no unfair terms
+- UNFAIR (1): Clauses containing potentially problematic terms like:
+  * Limitation of liability - Provider limits liability for damages
+  * Unilateral termination - Provider can terminate without cause
+  * Unilateral change - Provider can change terms unilaterally
+  * Arbitration - Disputes must go to arbitration (not court)
+  * Content removal - Provider can remove/delete user content
+  * Choice of law - Specifies jurisdiction's laws apply
+  * Contract by using - Using service creates binding contract
+  * Jurisdiction - Specifies where disputes must be filed
+  * Other potentially unfair terms
+
+CRITICAL DATASET CHARACTERISTICS:
+- **~90% of clauses are FAIR** - neutral/informational text (headers, metadata, general terms)
+- **~10% are UNFAIR** - contain problematic terms
+- Models must distinguish unfair clauses from neutral text - don't over-classify!
+- CLASS IMBALANCE: More fair examples than unfair - avoid false positives
+
+EVALUATION SYSTEM (INVARIANT):
+- Extracts binary labels from: "CLASSIFICATION: FAIR/UNFAIR", "LABEL: 0/1", keywords "fair"/"unfair", or numbers 0/1
+- EXACT MATCH required: Predicted label must match true label
+- Primary metric: ACCURACY (exact match)
+- Common failures: over-classifying neutral text as unfair (false positives), unclear output format, missing subtle unfair terms (false negatives), not reasoning before classification
+
+PREVIOUS PROMPTS AND SCORES:
+{scored_prompts}
+
+YOUR TASK:
+Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+
+REQUIREMENTS:
+1. Each prompt must be 2-4 sentences
+2. Must instruct to provide answer in format "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
+3. Must emphasize that MOST clauses are neutral/fair (90%) - only label as unfair if clear problematic terms present
+4. Should encourage analysis of legal implications before classification
+5. Should help distinguish unfair clauses from neutral/informational text
+6. Should provide guidance on identifying unfair terms
+7. Each prompt must be DIFFERENT from previous ones
+8. Explore different strategies (reasoning-first, checklist approach, legal analysis, conservative classification to avoid false positives)
+
+OUTPUT FORMAT:
+Write EXACTLY {num_candidates} prompts, one per line.
+NO numbering, NO bullet points, NO explanations.
+JUST the instruction prompts themselves.
+
+EXAMPLE OUTPUT (for num_candidates=2):
+Classify this Terms of Service clause as FAIR or UNFAIR. Most clauses are fair and neutral. Only mark as UNFAIR if it contains clear problematic terms like liability limits or forced arbitration. Provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR
+Read the clause carefully. If it's standard/neutral, classify as FAIR. If it contains unfair terms (unilateral changes, arbitration requirements, content removal rights, etc.), classify as UNFAIR. Answer: CLASSIFICATION: <FAIR or UNFAIR>
+
+NOW GENERATE {num_candidates} NEW PROMPTS:

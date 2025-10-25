@@ -136,6 +136,9 @@ dmypy.json
 results/
 .cache/
 
+# Research papers
+papers/
+
 # Model checkpoints (optional - comment out if you want to track them)
 # *.pt
 # *.pth

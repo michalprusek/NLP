@@ -243,16 +243,48 @@ class ProTeGi:
         self.best_val_score = 0.0
         self.patience_counter = 0
 
-        # Detect task type from evaluator and load appropriate templates
-        task_type = getattr(evaluator, 'task_type', 'regression')
-        if task_type == 'classification':
-            # Load Claudette templates from files
-            self.gradient_prompt_template = load_prompt_template('claudette', 'gradient')
-            self.edit_prompt_template = load_prompt_template('claudette', 'edit')
+        # Determine which metric to optimize based on task
+        task_name_for_metric = getattr(evaluator, 'task_name', None)
+        if task_name_for_metric == 'claudette':
+            self.optimization_metric = 'micro_f1'  # Multi-label: use micro F1
+            print(f"  Optimization metric: Micro F1 (multi-label classification)")
+        elif task_name_for_metric == 'claudette_binary':
+            self.optimization_metric = 'f1'  # Binary: use F1 for unfair class
+            print(f"  Optimization metric: F1 (binary classification)")
         else:
-            # Load GSM8K templates from files
-            self.gradient_prompt_template = load_prompt_template('gsm8k', 'gradient')
-            self.edit_prompt_template = load_prompt_template('gsm8k', 'edit')
+            self.optimization_metric = 'accuracy'  # Default: accuracy (GSM8K, etc.)
+            print(f"  Optimization metric: Accuracy")
+
+        # Detect task type from evaluator and load appropriate templates
+        # Prefer task_name (specific) over task_type (generic) for template selection
+        task_name = getattr(evaluator, 'task_name', None)
+        task_type = getattr(evaluator, 'task_type', 'regression')
+
+        if task_name:
+            # Use specific task name if provided (e.g., 'claudette_binary')
+            template_dir = task_name
+        elif task_type == 'classification':
+            # Default to 'claudette' for generic classification
+            template_dir = 'claudette'
+        else:
+            # Default to 'gsm8k' for regression/other tasks
+            template_dir = 'gsm8k'
+
+        # Load templates from appropriate directory
+        self.gradient_prompt_template = load_prompt_template(template_dir, 'gradient')
+        self.edit_prompt_template = load_prompt_template(template_dir, 'edit')
+
+    def _get_score(self, results: Dict[str, Any]) -> float:
+        """
+        Get optimization score from evaluation results based on task type.
+
+        Args:
+            results: Evaluation results dictionary
+
+        Returns:
+            Score to optimize (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
+        """
+        return results.get(self.optimization_metric, results.get('accuracy', 0.0))
 
     def _stratified_sample(self, dataset_size: int, sample_size: int) -> List[int]:
         """
@@ -780,7 +812,8 @@ Output:"""
             # Evaluate on random minibatch from train set
             results = self.evaluate_prompt(candidate.prompt, random_sample=True)
 
-            candidate.update_score(results['accuracy'])
+            score = self._get_score(results)
+            candidate.update_score(score)
             self.total_evals += 1
 
             if verbose:
@@ -788,12 +821,15 @@ Output:"""
                 # Show comprehensive metrics for classification tasks (e.g., Claudette)
                 if 'micro_f1' in results:
                     print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%} | Hamming: {results['hamming_loss']:.3f}")
+                if 'f1' in results and self.optimization_metric == 'f1':
+                    print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
+                print(f"  Optimization score ({self.optimization_metric}): {score:.1%}")
 
             # Record history
             self.history.append({
                 'iteration': iteration,
                 'prompt': candidate.prompt,
-                'score': results['accuracy'],
+                'score': score,
                 'selected_idx': selected_idx,
             })
 
@@ -859,15 +895,18 @@ Output:"""
                         prompt=prompt_variant,
                         history=candidate.history + [prompt_variant]
                     )
-                    new_candidate.update_score(new_results['accuracy'])
+                    new_score = self._get_score(new_results)
+                    new_candidate.update_score(new_score)
                     self.total_evals += 1
 
                     if verbose:
                         variant_type = "original" if i == 0 else f"paraphrase {i}"
-                        print(f"  Gradient {grad_idx+1} {variant_type}: {new_results['accuracy']:.1%}", end='')
+                        print(f"  Gradient {grad_idx+1} {variant_type}: Acc={new_results['accuracy']:.1%}", end='')
                         if 'micro_f1' in new_results:
-                            print(f" (Micro-F1: {new_results['micro_f1']:.1%})", end='')
-                        print()
+                            print(f", Micro-F1={new_results['micro_f1']:.1%}", end='')
+                        if 'f1' in new_results and self.optimization_metric == 'f1':
+                            print(f", F1={new_results['f1']:.1%}", end='')
+                        print(f", Score={new_score:.1%}")
 
                     # Add to beam
                     beam.append(new_candidate)
@@ -898,7 +937,7 @@ Output:"""
                 self.evaluator = self.validation_evaluator
 
                 val_results = self.evaluate_prompt(best_candidate.prompt, random_sample=True)
-                val_accuracy = val_results['accuracy']
+                val_score = self._get_score(val_results)
 
                 # Restore original evaluator
                 self.evaluator = original_evaluator
@@ -906,21 +945,22 @@ Output:"""
                 # Track validation history
                 self.validation_history.append({
                     'iteration': iteration,
-                    'val_accuracy': val_accuracy,
-                    'train_accuracy': best_candidate.score,
+                    'val_score': val_score,
+                    'val_accuracy': val_results['accuracy'],  # Keep for backwards compatibility
+                    'train_score': best_candidate.score,
                 })
 
                 if verbose:
-                    print(f"Validation accuracy: {val_accuracy:.1%}")
+                    print(f"Validation {self.optimization_metric}: {val_score:.1%} (Accuracy: {val_results['accuracy']:.1%})")
                     if 'micro_f1' in val_results:
                         print(f"  Micro-F1: {val_results['micro_f1']:.1%} | Macro-F1: {val_results['macro_f1']:.1%}")
 
                 # Early stopping check
-                if val_accuracy > self.best_val_score:
-                    self.best_val_score = val_accuracy
+                if val_score > self.best_val_score:
+                    self.best_val_score = val_score
                     self.patience_counter = 0
                     if verbose:
-                        print(f"✓ New best validation score!")
+                        print(f"✓ New best validation {self.optimization_metric}!")
                 else:
                     self.patience_counter += 1
                     if verbose:
@@ -941,14 +981,18 @@ Output:"""
 
         for i, candidate in enumerate(beam):
             results = self.evaluate_prompt(candidate.prompt, random_sample=True)
-            candidate.update_score(results['accuracy'])
+            final_score = self._get_score(results)
+            candidate.update_score(final_score)
 
             if verbose:
                 print(f"\nCandidate {i+1}:")
                 print(f"Prompt: {candidate.prompt}")
-                print(f"Score: {results['accuracy']:.1%}")
+                print(f"Optimization score ({self.optimization_metric}): {final_score:.1%}")
+                print(f"  Accuracy: {results['accuracy']:.1%}")
                 if 'micro_f1' in results:
                     print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}")
+                if 'f1' in results and self.optimization_metric == 'f1':
+                    print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
 
         # Return best
         best_candidate = max(beam, key=lambda c: c.score)
