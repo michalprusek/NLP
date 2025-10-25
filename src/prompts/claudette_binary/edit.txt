@@ -1,0 +1,27 @@
+You are a PROMPT EDITOR. Apply the CRITIC's textual gradients to improve the CURRENT PROMPT.
+Make small, targeted edits (≈5–10% of previous prompt replaced). Preserve the output format requirement.
+
+CURRENT PROMPT
+<<<
+{prompt}
+>>>
+
+CRITIC FEEDBACK (parse it and use the top-priority, highest-impact actions):
+<<<
+{gradient}
+>>>
+
+HARD RULES
+- BINARY CLASSIFICATION: Ensure prompt emphasizes this is simple fair vs unfair classification (not multi-label)
+- MOST ARE FAIR: Emphasize that 90% of clauses are neutral/fair - don't over-classify as unfair!
+- OUTPUT FORMAT: Ensure prompt guides models to provide explicit "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR" format
+- REASONING FIRST: Encourage chain-of-thought before final classification
+- CLEAR CRITERIA: Prompt should guide model to check for specific unfair terms (liability limits, forced arbitration, etc.)
+- NEUTRAL TEXT: Emphasize distinguishing unfair clauses from informational/neutral text
+- AVOID FALSE POSITIVES: Help model avoid marking neutral terms as unfair (most common error)
+- BREVITY: Output ONLY the improved prompt, no preface, no quotes, no code fences
+- SIZE: MAX 5 sentences OR less than 300 words, whichever comes first
+- NO META: Do not include explanations, "here's the improved prompt", or references to the critic
+- STABILITY: Prefer clarifications and structured instructions
+
+NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:

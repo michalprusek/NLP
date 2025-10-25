@@ -1,0 +1,20 @@
+{
+  "name": "ToS Local Dataset",
+  "source": "/Users/michalprusek/Downloads/ToS_wInstructions",
+  "labels": {
+    "0": "Limitation of liability (LTD)",
+    "1": "Unilateral termination (TER)",
+    "2": "Unilateral change (CH)",
+    "3": "Arbitration (A)",
+    "4": "Content removal (CR)",
+    "5": "Choice of law (LAW)",
+    "7": "Contract by using (USE)",
+    "8": "Jurisdiction (J)"
+  },
+  "splits": {
+    "train": 6589,
+    "validation": 1412,
+    "test": 1413
+  },
+  "total_examples": 9414
+}

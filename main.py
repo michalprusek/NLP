@@ -15,6 +15,7 @@ from src.llm_client import create_llm_client
 from src.evaluator import GSM8KEvaluator
 from src.math_verify_evaluator import MathVerifyEvaluator
 from src.claudette_evaluator import ClaudetteEvaluator
+from src.claudette_binary_evaluator import ClaudetteBinaryEvaluator
 from src.protegi import ProTeGi
 from src.opro import OPRO
 
@@ -27,8 +28,8 @@ def main():
         "--task",
         type=str,
         default="gsm8k",
-        choices=["gsm8k", "claudette"],
-        help="Task to optimize: gsm8k (math problems) or claudette (ToS classification)",
+        choices=["gsm8k", "claudette", "claudette_binary"],
+        help="Task to optimize: gsm8k (math problems), claudette (ToS multi-label), or claudette_binary (ToS binary)",
     )
 
     # Method selection
@@ -198,7 +199,9 @@ def main():
         if args.task == "gsm8k":
             args.dataset_path = "datasets/gsm8k"
         elif args.task == "claudette":
-            args.dataset_path = "datasets/claudette"
+            args.dataset_path = "datasets/tos_local"
+        elif args.task == "claudette_binary":
+            args.dataset_path = "datasets/tos_local"  # Same dataset, binary labels
 
     # Load initial prompt from file if not provided
     if args.initial_prompt is None:
@@ -211,6 +214,8 @@ def main():
                 args.initial_prompt = "Solve the following math problem step by step. Show your reasoning and provide the final numerical answer."
             elif args.task == "claudette":
                 args.initial_prompt = "Classify the following Terms of Service clause into one of 9 categories. Analyze the clause carefully, then provide your classification as: LABEL: <number>"
+            elif args.task == "claudette_binary":
+                args.initial_prompt = "Classify the following Terms of Service clause as either FAIR or UNFAIR. Most clauses are fair. Provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR"
 
     # Set GPU visibility
     import os
@@ -323,6 +328,19 @@ def main():
             split=args.val_split,
             debug=args.debug,
         )
+    elif args.task == "claudette_binary":
+        EvaluatorClass = ClaudetteBinaryEvaluator
+        print(f"  Evaluator: ClaudetteBinaryEvaluator (Binary ToS classification: fair vs unfair)")
+        train_evaluator = ClaudetteBinaryEvaluator(
+            dataset_path=args.dataset_path,
+            split=args.train_split,
+            debug=args.debug,
+        )
+        val_evaluator = ClaudetteBinaryEvaluator(
+            dataset_path=args.dataset_path,
+            split=args.val_split,
+            debug=args.debug,
+        )
     else:  # gsm8k
         print(f"  Evaluator: {args.evaluator}")
         # Select evaluator class for GSM8K
@@ -356,6 +374,8 @@ def main():
     # Set task description based on task
     if args.task == "claudette":
         task_description = "Classify Terms of Service clauses into 9 categories (0-8): Limitation of liability, Unilateral termination, Unilateral change, Arbitration, Content removal, Choice of law, Other, Contract by using, Jurisdiction."
+    elif args.task == "claudette_binary":
+        task_description = "Classify Terms of Service clauses as FAIR (0) or UNFAIR (1). Fair clauses are neutral, unfair clauses contain problematic terms."
     else:
         task_description = "Solve math word problems step by step and provide the final numerical answer."
 
@@ -483,6 +503,15 @@ def main():
         print(f"  Macro F1:    {val_results.get('macro_f1', 0.0):.1%}")
         print(f"  Weighted F1: {val_results.get('weighted_f1', 0.0):.1%}")
         print(f"  Hamming Loss: {val_results.get('hamming_loss', 0.0):.4f}")
+    elif args.task == "claudette_binary":
+        print(f"\nValidation Results:")
+        print(f"  Accuracy:  {val_results['accuracy']:.1%} ({val_results['correct']}/{val_results['total']})")
+        print(f"  Precision: {val_results.get('precision', 0.0):.1%}")
+        print(f"  Recall:    {val_results.get('recall', 0.0):.1%}")
+        print(f"  F1:        {val_results.get('f1', 0.0):.1%}")
+        print(f"\n  Confusion Matrix:")
+        print(f"    TP: {val_results.get('tp', 0):>4}  FP: {val_results.get('fp', 0):>4}")
+        print(f"    FN: {val_results.get('fn', 0):>4}  TN: {val_results.get('tn', 0):>4}")
     else:
         print(f"\nValidation Accuracy: {val_results['accuracy']:.1%}")
         print(f"Correct: {val_results['correct']}/{val_results['total']}")
@@ -512,6 +541,19 @@ def main():
             "confusion_matrix": val_results.get('confusion_matrix', []),
             "support": val_results.get('support', []),
         })
+    elif args.task == "claudette_binary":
+        validation_dict.update({
+            "precision": val_results.get('precision', 0.0),
+            "recall": val_results.get('recall', 0.0),
+            "f1": val_results.get('f1', 0.0),
+            "tp": val_results.get('tp', 0),
+            "fp": val_results.get('fp', 0),
+            "tn": val_results.get('tn', 0),
+            "fn": val_results.get('fn', 0),
+            "micro_f1": val_results.get('micro_f1', 0.0),
+            "macro_f1": val_results.get('macro_f1', 0.0),
+            "per_class": val_results.get('per_class', {}),
+        })
 
     results["validation"] = validation_dict
 
@@ -537,6 +579,16 @@ def main():
             f.write(f"  Weighted Precision: {val_results.get('weighted_precision', 0.0):.1%}\n")
             f.write(f"  Weighted Recall:  {val_results.get('weighted_recall', 0.0):.1%}\n\n")
             f.write(f"  Hamming Loss:     {val_results.get('hamming_loss', 0.0):.4f}\n")
+        elif args.task == "claudette_binary":
+            f.write(f"Accuracy:  {val_results['accuracy']:.1%}\n")
+            f.write(f"Correct:   {val_results['correct']}/{val_results['total']}\n\n")
+            f.write(f"Binary Classification Metrics:\n")
+            f.write(f"  Precision: {val_results.get('precision', 0.0):.1%}\n")
+            f.write(f"  Recall:    {val_results.get('recall', 0.0):.1%}\n")
+            f.write(f"  F1:        {val_results.get('f1', 0.0):.1%}\n\n")
+            f.write(f"Confusion Matrix:\n")
+            f.write(f"  TP: {val_results.get('tp', 0):>4}  FP: {val_results.get('fp', 0):>4}\n")
+            f.write(f"  FN: {val_results.get('fn', 0):>4}  TN: {val_results.get('tn', 0):>4}\n")
         else:
             f.write(f"Accuracy: {val_results['accuracy']:.1%}\n")
             f.write(f"Correct: {val_results['correct']}/{val_results['total']}\n")
