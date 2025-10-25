@@ -7,8 +7,8 @@ set -e
 
 # Configuration
 TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}
-META_MODEL=${META_MODEL:-""}  # Leave empty to use same as task model, or use "haiku"/"sonnet" aliases
-METHOD=${METHOD:-"opro"}
+META_MODEL=${META_MODEL:-"haiku"}  # Leave empty to use same as task model, or use "haiku"/"sonnet" aliases
+METHOD=${METHOD:-"protegi"}
 TASK=${TASK:-"gsm8k"}
 
 echo "=========================================="
@@ -31,17 +31,17 @@ echo ""
 export PATH="$HOME/.local/bin:$PATH"
 
 # Build command with optional meta-model
-CMD="uv run python main.py \
-    --task $TASK \
-    --method $METHOD \
-    --model $TASK_MODEL \
-    --backend vllm \
-    --tensor-parallel-size 2 \
-    --gpu-ids \"0,1\" \
-    --iterations 5 \
-    --minibatch-size 150 \
-    --beam-size 4 \
-    --num-candidates 8"
+CMD="uv run python main.py"
+CMD="$CMD --task $TASK"
+CMD="$CMD --method $METHOD"
+CMD="$CMD --model $TASK_MODEL"
+CMD="$CMD --backend vllm"
+CMD="$CMD --tensor-parallel-size 2"
+CMD="$CMD --gpu-ids 0,1"
+CMD="$CMD --iterations 10"
+CMD="$CMD --minibatch-size 300"
+CMD="$CMD --beam-size 4"
+CMD="$CMD --num-candidates 8"
 
 # Add meta-model if specified
 if [ -n "$META_MODEL" ]; then

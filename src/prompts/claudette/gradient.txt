@@ -8,7 +8,15 @@ CONTEXT
 {prompt}
 >>>
 - PERFORMANCE:
-  * Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
+  * Subset Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
+  * Micro-F1: {micro_f1:.1%} (measures recall of positive labels 0-8)
+  * Micro-Precision: {micro_precision:.1%} | Micro-Recall: {micro_recall:.1%}
+
+  ⚠️ CRITICAL METRICS INTERPRETATION:
+  - High Subset Accuracy + Low Micro-F1 = Model over-predicts NONE (misses positive labels)
+  - Low Micro-Recall = Model fails to identify unfair clauses when they exist
+  - Low Micro-Precision = Model over-classifies neutral clauses as unfair
+
   * Top failure examples:
 {results}
 
@@ -51,21 +59,33 @@ KEY INSIGHTS:
 - Output must be explicit and complete: "LABELS: 0, 3, 5" or "LABELS: NONE" (all applicable labels)
 - Common errors: missing secondary labels, misinterpreting legal terminology, confusing similar categories, over-classifying neutral text
 
-COMMON FAILURE PATTERNS:
-- Vague or missing output format guidance → model doesn't provide extractable labels
-- No reasoning step → model jumps to wrong conclusion or misses labels
-- **Over-classification** → labeling neutral/informational text as unfair (90% should be NONE!)
-- **Missing secondary labels** → model identifies primary category but misses others
-- **Not outputting NONE** → model forces a label even when clause is neutral
-- Confusing category 1 (termination) vs category 7 (contract by using)
-- Confusing category 3 (arbitration) vs category 8 (jurisdiction)
-- Confusing category 2 (unilateral change) vs category 1 (unilateral termination)
-- Category 6 (Other) used as catch-all when uncertain
+COMMON FAILURE PATTERNS (prioritized by impact on Micro-F1):
+- **CRITICAL: Over-predicting NONE** → Model defaults to NONE even when unfair clauses exist (kills Micro-Recall!)
+  * Symptom: High Subset Accuracy (>85%) but Micro-F1 near 0%
+  * Fix: Add explicit "confidence check" - if ANY legal restriction exists, do NOT output NONE
+- **Missing positive labels** → Model identifies primary category but misses secondary ones
+  * Symptom: Low Micro-Recall despite reasonable Subset Accuracy
+  * Fix: Require checking ALL 9 categories before finalizing answer
+- **Overly complex prompts** → Multi-step frameworks confuse 7B models
+  * Symptom: Performance degrades with longer, procedural prompts
+  * Fix: Keep prompts concise (<150 words), direct instructions only
+- **Vague output format** → Model doesn't provide extractable labels
+  * Fix: Explicit format requirement: "LABELS: 0, 3" or "LABELS: NONE" (no brackets)
+- **No reasoning step** → Model jumps to wrong conclusion
+  * Fix: Brief reasoning before classification (1-2 sentences max)
+- Confusing similar categories (termination vs contract-by-using, arbitration vs jurisdiction)
 - **Predicting only one label when multiple apply** → treating as single-label task
 
 YOUR TASK:
 Provide a concise critique identifying 2-4 key issues with the current prompt that led to failures.
-Focus on: output format guidance, reasoning structure, category disambiguation.
+
+**PRIORITIZE ISSUES THAT IMPACT MICRO-F1:**
+1. If Micro-F1 < 10% and Subset Accuracy > 80%: Focus on NONE over-prediction (model too conservative)
+2. If Micro-Recall < 20%: Focus on missing positive labels (model not checking all categories)
+3. If Micro-Precision < 50%: Focus on over-classification (model too aggressive)
+4. If prompt is >200 words: Focus on simplification (7B models struggle with complexity)
+
+Focus on: Micro-F1 improvement, output format guidance, brevity, category disambiguation.
 
 FORMAT YOUR RESPONSE AS:
 

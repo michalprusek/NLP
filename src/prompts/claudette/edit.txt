@@ -11,17 +11,22 @@ CRITIC FEEDBACK (parse it and use the top-priority, highest-impact actions):
 {gradient}
 >>>
 
-HARD RULES
-- MULTI-LABEL: Ensure prompt emphasizes that MULTIPLE labels can apply to one clause
-- NONE IS COMMON: Emphasize that 90% of clauses are neutral (LABELS: NONE) - don't over-classify!
-- OUTPUT FORMAT: Ensure prompt guides models to provide explicit "LABELS: 0, 3, 5" or "LABELS: NONE" format
-- REASONING FIRST: Encourage chain-of-thought before final classification
-- COMPLETENESS: Prompt should guide model to identify ALL applicable categories, not just primary one
-- CATEGORY CLARITY: Help distinguish between similar categories (e.g., arbitration vs jurisdiction)
-- NEUTRAL TEXT: Emphasize distinguishing unfair clauses from informational/neutral text
-- BREVITY: Output ONLY the improved prompt, no preface, no quotes, no code fences
-- SIZE: MAX 5 sentences OR less than 300 words, whichever comes first
-- NO META: Do not include explanations, "here's the improved prompt", or references to the critic
-- STABILITY: Prefer clarifications and structured instructions
+HARD RULES (prioritized for Micro-F1 improvement)
+- **BALANCE PRECISION & RECALL**: While 90% are NONE, the 10% with labels MUST be identified correctly!
+  * Avoid over-predicting NONE (kills Micro-Recall)
+  * Avoid over-classifying neutral text (kills Micro-Precision)
+  * Add "confidence check": If ANY legal restriction exists, do NOT default to NONE
+- **BREVITY FIRST**: 7B models perform better with concise prompts
+  * TARGET: 2-3 sentences OR <150 words (shorter is better!)
+  * Remove multi-step frameworks, procedural instructions, verbose explanations
+  * Direct, imperative instructions only
+- **OUTPUT FORMAT**: Explicit format requirement without brackets
+  * Good: "LABELS: 0, 3" or "LABELS: NONE"
+  * Bad: "LABELS: [0, 3]" or vague "identify categories"
+- **MULTI-LABEL**: Ensure prompt emphasizes checking ALL 9 categories (not just first match)
+- **REASONING**: Brief reasoning (1-2 sentences) before classification, not multi-step frameworks
+- **CATEGORY CLARITY**: Distinguish similar categories (arbitration vs jurisdiction, termination vs contract-by-using)
+- **NO META**: Output ONLY the improved prompt text, no preface, quotes, code fences, or explanations
+- **STABILITY**: Prefer clarifications over complete rewrites
 
 NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:

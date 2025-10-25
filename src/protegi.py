@@ -520,6 +520,11 @@ class ProTeGi:
 
         results_text = "\n\n".join(error_examples) if error_examples else "All examples correct!"
 
+        # Extract Micro-F1 metrics for Claudette (if available)
+        micro_f1 = results.get('micro_f1', 0.0)
+        micro_precision = results.get('micro_precision', 0.0)
+        micro_recall = results.get('micro_recall', 0.0)
+
         gradient_prompt = self.gradient_prompt_template.format(
             prompt=candidate.prompt,
             task_description=self.task_description,
@@ -528,6 +533,9 @@ class ProTeGi:
             accuracy=results['accuracy'],
             correct=results['correct'],
             total=results['total'],
+            micro_f1=micro_f1,
+            micro_precision=micro_precision,
+            micro_recall=micro_recall,
         )
 
         # Paper uses temperature=1.0 for gradient generation (exploration)
