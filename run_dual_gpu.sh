@@ -6,25 +6,24 @@
 set -e
 
 # Configuration
-TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}
-META_MODEL=${META_MODEL:-"haiku"}  # Leave empty to use same as task model, or use "haiku"/"sonnet" aliases
+TASK_MODEL=${TASK_MODEL:-"Equall/Saul-7B-Instruct-v1"}  # Legal domain LLM (Mistral-based, instruction-tuned)
+META_MODEL=${META_MODEL:-""}  # Use Claude Haiku for meta-optimization (Saul-Instruct can handle meta-prompts)
 METHOD=${METHOD:-"protegi"}
-TASK=${TASK:-"gsm8k"}
+TASK=${TASK:-"claudette_binary"}
 
 echo "=========================================="
-echo "Dual GPU Prompt Optimization"
-echo "Backend: vLLM (with tensor parallelism)"
+echo "Legal Domain Prompt Optimization"
+echo "Backend: Transformers (single GPU)"
 echo "=========================================="
 echo "Task: $TASK"
 echo "Method: $METHOD"
-echo "Task Model: $TASK_MODEL"
+echo "Task Model: $TASK_MODEL (Legal Domain)"
 if [ -n "$META_MODEL" ]; then
     echo "Meta-optimizer Model: $META_MODEL"
 else
     echo "Meta-optimizer Model: (same as task model)"
 fi
-echo "GPUs: 0, 1"
-echo "Tensor Parallel Size: 2"
+echo "Device: CUDA (GPU 0)"
 echo "=========================================="
 echo ""
 
@@ -35,11 +34,10 @@ CMD="uv run python main.py"
 CMD="$CMD --task $TASK"
 CMD="$CMD --method $METHOD"
 CMD="$CMD --model $TASK_MODEL"
-CMD="$CMD --backend vllm"
-CMD="$CMD --tensor-parallel-size 2"
-CMD="$CMD --gpu-ids 0,1"
+CMD="$CMD --backend transformers"
+CMD="$CMD --device cuda"
 CMD="$CMD --iterations 10"
-CMD="$CMD --minibatch-size 300"
+CMD="$CMD --minibatch-size 100"  # Smaller batch for transformers backend
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 

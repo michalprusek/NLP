@@ -820,7 +820,8 @@ Output:"""
                 print(f"Accuracy: {results['accuracy']:.1%} ({results['correct']}/{results['total']})")
                 # Show comprehensive metrics for classification tasks (e.g., Claudette)
                 if 'micro_f1' in results:
-                    print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%} | Hamming: {results['hamming_loss']:.3f}")
+                    hamming_str = f" | Hamming: {results['hamming_loss']:.3f}" if 'hamming_loss' in results else ""
+                    print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}{hamming_str}")
                 if 'f1' in results and self.optimization_metric == 'f1':
                     print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
                 print(f"  Optimization score ({self.optimization_metric}): {score:.1%}")
