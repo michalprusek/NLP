@@ -14,6 +14,61 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 
+def print_failed_examples_protegi(results: Dict, num_examples: int = 3):
+    """
+    Print failed examples from ProTeGi evaluation results with full model responses.
+
+    Args:
+        results: Evaluation results dict with 'details' key
+        num_examples: Number of failed examples to show (default: 3)
+    """
+    if not results or 'details' not in results:
+        return
+
+    details = results['details']
+
+    # Find failed examples
+    failed = [r for r in details if not r.get('correct', False)]
+
+    if not failed:
+        return
+
+    # Sample random failed examples
+    num_to_show = min(num_examples, len(failed))
+    sampled_failed = random.sample(failed, num_to_show)
+
+    print(f"    Failed examples ({num_to_show}/{len(failed)}):")
+    print(f"    {'-'*72}")
+
+    for i, result in enumerate(sampled_failed, 1):
+        # Get ground truth and prediction
+        gt = result.get('ground_truth', 'N/A')
+        pred = result.get('predicted', 'N/A')
+
+        # For binary classification, show as FAIR/UNFAIR
+        if isinstance(gt, bool):
+            gt_str = "FAIR" if gt else "UNFAIR"
+        else:
+            gt_str = str(gt)
+
+        if isinstance(pred, bool):
+            pred_str = "FAIR" if pred else "UNFAIR"
+        else:
+            pred_str = str(pred)
+
+        # Get text (question/text field)
+        text = result.get('text', result.get('question', ''))[:70]
+
+        print(f"    {i}. GT: {gt_str:6} | Pred: {pred_str:6} | {text}...")
+
+        # Show full model response (output field contains the full response)
+        if result.get('output'):
+            response = result['output'].strip()
+            print(f"       Response: {response}")
+
+    print(f"    {'-'*72}")
+
+
 @dataclass
 class PromptCandidate:
     """A candidate prompt with its score and history"""
@@ -849,6 +904,9 @@ Output:"""
 
                 print(f"  Optimization score ({self.optimization_metric}): {score:.1%}")
 
+                # Show failed examples
+                print_failed_examples_protegi(results, num_examples=3)
+
             # Record history
             self.history.append({
                 'iteration': iteration,
@@ -937,6 +995,9 @@ Output:"""
                             print(f", F1={new_results['f1']:.1%}{macro_f1_str}", end='')
 
                         print(f", Score={new_score:.1%}")
+
+                        # Show failed examples
+                        print_failed_examples_protegi(new_results, num_examples=2)
 
                     # Add to beam
                     beam.append(new_candidate)

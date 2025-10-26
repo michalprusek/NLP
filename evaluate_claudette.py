@@ -307,6 +307,96 @@ def evaluate_with_self_consistency(
     }
 
 
+def print_failed_examples(results, num_examples=5):
+    """
+    Print detailed analysis of failed examples.
+
+    Args:
+        results: Dictionary with 'details' key containing list of results
+        num_examples: Number of failed examples to show (default: 5)
+    """
+    from src.claudette_evaluator import LABEL_MAP
+    import random
+
+    details = results['details']
+
+    # Find failed examples
+    failed = [r for r in details if not r['correct']]
+
+    if not failed:
+        print(f"\n{'='*80}")
+        print("✅ NO FAILED EXAMPLES - Perfect accuracy!")
+        print(f"{'='*80}\n")
+        return
+
+    # Sample random failed examples
+    num_to_show = min(num_examples, len(failed))
+    sampled_failed = random.sample(failed, num_to_show)
+
+    print(f"\n{'='*80}")
+    print(f"FAILED EXAMPLES ANALYSIS ({num_to_show} random samples from {len(failed)} failures)")
+    print(f"{'='*80}\n")
+
+    for i, result in enumerate(sampled_failed, 1):
+        print(f"--- FAILED EXAMPLE {i}/{num_to_show} (Index: {result['idx']}) ---")
+        print(f"\nClause:")
+        print(f"  {result['clause'][:200]}...")
+
+        # Ground truth
+        gt_labels = result['ground_truth']
+        if isinstance(gt_labels, list):
+            gt_set = set(gt_labels)
+        else:
+            gt_set = {gt_labels} if gt_labels is not None else set()
+
+        gt_str = ', '.join(str(l) for l in sorted(gt_set)) if gt_set else 'NONE'
+        gt_names = ', '.join(LABEL_MAP.get(l, f'Unknown({l})') for l in sorted(gt_set)) if gt_set else 'NONE'
+
+        print(f"\n🎯 Ground Truth:")
+        print(f"  LABELS: {gt_str}")
+        if gt_set:
+            print(f"  Categories: {gt_names}")
+
+        # Predicted
+        pred_labels = result['predicted']
+        if isinstance(pred_labels, list):
+            pred_set = set(pred_labels)
+        else:
+            pred_set = {pred_labels} if pred_labels is not None else set()
+
+        pred_str = ', '.join(str(l) for l in sorted(pred_set)) if pred_set else 'NONE'
+        pred_names = ', '.join(LABEL_MAP.get(l, f'Unknown({l})') for l in sorted(pred_set)) if pred_set else 'NONE'
+
+        print(f"\n❌ Model Prediction:")
+        print(f"  LABELS: {pred_str}")
+        if pred_set:
+            print(f"  Categories: {pred_names}")
+
+        # Analysis
+        missing = gt_set - pred_set
+        extra = pred_set - gt_set
+
+        if missing or extra:
+            print(f"\n📊 Error Analysis:")
+            if missing:
+                missing_names = ', '.join(f"{l}({LABEL_MAP.get(l, 'Unknown')})" for l in sorted(missing))
+                print(f"  ❌ Missing labels: {missing_names}")
+            if extra:
+                extra_names = ', '.join(f"{l}({LABEL_MAP.get(l, 'Unknown')})" for l in sorted(extra))
+                print(f"  ⚠️  Extra labels: {extra_names}")
+
+        # Show raw response if available
+        if result.get('responses'):
+            response = result['responses'][0] if isinstance(result['responses'], list) else result['responses']
+            print(f"\n💬 Raw Model Response:")
+            print(f"  {response}")
+        elif result.get('output'):
+            print(f"\n💬 Raw Model Response:")
+            print(f"  {result['output']}")
+
+        print()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate Claudette ToS classification with optional self-consistency sampling",
@@ -480,6 +570,9 @@ def main():
                 f.write(f"{class_idx}. {m['name']:<32} {m['precision']:>11.1%} {m['recall']:>11.1%} {m['f1']:>11.1%} {m['support']:>9}\n")
 
     print(f"Summary saved to: {summary_file}")
+
+    # Print failed examples analysis
+    print_failed_examples(results, num_examples=5)
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import random
+import json
 
 
 def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
@@ -36,6 +37,61 @@ class ScoredPrompt:
 
     def __repr__(self):
         return f"Score: {self.score:.1%} | Prompt: {self.prompt[:50]}..."
+
+
+def print_failed_examples_opro(results: Dict, num_examples: int = 3):
+    """
+    Print failed examples from OPRO evaluation results with full model responses.
+
+    Args:
+        results: Evaluation results dict with 'details' key
+        num_examples: Number of failed examples to show (default: 3)
+    """
+    if not results or 'details' not in results:
+        return
+
+    details = results['details']
+
+    # Find failed examples
+    failed = [r for r in details if not r.get('correct', False)]
+
+    if not failed:
+        return
+
+    # Sample random failed examples
+    num_to_show = min(num_examples, len(failed))
+    sampled_failed = random.sample(failed, num_to_show)
+
+    print(f"\n  Failed examples ({num_to_show}/{len(failed)}):")
+    print(f"  {'-'*76}")
+
+    for i, result in enumerate(sampled_failed, 1):
+        # Get ground truth and prediction
+        gt = result.get('ground_truth', 'N/A')
+        pred = result.get('predicted', 'N/A')
+
+        # For binary classification, show as FAIR/UNFAIR
+        if isinstance(gt, bool):
+            gt_str = "FAIR" if gt else "UNFAIR"
+        else:
+            gt_str = str(gt)
+
+        if isinstance(pred, bool):
+            pred_str = "FAIR" if pred else "UNFAIR"
+        else:
+            pred_str = str(pred)
+
+        # Get text (question/text field)
+        text = result.get('text', result.get('question', ''))[:80]
+
+        print(f"  {i}. GT: {gt_str:6} | Pred: {pred_str:6} | {text}...")
+
+        # Show full model response (output field contains the full response)
+        if result.get('output'):
+            response = result['output'].strip()
+            print(f"     Response: {response}")
+
+    print(f"  {'-'*76}")
 
 
 class OPRO:
@@ -182,16 +238,18 @@ NOW GENERATE YOUR NEW PROMPT:"""
 
         return "\n\n".join(examples)
 
-    def evaluate_prompt(self, prompt: str, start_idx: int) -> float:
+    def evaluate_prompt(self, prompt: str, start_idx: int, return_details: bool = False) -> Tuple[float, Any]:
         """
         Evaluate a prompt on a minibatch.
 
         Args:
             prompt: Prompt to evaluate
             start_idx: Starting index in dataset
+            return_details: If True, return (score, results) tuple; if False, return just score
 
         Returns:
-            Optimization score (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
+            If return_details=False: Optimization score (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
+            If return_details=True: Tuple of (score, results) where results contains detailed evaluation info
         """
         batch = self.evaluator.get_batch(start_idx, self.minibatch_size)
 
@@ -204,7 +262,11 @@ NOW GENERATE YOUR NEW PROMPT:"""
         indices = [example['idx'] for example in batch]
         results = self.evaluator.evaluate_batch(outputs, indices)
 
-        return self._get_score(results)
+        score = self._get_score(results)
+
+        if return_details:
+            return score, results
+        return score
 
     def generate_candidates(self) -> List[str]:
         """
@@ -296,13 +358,15 @@ NOW GENERATE YOUR NEW PROMPT:"""
             print("Evaluating initial prompts...\n")
 
         for prompt in initial_prompts:
-            score = self.evaluate_prompt(prompt, data_idx)
+            score, results = self.evaluate_prompt(prompt, data_idx, return_details=True)
             data_idx = (data_idx + self.minibatch_size) % len(self.evaluator)
 
             self.scored_prompts.append(ScoredPrompt(prompt=prompt, score=score))
 
             if verbose:
                 print(f"Score: {score:.1%} | Prompt: {prompt}")
+                # Show failed examples
+                print_failed_examples_opro(results, num_examples=3)
 
         # Optimization loop
         for iteration in range(self.num_iterations):
@@ -327,13 +391,15 @@ NOW GENERATE YOUR NEW PROMPT:"""
                 if verbose:
                     print(f"Evaluating: {candidate[:80]}...")
 
-                score = self.evaluate_prompt(candidate, data_idx)
+                score, results = self.evaluate_prompt(candidate, data_idx, return_details=True)
                 data_idx = (data_idx + self.minibatch_size) % len(self.evaluator)
 
                 self.scored_prompts.append(ScoredPrompt(prompt=candidate, score=score))
 
                 if verbose:
-                    print(f"Score: {score:.1%}\n")
+                    print(f"Score: {score:.1%}")
+                    # Show failed examples
+                    print_failed_examples_opro(results, num_examples=3)
 
                 # Record history
                 self.history.append({
