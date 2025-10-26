@@ -4,13 +4,15 @@ Analyze the current prompt's performance and provide SHORT, ACTIONABLE feedback.
 CONTEXT:
 - TASK: {task_description}
 - CURRENT_PROMPT: {prompt}
-- PERFORMANCE: Accuracy={accuracy:.1%} | F1={f1:.1%} | Precision={precision:.1%} | Recall={recall:.1%}
+- PERFORMANCE: Accuracy={accuracy:.1%} | Macro-F1={macro_f1:.1%} | Unfair-F1={f1:.1%} | Precision={precision:.1%} | Recall={recall:.1%}
 
 KEY METRICS:
-⚠️ If F1 < 20% + Accuracy > 85%: Model over-predicts FAIR (misses UNFAIR clauses) → LOW RECALL
+⚠️ If Macro-F1 < Accuracy: Class imbalance problem (favoring majority FAIR class)
+⚠️ If Unfair-F1 < 20% + Accuracy > 85%: Model over-predicts FAIR (misses UNFAIR clauses) → LOW RECALL
 ⚠️ If Recall < 30%: Model fails to detect UNFAIR clauses (false negatives)
 ⚠️ If Precision < 50%: Model over-classifies neutral text as UNFAIR (false positives)
-**PRIMARY GOAL: Maximize F1 for UNFAIR class (balance Precision & Recall)**
+**PRIMARY GOAL: Maximize Macro-F1 (balanced performance on BOTH Fair AND Unfair classes)**
+Note: Dataset is ~9:1 FAIR:UNFAIR ratio, so Macro-F1 ensures both classes matter equally
 
 FAILED EXAMPLES:
 {results}
@@ -25,14 +27,15 @@ UNFAIR INDICATORS:
 Liability limits, unilateral termination/changes, arbitration, content removal, jurisdiction/choice of law, "at our sole discretion", "without notice"
 
 COMMON FAILURES:
-1. Over-predicting FAIR when UNFAIR terms exist (kills Recall)
-2. Over-classifying neutral text as UNFAIR (kills Precision)
-3. Over-complex prompts (>150 words confuse 7B models)
-4. Vague output format (model doesn't use "CLASSIFICATION:" format)
-5. Not recognizing legal terminology that indicates unfairness
+1. Over-predicting FAIR when UNFAIR terms exist (kills Recall → hurts Macro-F1)
+2. Over-classifying neutral text as UNFAIR (kills Precision → hurts Macro-F1)
+3. Ignoring FAIR class performance (Macro-F1 requires BOTH classes to perform well)
+4. Over-complex prompts (>150 words confuse 7B models)
+5. Vague output format (model doesn't use "CLASSIFICATION:" format)
+6. Not recognizing legal terminology that indicates unfairness
 
 YOUR TASK:
-Provide 2-3 HIGH-IMPACT issues with specific fixes. Prioritize based on F1 metrics.
+Provide 2-3 HIGH-IMPACT issues with specific fixes. Prioritize based on Macro-F1 improvement (not just Unfair-F1).
 
 FORMAT:
 ISSUE 1: [Problem]

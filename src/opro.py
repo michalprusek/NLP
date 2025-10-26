@@ -178,8 +178,11 @@ NOW GENERATE YOUR NEW PROMPT:"""
             self.optimization_metric = 'micro_f1'  # Multi-label: use micro F1
             print(f"  Optimization metric: Micro F1 (multi-label classification)")
         elif task_name_for_metric == 'claudette_binary':
-            self.optimization_metric = 'f1'  # Binary: use F1 for unfair class
-            print(f"  Optimization metric: F1 (binary classification)")
+            # Binary classification: use Macro-F1 for class balance
+            # Macro-F1 is standard in CLAUDETTE benchmark due to ~9:1 class imbalance
+            # It treats both fair and unfair classes equally, unlike micro-F1 or unfair-only F1
+            self.optimization_metric = 'macro_f1'
+            print(f"  Optimization metric: Macro-F1 (binary classification, balanced across classes)")
         else:
             self.optimization_metric = 'accuracy'  # Default: accuracy (GSM8K, etc.)
             print(f"  Optimization metric: Accuracy")

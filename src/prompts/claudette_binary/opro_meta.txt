@@ -26,26 +26,28 @@ CRITICAL DATASET CHARACTERISTICS:
 
 EVALUATION SYSTEM (INVARIANT):
 - Extracts binary labels from: "CLASSIFICATION: FAIR/UNFAIR", "LABEL: 0/1", keywords "fair"/"unfair", or numbers 0/1
+- Handles negations: "not unfair" → FAIR, "not fair" → UNFAIR
 - EXACT MATCH required: Predicted label must match true label
-- Primary metric: F1 SCORE for UNFAIR class (balance of precision & recall)
-- Secondary metrics: Accuracy (overall correctness), Precision (avoid false positives), Recall (catch all unfair clauses)
-- Common failures: over-classifying neutral text as unfair (false positives), unclear output format, missing subtle unfair terms (false negatives), not reasoning before classification
+- **Primary metric: MACRO-F1 (average F1 of FAIR and UNFAIR classes)** - standard for CLAUDETTE benchmark
+- Dataset has ~9:1 FAIR:UNFAIR ratio, so Macro-F1 ensures both classes are weighted equally
+- Secondary metrics: Unfair-F1, Precision (avoid false positives), Recall (catch all unfair clauses), Accuracy
+- Common failures: over-classifying neutral text as unfair (false positives), unclear output format, missing subtle unfair terms (false negatives), not reasoning before classification, ignoring FAIR class performance
 
 PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
 YOUR TASK:
-Generate {num_candidates} NEW instruction prompts that will achieve HIGHER F1 score for UNFAIR class.
+Generate {num_candidates} NEW instruction prompts that will achieve HIGHER MACRO-F1 score (balanced performance on BOTH Fair and Unfair classes).
 
 REQUIREMENTS:
 1. Each prompt must be 2-4 sentences
 2. Must instruct to provide answer in format "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
-3. Must emphasize that MOST clauses are neutral/fair (90%) - only label as unfair if clear problematic terms present
+3. Must emphasize BALANCED classification (don't over-predict FAIR or UNFAIR - both classes matter for Macro-F1)
 4. Should encourage analysis of legal implications before classification
 5. Should help distinguish unfair clauses from neutral/informational text
-6. Should provide guidance on identifying unfair terms
+6. Should provide guidance on identifying both FAIR and UNFAIR characteristics
 7. Each prompt must be DIFFERENT from previous ones
-8. Explore different strategies (reasoning-first, checklist approach, legal analysis, conservative classification to avoid false positives)
+8. Explore different strategies (reasoning-first, checklist approach, legal analysis, balanced classification to maximize Macro-F1)
 
 OUTPUT FORMAT:
 Write EXACTLY {num_candidates} prompts, one per line.

@@ -22,103 +22,155 @@ BINARY_LABELS = {
 
 def extract_binary_label_from_output(text: str, verbose: bool = False) -> Set[int]:
     """
-    Extract binary prediction from model output.
+    Extract binary prediction from model output with robust handling of:
+    - Negations ("not unfair", "isn't fair")
+    - Confidence expressions ("likely fair", "probably unfair")
+    - Multiple output formats (structured labels, natural language)
 
-    Supports multiple output formats:
-    - "LABEL: 0" or "LABEL: 1"
-    - "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
-    - "fair" or "unfair" (case-insensitive)
-    - Raw numbers: "0" or "1"
+    Prioritizes explicit labels over keyword matching to avoid false positives.
 
     Returns set with single element: {0} for fair, {1} for unfair.
     """
     if not text or not text.strip():
-        return {0}  # Default to fair
+        if verbose:
+            print(f"  Empty output, defaulting to fair (0)")
+        return {0}  # Default to fair for empty output
 
     text = text.strip()
     text_lower = text.lower()
 
-    # Strategy 1: Explicit label markers with numbers
-    patterns = [
-        r'label\s*:\s*([01])',
-        r'classification\s*:\s*([01])',
-        r'answer\s*:\s*([01])',
+    # Strategy 1: Explicit structured labels (highest priority)
+    # These patterns look for clear label markers
+    structured_patterns = [
+        (r'(?:label|classification|answer|prediction)\s*:\s*([01])', 'structured number'),
+        (r'(?:label|classification|answer|prediction)\s*:\s*unfair', 'structured unfair'),
+        (r'(?:label|classification|answer|prediction)\s*:\s*fair', 'structured fair'),
+        (r'final\s+(?:answer|label|classification)\s*:\s*([01])', 'final answer number'),
+        (r'final\s+(?:answer|label|classification)\s*:\s*unfair', 'final answer unfair'),
+        (r'final\s+(?:answer|label|classification)\s*:\s*fair', 'final answer fair'),
     ]
 
-    for pattern in patterns:
+    for pattern, desc in structured_patterns:
         match = re.search(pattern, text_lower)
         if match:
-            label = int(match.group(1))
+            if match.lastindex and match.group(1) in ['0', '1']:
+                label = int(match.group(1))
+            else:
+                label = 1 if 'unfair' in match.group(0) else 0
+
             if verbose:
-                print(f"  Extracted via pattern '{pattern}': {label}")
+                print(f"  Extracted via {desc}: {label}")
             return {label}
 
-    # Strategy 2: Text keywords for UNFAIR
-    unfair_patterns = [
-        r'\bunfair\b',
-        r'classification\s*:\s*unfair',
-        r'label\s*:\s*unfair',
+    # Strategy 2: Check for negations BEFORE keyword matching
+    # This prevents "not unfair" from being classified as unfair
+    negation_unfair_patterns = [
+        r'\b(?:not|isn\'t|is\s+not|aren\'t|are\s+not|no)\s+(?:\w+\s+){0,3}unfair',
+        r'\b(?:fails?\s+to\s+be|doesn\'t\s+seem)\s+unfair',
+        r'unfair\s+(?:is|would\s+be)\s+(?:in)?correct',
     ]
 
-    for pattern in unfair_patterns:
+    for pattern in negation_unfair_patterns:
         if re.search(pattern, text_lower):
             if verbose:
-                print(f"  Extracted 'unfair' via pattern '{pattern}'")
-            return {1}
-
-    # Strategy 3: Text keywords for FAIR
-    fair_patterns = [
-        r'\bfair\b',
-        r'classification\s*:\s*fair',
-        r'label\s*:\s*fair',
-    ]
-
-    for pattern in fair_patterns:
-        if re.search(pattern, text_lower):
-            if verbose:
-                print(f"  Extracted 'fair' via pattern '{pattern}'")
+                print(f"  Found negation of unfair via '{pattern}', returning fair (0)")
             return {0}
 
-    # Strategy 4: Look for "unfair" anywhere in text (more permissive)
-    if 'unfair' in text_lower:
+    negation_fair_patterns = [
+        r'\b(?:not|isn\'t|is\s+not|aren\'t|are\s+not|no)\s+(?:\w+\s+){0,3}fair',
+        r'\b(?:fails?\s+to\s+be|doesn\'t\s+seem)\s+fair',
+        r'fair\s+(?:is|would\s+be)\s+(?:in)?correct',
+    ]
+
+    for pattern in negation_fair_patterns:
+        if re.search(pattern, text_lower):
+            # Check if this is "not fair" in context of unfairness
+            if verbose:
+                print(f"  Found negation of fair via '{pattern}', returning unfair (1)")
+            return {1}
+
+    # Strategy 3: Look for clear affirmative statements (with optional confidence markers)
+    # Prioritize end of text (last 200 chars) where conclusion usually is
+    conclusion_text = text_lower[-200:] if len(text_lower) > 200 else text_lower
+
+    affirmative_unfair = [
+        r'\b(?:is|seems?|appears?|likely|probably|definitely|clearly)\s+unfair\b',
+        r'\bunfair\s+(?:clause|term|provision)\b',
+        r'\bclassif(?:y|ied)\s+as\s+unfair\b',
+        r'\bconclusion\s*:\s*unfair\b',
+    ]
+
+    for pattern in affirmative_unfair:
+        if re.search(pattern, conclusion_text):
+            if verbose:
+                print(f"  Found affirmative unfair statement: '{pattern}'")
+            return {1}
+
+    affirmative_fair = [
+        r'\b(?:is|seems?|appears?|likely|probably|definitely|clearly)\s+fair\b',
+        r'\bfair\s+(?:clause|term|provision)\b',
+        r'\bclassif(?:y|ied)\s+as\s+fair\b',
+        r'\bconclusion\s*:\s*fair\b',
+    ]
+
+    for pattern in affirmative_fair:
+        if re.search(pattern, conclusion_text):
+            if verbose:
+                print(f"  Found affirmative fair statement: '{pattern}'")
+            return {0}
+
+    # Strategy 4: Fallback to isolated keyword in conclusion
+    # Only if no negation or affirmative pattern matched
+    # Search in last 100 chars only to focus on final decision
+    final_portion = text_lower[-100:] if len(text_lower) > 100 else text_lower
+
+    # Look for standalone "unfair" word (not preceded by negation)
+    if re.search(r'(?<!\bnot\s)(?<!\bisn\'t\s)\bunfair\b', final_portion):
         if verbose:
-            print(f"  Found 'unfair' in text")
+            print(f"  Found standalone 'unfair' in final portion")
         return {1}
 
-    # Strategy 5: Look for "fair" anywhere in text (but NOT "unfair")
-    # Check for "unfair" first to avoid false positives
-    if 'unfair' not in text_lower and 'fair' in text_lower:
-        if verbose:
-            print(f"  Found 'fair' (without 'unfair') in text")
-        return {0}
+    # Look for standalone "fair" word (not preceded by negation or followed by "unfair")
+    if re.search(r'(?<!\bnot\s)(?<!\bisn\'t\s)\bfair\b(?!\s*\w*unfair)', final_portion):
+        # Double-check it's not "unfair"
+        if 'unfair' not in final_portion:
+            if verbose:
+                print(f"  Found standalone 'fair' in final portion")
+            return {0}
 
-    # Strategy 6: Fallback - extract numbers from LAST portion only (avoid picking up numbers in reasoning)
-    # Check last 50 chars to focus on final answer, not explanation
-    last_portion = text[-50:] if len(text) > 50 else text
-    nums = re.findall(r'\b([01])\b', last_portion)
+    # Strategy 5: Look for numeric labels in last portion
+    nums = re.findall(r'\b([01])\b', final_portion)
     if nums:
         label = int(nums[-1])  # Take last occurrence
         if verbose:
-            print(f"  Extracted last number from end: {label}")
+            print(f"  Extracted last number from final portion: {label}")
         return {label}
 
-    # Strategy 7: Check for presence of unfair keywords as last resort
-    # If model mentions unfair terms but didn't give clear label, lean towards unfair
-    unfair_keywords = [
-        r'liabilit', r'terminat', r'arbitrat', r'unilateral',
-        r'removal', r'jurisdiction', r'sole\s+discretion',
-        r'without\s+notice', r'at\s+any\s+time'
-    ]
-    for keyword in unfair_keywords:
-        if re.search(keyword, text_lower):
+    # Strategy 6: If output is very short (< 20 chars), do simple keyword check
+    if len(text_lower) < 20:
+        if 'unfair' in text_lower and 'fair' not in text_lower.replace('unfair', ''):
             if verbose:
-                print(f"  Found unfair keyword '{keyword}', inferring UNFAIR")
+                print(f"  Short output contains only 'unfair'")
             return {1}
+        if 'fair' in text_lower and 'unfair' not in text_lower:
+            if verbose:
+                print(f"  Short output contains only 'fair'")
+            return {0}
+        if '1' in text_lower:
+            if verbose:
+                print(f"  Short output contains '1'")
+            return {1}
+        if '0' in text_lower:
+            if verbose:
+                print(f"  Short output contains '0'")
+            return {0}
 
-    # Default: If truly ambiguous with NO signals, conservatively mark as FAIR
-    # But this should be rare now with better extraction above
+    # Final fallback: warn and default to fair
+    # NOTE: This might indicate the model didn't provide a clear answer
     if verbose:
-        print(f"  No clear signals found, defaulting to fair (0)")
+        print(f"  WARNING: No clear label found in output, defaulting to fair (0)")
+        print(f"  Output preview: {text[:200]}...")
+
     return {0}
 
 
