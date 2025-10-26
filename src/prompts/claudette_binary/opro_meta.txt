@@ -27,14 +27,15 @@ CRITICAL DATASET CHARACTERISTICS:
 EVALUATION SYSTEM (INVARIANT):
 - Extracts binary labels from: "CLASSIFICATION: FAIR/UNFAIR", "LABEL: 0/1", keywords "fair"/"unfair", or numbers 0/1
 - EXACT MATCH required: Predicted label must match true label
-- Primary metric: ACCURACY (exact match)
+- Primary metric: F1 SCORE for UNFAIR class (balance of precision & recall)
+- Secondary metrics: Accuracy (overall correctness), Precision (avoid false positives), Recall (catch all unfair clauses)
 - Common failures: over-classifying neutral text as unfair (false positives), unclear output format, missing subtle unfair terms (false negatives), not reasoning before classification
 
 PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
 YOUR TASK:
-Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+Generate {num_candidates} NEW instruction prompts that will achieve HIGHER F1 score for UNFAIR class.
 
 REQUIREMENTS:
 1. Each prompt must be 2-4 sentences

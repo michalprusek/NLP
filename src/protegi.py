@@ -552,10 +552,21 @@ class ProTeGi:
 
         results_text = "\n\n".join(error_examples) if error_examples else "All examples correct!"
 
-        # Extract Micro-F1 metrics for Claudette (if available)
-        micro_f1 = results.get('micro_f1', 0.0)
-        micro_precision = results.get('micro_precision', 0.0)
-        micro_recall = results.get('micro_recall', 0.0)
+        # Extract task-specific metrics for gradient prompt
+        # For binary classification (claudette_binary): use F1/precision/recall for positive class
+        # For multi-label classification (claudette): use micro-F1/precision/recall
+        if self.optimization_metric == 'f1':
+            # Binary classification: use metrics for positive class (unfair)
+            f1 = results.get('f1', 0.0)
+            precision = results.get('precision', 0.0)
+            recall = results.get('recall', 0.0)
+            macro_f1 = results.get('macro_f1', 0.0)
+        else:
+            # Multi-label or other: use micro-averaged metrics
+            f1 = results.get('micro_f1', 0.0)
+            precision = results.get('micro_precision', 0.0)
+            recall = results.get('micro_recall', 0.0)
+            macro_f1 = results.get('macro_f1', 0.0)
 
         gradient_prompt = self.gradient_prompt_template.format(
             prompt=candidate.prompt,
@@ -565,9 +576,14 @@ class ProTeGi:
             accuracy=results['accuracy'],
             correct=results['correct'],
             total=results['total'],
-            micro_f1=micro_f1,
-            micro_precision=micro_precision,
-            micro_recall=micro_recall,
+            f1=f1,
+            precision=precision,
+            recall=recall,
+            macro_f1=macro_f1,
+            # Legacy names for backward compatibility with old templates
+            micro_f1=f1,
+            micro_precision=precision,
+            micro_recall=recall,
         )
 
         # Paper uses temperature=1.0 for gradient generation (exploration)
@@ -818,12 +834,19 @@ Output:"""
 
             if verbose:
                 print(f"Accuracy: {results['accuracy']:.1%} ({results['correct']}/{results['total']})")
-                # Show comprehensive metrics for classification tasks (e.g., Claudette)
-                if 'micro_f1' in results:
+
+                # Show task-specific metrics
+                if self.optimization_metric == 'micro_f1' and 'micro_f1' in results:
+                    # Multi-label classification (e.g., Claudette)
                     hamming_str = f" | Hamming: {results['hamming_loss']:.3f}" if 'hamming_loss' in results else ""
                     print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}{hamming_str}")
-                if 'f1' in results and self.optimization_metric == 'f1':
+                elif self.optimization_metric == 'f1' and 'f1' in results:
+                    # Binary classification (e.g., Claudette Binary)
                     print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
+                    # Also show macro-F1 for comparison (average of both classes)
+                    if 'macro_f1' in results:
+                        print(f"  Macro-F1: {results['macro_f1']:.1%} (avg of both classes)")
+
                 print(f"  Optimization score ({self.optimization_metric}): {score:.1%}")
 
             # Record history
@@ -903,10 +926,16 @@ Output:"""
                     if verbose:
                         variant_type = "original" if i == 0 else f"paraphrase {i}"
                         print(f"  Gradient {grad_idx+1} {variant_type}: Acc={new_results['accuracy']:.1%}", end='')
-                        if 'micro_f1' in new_results:
-                            print(f", Micro-F1={new_results['micro_f1']:.1%}", end='')
-                        if 'f1' in new_results and self.optimization_metric == 'f1':
-                            print(f", F1={new_results['f1']:.1%}", end='')
+
+                        # Show task-specific metrics
+                        if self.optimization_metric == 'micro_f1' and 'micro_f1' in new_results:
+                            # Multi-label: show micro and macro F1
+                            print(f", Micro-F1={new_results['micro_f1']:.1%}, Macro-F1={new_results.get('macro_f1', 0):.1%}", end='')
+                        elif self.optimization_metric == 'f1' and 'f1' in new_results:
+                            # Binary: show F1 for positive class and Macro-F1 (avg of both classes)
+                            macro_f1_str = f", Macro-F1={new_results['macro_f1']:.1%}" if 'macro_f1' in new_results else ""
+                            print(f", F1={new_results['f1']:.1%}{macro_f1_str}", end='')
+
                         print(f", Score={new_score:.1%}")
 
                     # Add to beam
@@ -953,8 +982,14 @@ Output:"""
 
                 if verbose:
                     print(f"Validation {self.optimization_metric}: {val_score:.1%} (Accuracy: {val_results['accuracy']:.1%})")
-                    if 'micro_f1' in val_results:
+
+                    # Show task-specific validation metrics
+                    if self.optimization_metric == 'micro_f1' and 'micro_f1' in val_results:
                         print(f"  Micro-F1: {val_results['micro_f1']:.1%} | Macro-F1: {val_results['macro_f1']:.1%}")
+                    elif self.optimization_metric == 'f1' and 'f1' in val_results:
+                        print(f"  F1: {val_results['f1']:.1%} | Precision: {val_results.get('precision', 0):.1%} | Recall: {val_results.get('recall', 0):.1%}")
+                        if 'macro_f1' in val_results:
+                            print(f"  Macro-F1: {val_results['macro_f1']:.1%}")
 
                 # Early stopping check
                 if val_score > self.best_val_score:
@@ -990,10 +1025,14 @@ Output:"""
                 print(f"Prompt: {candidate.prompt}")
                 print(f"Optimization score ({self.optimization_metric}): {final_score:.1%}")
                 print(f"  Accuracy: {results['accuracy']:.1%}")
-                if 'micro_f1' in results:
+
+                # Show task-specific metrics
+                if self.optimization_metric == 'micro_f1' and 'micro_f1' in results:
                     print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}")
-                if 'f1' in results and self.optimization_metric == 'f1':
+                elif self.optimization_metric == 'f1' and 'f1' in results:
                     print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
+                    if 'macro_f1' in results:
+                        print(f"  Macro-F1: {results['macro_f1']:.1%}")
 
         # Return best
         best_candidate = max(beam, key=lambda c: c.score)

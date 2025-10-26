@@ -9,16 +9,17 @@ CONTEXT
 >>>
 - PERFORMANCE:
   * Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
-  * Micro-F1: {micro_f1:.1%} (F1 score of UNFAIR class - PRIMARY METRIC!)
-  * Precision: {micro_precision:.1%} | Recall: {micro_recall:.1%}
+  * F1 (UNFAIR class): {f1:.1%} (PRIMARY METRIC - balance of Precision & Recall for UNFAIR)
+  * Precision: {precision:.1%} | Recall: {recall:.1%}
+  * Macro-F1: {macro_f1:.1%} (average F1 across both classes)
   * Top failure examples:
 {results}
 
 ⚠️ CRITICAL METRICS INTERPRETATION:
-- High Accuracy + Low Micro-F1 = Model over-predicts FAIR (misses UNFAIR clauses)
+- High Accuracy + Low F1 = Model over-predicts FAIR (misses UNFAIR clauses)
 - Low Recall = Model fails to identify UNFAIR clauses when they exist
 - Low Precision = Model over-classifies neutral clauses as UNFAIR
-- **PRIMARY GOAL: Maximize Micro-F1 (balance Precision & Recall for UNFAIR class)**
+- **PRIMARY GOAL: Maximize F1 for UNFAIR class (balance Precision & Recall)**
 
 IMPORTANT - How classifications are evaluated:
 
@@ -71,10 +72,10 @@ COMMON FAILURE PATTERNS:
 YOUR TASK:
 Provide a concise critique identifying 2-4 key issues with the current prompt that led to failures.
 
-**PRIORITIZE ISSUES THAT IMPACT MICRO-F1:**
-1. If Micro-F1 < 20% and Accuracy > 85%: Focus on FAIR over-prediction (model too conservative)
+**PRIORITIZE ISSUES THAT IMPACT F1 (UNFAIR class):**
+1. If F1 < 20% and Accuracy > 85%: Focus on FAIR over-prediction (model too conservative, misses UNFAIR)
 2. If Recall < 30%: Focus on missing UNFAIR clauses (model not checking for unfair terms)
-3. If Precision < 50%: Focus on over-classification (model too aggressive)
+3. If Precision < 50%: Focus on over-classification (model too aggressive, false positives)
 4. If prompt is >200 words: Focus on simplification (7B models struggle with complexity)
 
 Focus on: output format guidance, reasoning structure, distinguishing fair vs unfair, **balancing Precision & Recall**.

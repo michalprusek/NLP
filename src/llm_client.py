@@ -273,10 +273,26 @@ class VLLMClient(LLMClient):
         self.temperature = temperature
 
         print(f"Loading model with vLLM: {model_name}")
+
+        # Disable v1 engine for compatibility (use stable v0 engine)
+        # v1 engine is experimental and has issues with some models
+        import os
+        os.environ["VLLM_USE_V1"] = "0"
+
+        # Set PyTorch CUDA allocator to avoid fragmentation
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+        # Disable CUDA graphs when using tensor parallelism to avoid custom_all_reduce errors
+        # CUDA graphs can cause issues with multi-GPU tensor parallelism
+        enforce_eager = tensor_parallel_size > 1
+
         self.llm = LLM(
             model=model_name,
             tensor_parallel_size=tensor_parallel_size,
             dtype="auto",
+            gpu_memory_utilization=0.75,  # Reduce from default 0.9 to leave more headroom
+            max_model_len=4096,  # Limit context length to reduce KV cache size
+            enforce_eager=enforce_eager,  # Use eager mode for tensor parallelism
         )
 
         # Load tokenizer to check for chat template support
