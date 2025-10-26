@@ -8,6 +8,7 @@
     "3": "Arbitration (A)",
     "4": "Content removal (CR)",
     "5": "Choice of law (LAW)",
+    "6": "Other (PINC)",
     "7": "Contract by using (USE)",
     "8": "Jurisdiction (J)"
   },
@@ -16,5 +17,6 @@
     "validation": 1412,
     "test": 1413
   },
-  "total_examples": 9414
+  "total_examples": 9414,
+  "notes": "Label 6 (Other/PINC) has 0 examples in this dataset but is included for completeness with the Claudette schema."
 }

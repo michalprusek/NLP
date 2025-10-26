@@ -15,20 +15,27 @@ FAILED EXAMPLES:
 {results}
 
 TASK INFO:
-- Multi-label classification (0-9 categories per clause, most common=0)
-- 90% clauses are NEUTRAL (LABELS: NONE), 10% have 1+ unfair labels
+- Multi-label classification (0-8 categories per clause, most common=0)
+- 90% clauses are FAIR (LABELS: NONE), 10% have 1+ unfair labels
 - Output format: "LABELS: 0, 3" or "LABELS: NONE" (no brackets)
 - Extraction: looks for "LABELS:", category names, or numbers in LAST 100 chars
 
-CATEGORIES:
-0=Liability limit, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 6=Other, 7=Contract by using, 8=Jurisdiction
+CATEGORIES (with definitions to help distinguish):
+0=Limitation of liability (For what actions/events the provider claims they will not be liable?)
+1=Unilateral termination (Under what conditions can the provider terminate the service/contract?)
+2=Unilateral change (Under what conditions can the provider modify the service/contract?)
+3=Arbitration (Is arbitration mandatory before the case can go to court?)
+4=Content removal (Under what conditions can the service provider remove users' content?)
+5=Choice of law (What law will govern the dispute settlement?)
+7=Contract by using (Is the consumer bound by the terms simply by using the service?)
+8=Jurisdiction (Where the disputes will be adjudicated? In what courts?)
 
 COMMON FAILURES:
-1. Over-predicting NONE when unfair clauses exist (kills Recall)
-2. Missing secondary labels (only finding 1 when 2+ apply)
-3. Over-complex prompts (>150 words confuse 7B models)
-4. Vague output format (model doesn't use "LABELS:" format)
-5. No reasoning step before classification
+1. Over-predicting NONE when unfair clauses exist (kills Recall) - most critical issue
+2. Missing secondary labels (only finding 1 when 2+ apply) - check ALL categories
+3. Over-complex prompts (>150 words confuse 7B models) - keep it concise
+4. Vague output format (model doesn't use "LABELS:" format) - must end with "LABELS: X"
+5. No reasoning step before classification - brief analysis helps accuracy
 
 YOUR TASK:
 Provide 2-3 HIGH-IMPACT issues with specific fixes. Prioritize based on metrics above.

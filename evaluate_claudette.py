@@ -38,9 +38,28 @@ from src.metrics import format_metrics_table, format_metrics_compact
 # Default prompt templates for Claudette ToS classification
 # Note: Clauses are automatically appended as "\n\nQuestion: {clause}\nAnswer:"
 DEFAULT_PROMPTS = {
-    "basic": "Classify the following Terms of Service clause into one of 9 categories (0-8). Provide your answer as: LABEL: <number>",
-    "detailed": "Analyze the Terms of Service clause and classify it into one of these categories:\n0: Limitation of liability\n1: Unilateral termination\n2: Unilateral change\n3: Arbitration\n4: Content removal\n5: Choice of law\n6: Other\n7: Contract by using\n8: Jurisdiction\n\nProvide your classification as: LABEL: <number>",
-    "reasoning": "Read the Terms of Service clause carefully, consider its legal implications, then classify it into the most appropriate category (0-8). Explain your reasoning briefly, then provide your answer as: LABEL: <number>",
+    "basic": "Analyze this Terms of Service clause for unfair terms. If FAIR (no unfair terms), output 'LABELS: NONE'. If UNFAIR, identify all applicable categories: 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction. Output format: 'LABELS: 0, 3' or 'LABELS: NONE'.",
+
+    "detailed": """Analyze the Terms of Service clause and determine if it contains any unfair terms.
+
+If the clause is FAIR (no unfair terms), respond with: LABELS: NONE
+
+If the clause is UNFAIR, classify it into one or more of these categories:
+0: Limitation of liability - For what actions/events the provider claims they will not be liable?
+1: Unilateral termination - Under what conditions can the provider terminate the service/contract?
+2: Unilateral change - Under what conditions can the provider modify the service/contract?
+3: Arbitration - Is arbitration mandatory before the case can go to court?
+4: Content removal - Under what conditions can the service provider remove users' content?
+5: Choice of law - What law will govern the dispute settlement?
+7: Contract by using - Is the consumer bound by the terms simply by using the service?
+8: Jurisdiction - Where the disputes will be adjudicated? (in what courts?)
+
+Note: Most clauses (~90%) are fair. Only classify as unfair if you're confident.
+Note: A clause can belong to multiple categories (e.g., "LABELS: 0, 3").
+
+Provide your classification as: LABELS: <number(s) or NONE>""",
+
+    "reasoning": "Read the Terms of Service clause carefully and consider its legal implications. MOST clauses (90%) are FAIR—if so, output 'LABELS: NONE'. If the clause contains unfair terms, identify ALL applicable categories (can be multiple): 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction. Explain your reasoning briefly, then provide your answer as: LABELS: <number(s) or NONE>",
 }
 
 

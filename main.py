@@ -213,7 +213,7 @@ def main():
             if args.task == "gsm8k":
                 args.initial_prompt = "Solve the following math problem step by step. Show your reasoning and provide the final numerical answer."
             elif args.task == "claudette":
-                args.initial_prompt = "Classify the following Terms of Service clause into one of 9 categories. Analyze the clause carefully, then provide your classification as: LABEL: <number>"
+                args.initial_prompt = "Analyze this Terms of Service clause for unfair terms. MOST clauses (90%) are FAIR—if so, output 'LABELS: NONE'. If UNFAIR, identify ALL applicable categories (can be multiple): 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction. Output format: 'LABELS: 0, 3' or 'LABELS: NONE'."
             elif args.task == "claudette_binary":
                 args.initial_prompt = "Classify the following Terms of Service clause as either FAIR or UNFAIR. Most clauses are fair. Provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR"
 
@@ -373,7 +373,7 @@ def main():
 
     # Set task description based on task
     if args.task == "claudette":
-        task_description = "Classify Terms of Service clauses into 9 categories (0-8): Limitation of liability, Unilateral termination, Unilateral change, Arbitration, Content removal, Choice of law, Other, Contract by using, Jurisdiction."
+        task_description = "Classify Terms of Service clauses as FAIR (LABELS: NONE) or UNFAIR (one or more categories 0-5, 7-8). 90% are FAIR. Categories: 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction."
     elif args.task == "claudette_binary":
         task_description = "Classify Terms of Service clauses as FAIR (0) or UNFAIR (1). Fair clauses are neutral, unfair clauses contain problematic terms."
     else:
