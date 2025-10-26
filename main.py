@@ -46,7 +46,7 @@ def main():
         "--model",
         type=str,
         required=True,
-        help="Task model name - the model being optimized (e.g., Qwen/Qwen2.5-7B-Instruct, SaulLM/SaulLM-7B)",
+        help="Task model name - the model being optimized (e.g., Qwen/Qwen2.5-7B-Instruct, Equall/Saul-7B-Instruct-v1)",
     )
 
     parser.add_argument(

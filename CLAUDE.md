@@ -34,8 +34,8 @@ cp .env.example .env
 # ProTeGi with Qwen
 uv run python main.py --method protegi --model Qwen/Qwen2.5-7B-Instruct --iterations 10
 
-# OPRO with SaulLM
-uv run python main.py --method opro --model SaulLM/SaulLM-7B --iterations 10
+# OPRO with SaulLM (legal domain model)
+uv run python main.py --method opro --model Equall/Saul-7B-Instruct-v1 --iterations 10
 ```
 
 **Separate task and meta-optimizer models:**
@@ -86,7 +86,7 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 **Task Models (--model):**
 - `Qwen/Qwen2.5-7B-Instruct` - **Default model**, general-purpose, good performance (~85% GSM8K)
 - `Qwen/Qwen2.5-3B-Instruct` - Smaller, faster, lower memory
-- `SaulLM/SaulLM-7B` - Legal domain-specialized model
+- `Equall/Saul-7B-Instruct-v1` - Legal domain-specialized model (based on Mistral-7B, trained on 30B legal tokens)
 - `meta-llama/Llama-3.1-8B-Instruct` - Meta's Llama 3.1
 - `claude-3-haiku-20240307` - Fast Claude model (API)
 - `claude-3-5-sonnet-20241022` - Most capable Claude model (API)
@@ -239,7 +239,7 @@ JSON includes: method, model, config, best_prompt, history (all iterations), val
 **API Keys:**
 - Claude models require `ANTHROPIC_API_KEY` in `.env` file
 - Copy `.env.example` to `.env` and add your API key
-- Local models (Qwen, Llama, SaulLM) don't require API keys
+- Local models (Qwen, Llama, Saul) don't require API keys
 
 **Memory Management:**
 - Small models (3B-7B) recommended for 16GB RAM systems
