@@ -97,11 +97,32 @@ def extract_labels_from_output(text: str, verbose: bool = False) -> Set[int]:
         if re.search(pattern, text_lower):
             labels.add(idx)
 
-    # Strategy 4: Fallback - extract any numbers 0-8 mentioned
+    # Strategy 4: Look for explicit "NONE" indicators (for 90% neutral clauses)
     if not labels:
-        nums = re.findall(r'\b([0-8])\b', text)
+        none_patterns = [
+            r'\bNONE\b',
+            r'\bno\s+labels?\b',
+            r'\bno\s+categories?\b',
+            r'\bfair\b',
+            r'\bneutral\b',
+        ]
+        for pattern in none_patterns:
+            if re.search(pattern, text_lower):
+                if verbose:
+                    print(f"  Extracted NONE via pattern '{pattern}'")
+                return set()  # Explicitly return empty set for neutral clauses
+
+    # Strategy 5: Fallback - extract numbers ONLY if in "answer" context (not in explanations)
+    # Look for numbers near end of text (last 100 chars) to avoid picking up explanation mentions
+    if not labels:
+        # Only check last portion of text to avoid false positives from reasoning
+        last_portion = text[-100:] if len(text) > 100 else text
+        nums = re.findall(r'\b([0-8])\b', last_portion)
         for n in nums:
             labels.add(int(n))
+
+        if verbose and labels:
+            print(f"  Extracted from last portion (fallback): {sorted(labels)}")
 
     if verbose and labels:
         print(f"  Final extracted labels: {sorted(labels)}")

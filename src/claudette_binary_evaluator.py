@@ -85,23 +85,40 @@ def extract_binary_label_from_output(text: str, verbose: bool = False) -> Set[in
             print(f"  Found 'unfair' in text")
         return {1}
 
-    # Strategy 5: Look for "fair" anywhere in text
-    if 'fair' in text_lower:
+    # Strategy 5: Look for "fair" anywhere in text (but NOT "unfair")
+    # Check for "unfair" first to avoid false positives
+    if 'unfair' not in text_lower and 'fair' in text_lower:
         if verbose:
-            print(f"  Found 'fair' in text")
+            print(f"  Found 'fair' (without 'unfair') in text")
         return {0}
 
-    # Strategy 6: Fallback - extract any 0 or 1
-    nums = re.findall(r'\b([01])\b', text)
+    # Strategy 6: Fallback - extract numbers from LAST portion only (avoid picking up numbers in reasoning)
+    # Check last 50 chars to focus on final answer, not explanation
+    last_portion = text[-50:] if len(text) > 50 else text
+    nums = re.findall(r'\b([01])\b', last_portion)
     if nums:
         label = int(nums[-1])  # Take last occurrence
         if verbose:
-            print(f"  Extracted last number: {label}")
+            print(f"  Extracted last number from end: {label}")
         return {label}
 
-    # Default: fair (conservative - don't flag as unfair unless clear)
+    # Strategy 7: Check for presence of unfair keywords as last resort
+    # If model mentions unfair terms but didn't give clear label, lean towards unfair
+    unfair_keywords = [
+        r'liabilit', r'terminat', r'arbitrat', r'unilateral',
+        r'removal', r'jurisdiction', r'sole\s+discretion',
+        r'without\s+notice', r'at\s+any\s+time'
+    ]
+    for keyword in unfair_keywords:
+        if re.search(keyword, text_lower):
+            if verbose:
+                print(f"  Found unfair keyword '{keyword}', inferring UNFAIR")
+            return {1}
+
+    # Default: If truly ambiguous with NO signals, conservatively mark as FAIR
+    # But this should be rare now with better extraction above
     if verbose:
-        print(f"  No clear label found, defaulting to fair (0)")
+        print(f"  No clear signals found, defaulting to fair (0)")
     return {0}
 
 

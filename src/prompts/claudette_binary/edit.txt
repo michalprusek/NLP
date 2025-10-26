@@ -11,22 +11,13 @@ CRITIC FEEDBACK (parse it and use the top-priority, highest-impact actions):
 {gradient}
 >>>
 
-HARD RULES (prioritized for Micro-F1 improvement)
-- **BALANCE PRECISION & RECALL**: While 90% are FAIR, the 10% UNFAIR clauses MUST be identified correctly!
-  * Avoid over-predicting FAIR (kills Recall)
-  * Avoid over-predicting UNFAIR (kills Precision)
-  * Add "confidence check": If ANY unfair term exists, classify as UNFAIR
-- **BREVITY FIRST**: 7B models perform better with concise prompts
-  * TARGET: 2-3 sentences OR <150 words (shorter is better!)
-  * Remove multi-step frameworks, procedural instructions, verbose explanations
-  * Direct, imperative instructions only
-- **OUTPUT FORMAT**: Explicit format requirement without brackets
-  * Good: "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
-  * Bad: Vague "identify" or "determine" without format
-- **BINARY CLASSIFICATION**: Ensure prompt emphasizes this is simple fair vs unfair classification (not multi-label)
-- **CLEAR CRITERIA**: Prompt should guide model to check for specific unfair terms (liability limits, forced arbitration, etc.)
-- **REASONING FIRST**: Encourage chain-of-thought before final classification
-- **NO META**: Output ONLY the improved prompt, no preface, no quotes, no code fences
-- **STABILITY**: Prefer clarifications and structured instructions
+HARD RULES (for F1 improvement):
+1. **BREVITY**: Keep prompt under 150 words (2-3 sentences). 7B models struggle with long prompts.
+2. **OUTPUT FORMAT**: Must specify "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
+3. **BALANCE F1**: While 90% are FAIR, the 10% UNFAIR MUST be detected (avoid over-predicting FAIR which kills Recall)
+4. **CLEAR CRITERIA**: List specific unfair indicators (liability, arbitration, unilateral terms, "sole discretion")
+5. **EXTRACTION**: Gradients mention extraction looks at LAST 50 chars, so put final answer at end
+6. **NO META**: Output ONLY the improved prompt, no preface/quotes/fences
+7. **STABILITY**: Make small edits (5-10%), don't rewrite completely
 
 NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT:
