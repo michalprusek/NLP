@@ -15,7 +15,7 @@ HARD RULES (for Micro-F1 improvement):
 1. **BREVITY**: Keep prompt under 150 words (2-3 sentences). 7B models struggle with long prompts.
 2. **OUTPUT FORMAT**: Must specify "LABELS: 0, 3" or "LABELS: NONE" (NO brackets like [0,3])
 3. **MULTI-LABEL**: Emphasize checking ALL categories (not just first match)
-4. **EXTRACTION**: Extraction looks at LAST 100 chars, so put final answer at end with "LABELS:" prefix
+4. **EXTRACTION**: Extractor prioritizes structured "LABELS:" markers anywhere, then category names, then NONE indicators, then last ~100 chars fallback. Best practice: put final "LABELS: ..." as LAST LINE with no text after.
 5. **NO META**: Output ONLY the improved prompt, no preface/quotes/fences
 6. **STABILITY**: Make small edits (5-10%), don't rewrite completely
 7. **REASONING**: Force model to reason about answer

@@ -21,7 +21,21 @@ TASK INFO:
 - Binary classification: FAIR (0) vs UNFAIR (1)
 - 90% clauses are FAIR (neutral/informational), 10% are UNFAIR
 - Output format: "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
-- Extraction: looks for "CLASSIFICATION:", "fair"/"unfair" keywords, or 0/1 in LAST 50 chars
+- Model evaluates ONE clause at a time (not batched together)
+
+EXTRACTION DETAILS (INVARIANT — how answers are parsed):
+- Highest priority: explicit structured labels (case-insensitive) ANYWHERE:
+  "label|classification|answer|prediction: 0|1" or ": unfair" / ": fair",
+  and "final answer|label|classification: 0|1|unfair|fair"
+- Negations handled BEFORE keyword matching: "not unfair" ⇒ FAIR (0), "not fair" ⇒ UNFAIR (1)
+- If no structured label: conclusion region (last ~200 chars) searched for affirmative statements:
+  "is|likely|probably ... unfair/fair", "classified as unfair/fair", "conclusion: unfair/fair"
+- Next fallback: in last ~100 chars, standalone word "unfair" ⇒ 1, standalone "fair" ⇒ 0
+  (ignored if part of "unfair" or preceded by negation)
+- Then: last number 0/1 found in last ~100 chars ⇒ label
+- Very short outputs (<20 chars): simple keywords or just "0"/"1" accepted
+- Final fallback: if nothing matches, defaults to FAIR (0)
+- Best practice: END output with exact line "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR" as LAST LINE (no text after) to avoid false positives from explanatory text
 
 UNFAIR INDICATORS:
 Liability limits, unilateral termination/changes, arbitration, content removal, jurisdiction/choice of law, "at our sole discretion", "without notice"

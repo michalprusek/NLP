@@ -16,7 +16,7 @@ HARD RULES (for F1 improvement):
 2. **OUTPUT FORMAT**: Must specify "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
 3. **BALANCE F1**: While 90% are FAIR, the 10% UNFAIR MUST be detected (avoid over-predicting FAIR which kills Recall)
 4. **CLEAR CRITERIA**: List specific unfair indicators (liability, arbitration, unilateral terms, "sole discretion")
-5. **EXTRACTION**: Gradients mention extraction looks at LAST 50 chars, so put final answer at end
+5. **EXTRACTION**: Extractor prioritizes structured "CLASSIFICATION:" markers anywhere, then handles negations, then searches conclusion region (last ~200 chars) for affirmative statements, then standalone keywords in last ~100 chars, then last number 0/1. Best practice: put final "CLASSIFICATION: ..." as LAST LINE with no text after to avoid false positives from explanatory text.
 6. **NO META**: Output ONLY the improved prompt, no preface/quotes/fences
 7. **STABILITY**: Make small edits (5-10%), don't rewrite completely
 

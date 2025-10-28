@@ -18,7 +18,18 @@ TASK INFO:
 - Multi-label classification (0-8 categories per clause, most common=0)
 - 90% clauses are FAIR (LABELS: NONE), 10% have 1+ unfair labels
 - Output format: "LABELS: 0, 3" or "LABELS: NONE" (no brackets)
-- Extraction: looks for "LABELS:", category names, or numbers in LAST 100 chars
+- Model evaluates ONE clause at a time (not batched together)
+
+EXTRACTION DETAILS (INVARIANT — how answers are parsed):
+- Highest priority: structured markers (case-insensitive) ANYWHERE in output:
+  "final_labels:", "labels:", "categories:", "classification:" — with numbers (0–8) OR category NAMES
+  (square brackets accepted, e.g., "labels: [0, 3]")
+- Recognized category names: Limitation of liability, Unilateral termination, Unilateral change, Arbitration, Content removal, Choice of law, Contract by using, Jurisdiction
+- NONE indicators: "NONE", "no labels", "no categories", "fair", "neutral" → empty set
+- Full-text fallback: searches entire output for category name mentions
+- Final fallback: if nothing above matches, reads ONLY last ~100 chars and extracts any digits 0–8
+- Order of precedence: structured numbers → structured names → full-text names → NONE indicators → tail-number fallback
+- Best practice: END output with exact line "LABELS: <numbers>" or "LABELS: NONE" as LAST LINE (no text after)
 
 CATEGORIES (with definitions to help distinguish):
 0=Limitation of liability (For what actions/events the provider claims they will not be liable?)

@@ -33,6 +33,21 @@ EVALUATION SYSTEM (INVARIANT):
 - Secondary metrics: Unfair-F1, Precision (avoid false positives), Recall (catch all unfair clauses), Accuracy
 - Common failures: over-classifying neutral text as unfair (false positives), unclear output format, missing subtle unfair terms (false negatives), not reasoning before classification, ignoring FAIR class performance
 
+
+EXTRACTION DETAILS (INVARIANT — how answers are parsed):
+- Highest priority: explicit structured labels (case-insensitive) ANYWHERE:
+  "label|classification|answer|prediction: 0|1" or ": unfair" / ": fair",
+  and "final answer|label|classification: 0|1|unfair|fair"
+- Negations handled BEFORE keyword matching: "not unfair" ⇒ FAIR (0), "not fair" ⇒ UNFAIR (1)
+- If no structured label: the conclusion region (last ~200 chars) is searched for affirmative statements like
+  "is|likely|probably ... unfair/fair", "classified as unfair/fair", "conclusion: unfair/fair"
+- Next fallback: in the last ~100 chars, standalone word "unfair" ⇒ 1, standalone word "fair" ⇒ 0
+  (ignored if part of "unfair" or preceded by negation)
+- Then: last number 0/1 found in the last ~100 chars ⇒ label
+- Very short outputs (<20 chars): simple keywords or just "0"/"1" are accepted
+- Final fallback: if nothing matches, defaults to FAIR (0)
+- Best practice: END your output with EXACT one final line "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR" — with no text after — to avoid false positives from explanatory text.
+
 PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 

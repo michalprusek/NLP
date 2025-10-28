@@ -6,8 +6,8 @@
 set -e
 
 # Configuration
-TASK_MODEL=${TASK_MODEL:-"Equall/Saul-7B-Instruct-v1"}  # Default: Qwen 2.5 7B (works reliably with vLLM)
-META_MODEL=${META_MODEL:-""}  # Default: Claude Haiku for meta-optimization
+TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}  # Qwen/Qwen2.5-7B-Instruct or Equall/Saul-7B-Instruct-v1
+META_MODEL=${META_MODEL:-""}  # haiku
 METHOD=${METHOD:-"opro"}
 TASK=${TASK:-"claudette_binary"}
 
@@ -39,7 +39,7 @@ CMD="$CMD --backend vllm"
 CMD="$CMD --tensor-parallel-size 2"
 CMD="$CMD --gpu-ids 0,1"
 CMD="$CMD --iterations 10"
-CMD="$CMD --minibatch-size 2500"
+CMD="$CMD --minibatch-size 100"
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 

@@ -31,6 +31,18 @@ EVALUATION SYSTEM (INVARIANT):
 - Secondary metrics: Subset Accuracy (exact match), Macro-F1 (per-category average)
 - Common failures: over-predicting NONE (kills Recall), missing secondary labels, unclear output format, not checking ALL categories
 
+
+EXTRACTION DETAILS (INVARIANT — how answers are parsed):
+- Preferred: END your output with EXACT one line: LABELS: <comma-separated 0–8> or LABELS: NONE
+- Structured markers (case-insensitive) are recognized ANYWHERE and have highest priority:
+  final_labels:, labels:, categories:, classification: — with numbers (0–8) OR with category NAMES
+  (square brackets are accepted, e.g., "labels: [0, 3]")
+- Recognized category names (mapped to numbers): Limitation of liability, Unilateral termination, Unilateral change, Arbitration, Content removal, Choice of law, Contract by using, Jurisdiction
+- NONE indicators: NONE, "no labels", "no categories", "fair", "neutral" → empty set
+- Fallback if nothing above: extractor reads ONLY the last ~100 characters and takes any digits 0–8 found there
+- Order of precedence: structured numbers → structured names → full‑text name mentions → NONE indicators → tail-number fallback
+- Best practice to avoid extraction errors: put the final LABELS line as the LAST LINE with no text after it.
+
 PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
