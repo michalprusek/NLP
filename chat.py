@@ -10,8 +10,28 @@ Usage:
 import os
 import re
 import sys
+import logging
 from typing import List, Dict, Optional
+
+# Suppress all vLLM progress bars and logs BEFORE importing
+os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TQDM_DISABLE"] = "1"  # Disable all progress bars
+
 from src.llm_client import create_llm_client, LLMClient
+
+# ANSI color codes for terminal output
+class Colors:
+    BLUE = '\033[94m'      # User messages
+    GREEN = '\033[92m'     # Model responses
+    RED = '\033[91m'       # Config/system messages
+    RESET = '\033[0m'      # Reset to default
+
+# Suppress Python logging for all libraries
+logging.getLogger("vllm").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("torch").setLevel(logging.ERROR)
+logging.getLogger("networkx").setLevel(logging.ERROR)
 
 
 class ChatSession:
@@ -333,7 +353,7 @@ class ChatSession:
         """Display model information at startup."""
         token_count = self.get_system_prompt_tokens()
 
-        print("\n" + "="*80)
+        print(f"{Colors.RED}\n" + "="*80)
         print(f"MODEL: {self.get_display_name()}")
         print(f"BACKEND: {self.MODEL_CONFIG[self.model_key]['backend']}")
         print(f"CONTEXT WINDOW: {self.context_window:,} tokens")
@@ -345,7 +365,7 @@ class ChatSession:
         else:
             print("\nSYSTEM PROMPT: (empty)")
 
-        print("\nType /help for commands or start chatting.")
+        print(f"\nType /help for commands or start chatting.{Colors.RESET}")
         print()
 
     def show_context_summary(self) -> None:
@@ -355,7 +375,7 @@ class ChatSession:
         used = self.context_window - remaining - safety_margin
         percent = (used / self.context_window) * 100 if self.context_window > 0 else 0
 
-        print(f"\n[Context: {remaining:,} / {self.context_window:,} tokens remaining ({percent:.1f}% used)]")
+        print(f"{Colors.RED}\n[Context: {remaining:,} / {self.context_window:,} tokens remaining ({percent:.1f}% used)]{Colors.RESET}")
 
     def _show_help(self) -> str:
         """Return formatted help text."""
@@ -392,23 +412,23 @@ Note: Setting a new system prompt will clear the conversation history.
 
 def main():
     """Main CLI loop."""
-    print("="*80)
+    print(f"{Colors.RED}{'='*80}")
     print("CLI Chat Interface")
     print("="*80)
-    print("\nInitializing with default model (Qwen 2.5 7B)...")
+    print(f"\nInitializing with default model (Qwen 2.5 7B)...{Colors.RESET}")
 
     # Initialize with default model
     try:
         session = ChatSession(initial_model="qwen", system_prompt="")
     except Exception as e:
-        print(f"Failed to initialize: {e}")
+        print(f"{Colors.RED}Failed to initialize: {e}{Colors.RESET}")
         sys.exit(1)
 
     # Main loop
     while True:
         try:
-            # Display prompt
-            prompt_prefix = f"[{session.get_display_name()}] You: "
+            # Display prompt in blue
+            prompt_prefix = f"{Colors.BLUE}[{session.get_display_name()}] You: {Colors.RESET}"
             user_input = input(prompt_prefix).strip()
 
             # Skip empty input
@@ -419,18 +439,19 @@ def main():
             cmd_result = session.execute_command(user_input)
 
             if cmd_result == "COMMAND_EXIT":
-                print("\nGoodbye!")
+                print(f"\n{Colors.RED}Goodbye!{Colors.RESET}")
                 break
             elif cmd_result is not None:
-                # Command was executed
-                print(f"\n{cmd_result}\n")
+                # Command was executed (print in red for config messages)
+                print(f"{Colors.RED}\n{cmd_result}\n{Colors.RESET}")
             else:
                 # Not a command, treat as chat message
                 print()  # Blank line before response
                 response = session.chat(user_input)
 
                 if response:
-                    print(f"{session.get_display_name()}: {response}")
+                    # Print model response in green
+                    print(f"{Colors.GREEN}{session.get_display_name()}: {response}{Colors.RESET}")
                     session.show_context_summary()
                 print()  # Blank line after response
 
