@@ -12,7 +12,15 @@ import re
 import sys
 import logging
 import contextlib
+import atexit
 from typing import List, Dict, Optional
+
+# Enable readline for arrow key history (Linux/Mac)
+try:
+    import readline
+except ImportError:
+    # Windows doesn't have readline by default
+    readline = None
 
 # Suppress all vLLM progress bars and logs BEFORE importing
 os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
@@ -430,6 +438,22 @@ def main():
     print("CLI Chat Interface")
     print("="*80)
     print(f"\nInitializing with default model (Qwen 2.5 7B)...{Colors.RESET}")
+
+    # Setup readline history for arrow key navigation (↑/↓)
+    if readline:
+        history_file = os.path.expanduser("~/.chat_history")
+
+        # Load existing history
+        try:
+            readline.read_history_file(history_file)
+        except FileNotFoundError:
+            pass
+
+        # Limit history to 1000 entries
+        readline.set_history_length(1000)
+
+        # Save history on exit
+        atexit.register(lambda: readline.write_history_file(history_file))
 
     # Initialize with default model
     try:
