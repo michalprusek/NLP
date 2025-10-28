@@ -11,12 +11,12 @@ import os
 import re
 import sys
 import logging
+import contextlib
 from typing import List, Dict, Optional
 
 # Suppress all vLLM progress bars and logs BEFORE importing
 os.environ["VLLM_LOGGING_LEVEL"] = "ERROR"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-os.environ["TQDM_DISABLE"] = "1"  # Disable all progress bars
 
 from src.llm_client import create_llm_client, LLMClient
 
@@ -31,7 +31,13 @@ class Colors:
 logging.getLogger("vllm").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("torch").setLevel(logging.ERROR)
+logging.getLogger("torch.distributed").setLevel(logging.ERROR)
 logging.getLogger("networkx").setLevel(logging.ERROR)
+
+# Suppress warnings from PyTorch distributed
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.distributed")
+warnings.filterwarnings("ignore", message=".*destroy_process_group.*")
 
 
 class ChatSession:
@@ -124,18 +130,20 @@ class ChatSession:
                     print("See README_CHAT.md for setup instructions.")
                     return False
 
-            # Create new client
-            self.llm_client = create_llm_client(
-                model_name=config["name"],
-                backend=config["backend"],
-                max_new_tokens=512,
-                temperature=0.7,
-            )
+            # Create new client (suppress loading messages and progress bars)
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stderr(devnull), contextlib.redirect_stdout(devnull):
+                    self.llm_client = create_llm_client(
+                        model_name=config["name"],
+                        backend=config["backend"],
+                        max_new_tokens=512,
+                        temperature=0.7,
+                    )
 
             self.model_key = model_key
             self.context_window = config["context_window"]
 
-            print(f"Model loaded successfully!")
+            print(f"{Colors.RED}Model loaded successfully!{Colors.RESET}")
             self.show_startup_info()
             return True
 
@@ -249,7 +257,10 @@ class ChatSession:
         # Generate response
         try:
             # Temperature already set at client initialization
-            response = self.llm_client.generate(full_prompt)
+            # Suppress progress bars by redirecting stderr
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stderr(devnull):
+                    response = self.llm_client.generate(full_prompt)
 
             # Clean up response (remove any leading/trailing whitespace)
             response = response.strip()
