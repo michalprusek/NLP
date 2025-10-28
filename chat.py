@@ -288,7 +288,10 @@ class ChatSession:
             raise  # Re-raise to let outer handler deal with it
 
         except Exception as e:
+            import traceback
             print(f"\nError generating response: {type(e).__name__}: {e}")
+            print("\nFull traceback:")
+            traceback.print_exc()
             print("Your message was removed from history. Please try again or rephrase.")
             # Remove user message from history since generation failed
             self.conversation_history.pop()

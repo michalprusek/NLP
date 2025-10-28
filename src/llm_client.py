@@ -363,7 +363,8 @@ class VLLMClient(LLMClient):
             repetition_penalty=1.1,  # Penalize repetition
         )
 
-        outputs = self.llm.generate(formatted_prompts, sampling_params)
+        # Disable progress bar to avoid ZeroDivisionError in vLLM for fast generations
+        outputs = self.llm.generate(formatted_prompts, sampling_params, use_tqdm=False)
         return [output.outputs[0].text for output in outputs]
 
 
