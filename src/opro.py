@@ -259,7 +259,7 @@ NOW GENERATE YOUR NEW PROMPT:"""
         # Generate answers (handle both 'question' and 'text' fields)
         questions = [example.get('question', example.get('text', '')) for example in batch]
         prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
-        outputs = self.task_llm.generate_batch(prompts, temperature=0.1)
+        outputs = self.task_llm.generate_batch(prompts, temperature=0.0)
 
         # Evaluate
         indices = [example['idx'] for example in batch]

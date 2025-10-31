@@ -90,12 +90,15 @@ class PromptCandidate:
         self.score = self.sum_scores / self.num_evals
         self.last_score = new_score  # Track last evaluation
 
-    def ucb_score(self, total_evals: int, c: float = 2.0) -> float:
+    def ucb_score(self, t: int, c: float = 2.0) -> float:
         """
         Compute Upper Confidence Bound score for exploration/exploitation.
 
+        UCB formula from paper Algorithm 3 line 5:
+            UCB(p) = Qt(p) + c * sqrt(log(t) / Nt(p))
+
         Args:
-            total_evals: Total number of evaluations across all candidates
+            t: Time step (iteration count in selection loop, not total evals)
             c: Exploration constant
 
         Returns:
@@ -103,7 +106,7 @@ class PromptCandidate:
         """
         if self.num_evals == 0:
             return float('inf')
-        return self.score + c * np.sqrt(np.log(total_evals) / self.num_evals)
+        return self.score + c * np.sqrt(np.log(t) / self.num_evals)
 
 
 def load_prompt_template(task_type: str, template_name: str, default_template: str = None) -> str:
@@ -548,31 +551,45 @@ class ProTeGi:
             # Use stratified sampling for better dataset coverage
             dataset_size = len(self.evaluator)
             indices = self._stratified_sample(dataset_size, min(self.minibatch_size, dataset_size))
-            # Use get_batch to handle different dataset formats (GSM8K vs Claudette)
-            batch = []
-            for idx in indices:
-                example = self.evaluator.dataset[idx]
-                # Handle both GSM8K (question/answer) and Claudette (sentence/labels) formats
-                question = example.get('question', example.get('sentence', example.get('text', '')))
-
-                # For Claudette, extract labels from boolean fields
-                if 'sentence' in example:
-                    # Import get_ground_truth_labels from claudette_evaluator
-                    from src.claudette_evaluator import get_ground_truth_labels
-                    labels = get_ground_truth_labels(example)
-                    answer = str(sorted(labels))
-                else:
-                    # GSM8K format
-                    answer = example.get('answer', str(example.get('label', '')))
-
-                batch.append({
-                    'idx': idx,
-                    'question': question,
-                    'answer': answer
-                })
         else:
             # Sequential sampling (for final evaluation)
-            batch = self.evaluator.get_batch(0, self.minibatch_size)
+            indices = list(range(min(self.minibatch_size, len(self.evaluator))))
+
+        return self._evaluate_prompt_on_indices(prompt, indices)
+
+    def _evaluate_prompt_on_indices(self, prompt: str, indices: List[int]) -> Dict[str, Any]:
+        """
+        Evaluate a prompt on specific dataset indices.
+
+        Args:
+            prompt: Prompt to evaluate
+            indices: Dataset indices to evaluate on
+
+        Returns:
+            Evaluation results
+        """
+        # Build batch from indices
+        batch = []
+        for idx in indices:
+            example = self.evaluator.dataset[idx]
+            # Handle both GSM8K (question/answer) and Claudette (sentence/labels) formats
+            question = example.get('question', example.get('sentence', example.get('text', '')))
+
+            # For Claudette, extract labels from boolean fields
+            if 'sentence' in example:
+                # Import get_ground_truth_labels from claudette_evaluator
+                from src.claudette_evaluator import get_ground_truth_labels
+                labels = get_ground_truth_labels(example)
+                answer = str(sorted(labels))
+            else:
+                # GSM8K format
+                answer = example.get('answer', str(example.get('label', '')))
+
+            batch.append({
+                'idx': idx,
+                'question': question,
+                'answer': answer
+            })
 
         # Generate answers
         questions = [example['question'] for example in batch]
@@ -852,7 +869,12 @@ Output:"""
 
     def optimize(self, initial_prompt: str, verbose: bool = True) -> Tuple[str, List[Dict]]:
         """
-        Run ProTeGi optimization.
+        Run ProTeGi optimization with correct budgeted beam search.
+
+        Algorithm from paper:
+        1. EXPAND: Generate new candidates from ALL parents in beam
+        2. SELECT: Use bandit (UCB) to allocate evaluation budget across candidate pool
+        3. UPDATE: Keep top-b candidates with diversity
 
         Args:
             initial_prompt: Starting prompt
@@ -873,140 +895,148 @@ Output:"""
         for iteration in range(self.num_iterations):
             if verbose:
                 print(f"\n--- Iteration {iteration + 1}/{self.num_iterations} ---")
+                print(f"Current beam size: {len(beam)}")
 
-            # Select candidate using UCB
-            ucb_scores = [c.ucb_score(self.total_evals, self.ucb_constant) for c in beam]
-            selected_idx = np.argmax(ucb_scores)
-            candidate = beam[selected_idx]
+            # ================================================================
+            # PHASE 1: EXPAND - Generate candidates from ALL parents in beam
+            # ================================================================
+            new_candidates = []
 
-            if verbose:
-                print(f"Selected candidate (UCB: {ucb_scores[selected_idx]:.3f})")
-                print(f"Prompt: {candidate.prompt}")
+            for parent_idx, parent in enumerate(beam):
+                if verbose:
+                    print(f"\n Expanding parent {parent_idx + 1}/{len(beam)}")
+                    print(f"  Prompt: {parent.prompt[:80]}...")
 
-            # Evaluate on random minibatch from train set
-            results = self.evaluate_prompt(candidate.prompt, random_sample=True)
-
-            score = self._get_score(results)
-            candidate.update_score(score)
-            self.total_evals += 1
-
-            if verbose:
-                print(f"Accuracy: {results['accuracy']:.1%} ({results['correct']}/{results['total']})")
-
-                # Show task-specific metrics
-                if self.optimization_metric == 'micro_f1' and 'micro_f1' in results:
-                    # Multi-label classification (e.g., Claudette)
-                    hamming_str = f" | Hamming: {results['hamming_loss']:.3f}" if 'hamming_loss' in results else ""
-                    print(f"  Micro-F1: {results['micro_f1']:.1%} | Macro-F1: {results['macro_f1']:.1%}{hamming_str}")
-                elif self.optimization_metric == 'f1' and 'f1' in results:
-                    # Binary classification (e.g., Claudette Binary)
-                    print(f"  F1: {results['f1']:.1%} | Precision: {results.get('precision', 0):.1%} | Recall: {results.get('recall', 0):.1%}")
-                    # Also show macro-F1 for comparison (average of both classes)
-                    if 'macro_f1' in results:
-                        print(f"  Macro-F1: {results['macro_f1']:.1%} (avg of both classes)")
-
-                print(f"  Optimization score ({self.optimization_metric}): {score:.1%}")
-
-                # Show failed examples
-                print_failed_examples_protegi(results, num_examples=3)
-
-            # Record history
-            self.history.append({
-                'iteration': iteration,
-                'prompt': candidate.prompt,
-                'score': score,
-                'selected_idx': selected_idx,
-            })
-
-            # Generate multiple gradients (m=4 as per paper Algorithm 2)
-            # Sample different error groups for diversity
-            error_details = [d for d in results['details'] if not d['correct']]
-
-            num_gradients = min(4, max(1, len(error_details) // 4))  # m=4 gradients
-
-            for grad_idx in range(num_gradients):
-                # Sample a small group of errors (4 errors per gradient as per paper)
-                if len(error_details) >= 4:
-                    error_sample_indices = random.sample(range(len(error_details)), min(4, len(error_details)))
-                    error_sample = [error_details[i] for i in error_sample_indices]
-                else:
-                    error_sample = error_details
-
-                # Create mini results dict for this error group
-                mini_results = {
-                    'details': error_sample,
-                    'total': len(error_sample),
-                    'correct': 0,
-                    'accuracy': 0.0
-                }
-
-                # Generate gradient from this error group
-                gradient = self.generate_gradient(candidate, mini_results)
+                # Evaluate parent on minibatch
+                results = self.evaluate_prompt(parent.prompt, random_sample=True)
+                score = self._get_score(results)
+                parent.update_score(score)
+                self.total_evals += 1
 
                 if verbose:
-                    print(f"Gradient {grad_idx+1}/{num_gradients}: {gradient[:100]}...")
+                    print(f"  Accuracy: {results['accuracy']:.1%}, Score: {score:.1%}")
+                    print_failed_examples_protegi(results, num_examples=2)
 
-                # Apply gradient to generate new prompt (q=1 per gradient as per paper)
-                new_prompt = self.apply_gradient(candidate, gradient, verbose=verbose, candidate_num=grad_idx+1)
+                # Generate multiple gradients from different error groups
+                error_details = [d for d in results['details'] if not d['correct']]
 
-                # Skip if validation failed
-                if new_prompt is None:
-                    continue
+                # Generate m=4 gradients per parent (as per paper)
+                num_gradients = min(4, max(1, len(error_details) // 4))
 
-                # Skip if duplicate
-                if new_prompt in [c.prompt for c in beam]:
+                for grad_idx in range(num_gradients):
+                    # Sample error group for this gradient
+                    if len(error_details) >= 4:
+                        error_sample = random.sample(error_details, min(4, len(error_details)))
+                    else:
+                        error_sample = error_details
+
+                    # Create results dict for gradient generation
+                    mini_results = {
+                        'details': error_sample,
+                        'total': len(error_sample),
+                        'correct': 0,
+                        'accuracy': 0.0
+                    }
+
+                    # Generate gradient
+                    gradient = self.generate_gradient(parent, mini_results)
+
                     if verbose:
-                        print(f"   Candidate {grad_idx+1} skipped (duplicate)")
-                    continue
+                        print(f"  Gradient {grad_idx+1}: {gradient[:80]}...")
 
-                # Generate Monte Carlo paraphrases (p=2 as per paper Algorithm 2 line 5)
-                paraphrases = self._generate_paraphrases(new_prompt, num_paraphrases=2)
+                    # Apply gradient to generate new prompt (q=1 per gradient)
+                    new_prompt = self.apply_gradient(parent, gradient, verbose=verbose, candidate_num=grad_idx+1)
 
-                # Evaluate all candidates (original + paraphrases)
-                all_new_prompts = [new_prompt] + paraphrases
-
-                for i, prompt_variant in enumerate(all_new_prompts):
-                    # Skip duplicates
-                    if prompt_variant in [c.prompt for c in beam]:
-                        if verbose:
-                            print(f"   Variant {i+1} skipped (duplicate)")
+                    if new_prompt is None:
                         continue
 
-                    # Evaluate BEFORE adding to beam
-                    new_results = self.evaluate_prompt(prompt_variant, random_sample=True)
+                    # Skip duplicates
+                    all_prompts = [c.prompt for c in beam + new_candidates]
+                    if new_prompt in all_prompts:
+                        if verbose:
+                            print(f"    Skipped (duplicate)")
+                        continue
 
-                    # Create candidate with proper score
-                    new_candidate = PromptCandidate(
-                        prompt=prompt_variant,
-                        history=candidate.history + [prompt_variant]
-                    )
-                    new_score = self._get_score(new_results)
-                    new_candidate.update_score(new_score)
+                    # Generate Monte Carlo paraphrases (p=2 as per paper)
+                    paraphrases = self._generate_paraphrases(new_prompt, num_paraphrases=2)
+
+                    # Add all variants (original + paraphrases)
+                    for variant in [new_prompt] + paraphrases:
+                        if variant not in all_prompts:
+                            new_candidates.append(PromptCandidate(
+                                prompt=variant,
+                                history=parent.history + [variant]
+                            ))
+                            all_prompts.append(variant)
+
+            if verbose:
+                print(f"\n Generated {len(new_candidates)} new candidates from {len(beam)} parents")
+
+            # ================================================================
+            # PHASE 2: BUDGETED SELECTION - Allocate evaluation budget via UCB
+            # ================================================================
+
+            # Create candidate pool (existing beam + new candidates)
+            candidate_pool = beam + new_candidates
+
+            if verbose:
+                print(f"\n Candidate pool: {len(candidate_pool)} total ({len(beam)} existing + {len(new_candidates)} new)")
+
+            # Fair initial evaluation: evaluate all new candidates once on same minibatch
+            if new_candidates:
+                if verbose:
+                    print(f" Initial evaluation of {len(new_candidates)} new candidates on shared minibatch...")
+
+                # Prepare shared minibatch for fair comparison
+                dataset_size = len(self.evaluator)
+                shared_minibatch_indices = self._stratified_sample(dataset_size, min(self.minibatch_size, dataset_size))
+
+                for cand_idx, candidate in enumerate(new_candidates):
+                    results = self._evaluate_prompt_on_indices(candidate.prompt, shared_minibatch_indices)
+                    score = self._get_score(results)
+                    candidate.update_score(score)
                     self.total_evals += 1
 
-                    if verbose:
-                        variant_type = "original" if i == 0 else f"paraphrase {i}"
-                        print(f"  Gradient {grad_idx+1} {variant_type}: Acc={new_results['accuracy']:.1%}", end='')
+                    if verbose and cand_idx < 5:  # Show first 5
+                        print(f"  Candidate {cand_idx+1}: Acc={results['accuracy']:.1%}, Score={score:.1%}")
 
-                        # Show task-specific metrics
-                        if self.optimization_metric == 'micro_f1' and 'micro_f1' in new_results:
-                            # Multi-label: show micro and macro F1
-                            print(f", Micro-F1={new_results['micro_f1']:.1%}, Macro-F1={new_results.get('macro_f1', 0):.1%}", end='')
-                        elif self.optimization_metric == 'f1' and 'f1' in new_results:
-                            # Binary: show F1 for positive class and Macro-F1 (avg of both classes)
-                            macro_f1_str = f", Macro-F1={new_results['macro_f1']:.1%}" if 'macro_f1' in new_results else ""
-                            print(f", F1={new_results['f1']:.1%}{macro_f1_str}", end='')
+            # Budgeted selection: allocate additional pulls using UCB
+            # Budget = beam_size * num_pulls_per_candidate
+            num_additional_pulls = self.beam_size * 3  # Allocate 3 additional pulls per beam slot
 
-                        print(f", Score={new_score:.1%}")
+            if verbose:
+                print(f"\n Budgeted selection: {num_additional_pulls} additional pulls allocated via UCB")
 
-                        # Show failed examples
-                        print_failed_examples_protegi(new_results, num_examples=2)
+            for pull_idx in range(num_additional_pulls):
+                # Select candidate with highest UCB score
+                # Time step t = pull_idx + 1 (as per Algorithm 3 line 5)
+                t = pull_idx + 1
+                ucb_scores = [c.ucb_score(t, self.ucb_constant) for c in candidate_pool]
+                selected_idx = np.argmax(ucb_scores)
+                selected_candidate = candidate_pool[selected_idx]
 
-                    # Add to beam
-                    beam.append(new_candidate)
+                # Evaluate on fresh random minibatch
+                results = self.evaluate_prompt(selected_candidate.prompt, random_sample=True)
+                score = self._get_score(results)
+                selected_candidate.update_score(score)
+                self.total_evals += 1
 
-            # Keep only top beam_size candidates with diversity penalty
-            beam = self._select_diverse_beam(beam, self.beam_size)
+                if verbose and pull_idx < 3:  # Show first 3 pulls
+                    print(f"  Pull {pull_idx+1}: Selected candidate {selected_idx} (UCB={ucb_scores[selected_idx]:.3f}), Score={score:.1%}")
+
+            # ================================================================
+            # PHASE 3: UPDATE BEAM - Select top-b with diversity
+            # ================================================================
+            beam = self._select_diverse_beam(candidate_pool, self.beam_size)
+
+            # Record history (best candidate stats)
+            best = beam[0]
+            self.history.append({
+                'iteration': iteration,
+                'prompt': best.prompt,
+                'score': best.score,
+                'num_evals': best.num_evals,
+            })
 
             if verbose:
                 best = beam[0]
@@ -1030,7 +1060,8 @@ Output:"""
                 original_evaluator = self.evaluator
                 self.evaluator = self.validation_evaluator
 
-                val_results = self.evaluate_prompt(best_candidate.prompt, random_sample=True)
+                # Use fixed holdout (random_sample=False) for stable validation curves
+                val_results = self.evaluate_prompt(best_candidate.prompt, random_sample=False)
                 val_score = self._get_score(val_results)
 
                 # Restore original evaluator
