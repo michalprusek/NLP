@@ -1009,8 +1009,9 @@ Output:"""
 
             for pull_idx in range(num_additional_pulls):
                 # Select candidate with highest UCB score
-                # Time step t = pull_idx + 1 (as per Algorithm 3 line 5)
-                t = pull_idx + 1
+                # Time step t = total pulls across all candidates (as per Algorithm 3 line 5)
+                # t = 1 + sum of all evaluations done so far in the candidate pool
+                t = 1 + sum(c.num_evals for c in candidate_pool)
                 ucb_scores = [c.ucb_score(t, self.ucb_constant) for c in candidate_pool]
                 selected_idx = np.argmax(ucb_scores)
                 selected_candidate = candidate_pool[selected_idx]
@@ -1022,7 +1023,7 @@ Output:"""
                 self.total_evals += 1
 
                 if verbose and pull_idx < 3:  # Show first 3 pulls
-                    print(f"  Pull {pull_idx+1}: Selected candidate {selected_idx} (UCB={ucb_scores[selected_idx]:.3f}), Score={score:.1%}")
+                    print(f"  Pull {pull_idx+1}: Selected candidate {selected_idx} (UCB={ucb_scores[selected_idx]:.3f}, t={t}), Score={score:.1%}")
 
             # ================================================================
             # PHASE 3: UPDATE BEAM - Select top-b with diversity
