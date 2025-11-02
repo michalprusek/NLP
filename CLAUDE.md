@@ -165,16 +165,19 @@ Both ProTeGi and OPRO now support separate models for different roles:
 6. Repeat until convergence or iteration limit
 
 **OPRO Workflow:**
-1. Evaluate initial seed prompts
-2. Format top-K scored prompts as context for meta-optimizer
-3. LLM generates N new candidate prompts
-4. Evaluate candidates, keep top-K overall
-5. Repeat, allowing LLM to learn patterns from successful prompts
+1. **Fixed Evaluation Set**: Create small fixed subset of training data (~3.5% as in paper)
+2. Evaluate initial seed prompts on this SAME fixed set
+3. Format top-K scored prompts as context for meta-optimizer
+4. LLM generates N new candidate prompts
+5. Evaluate candidates on the SAME fixed set (ensures comparable scores)
+6. Keep top-K overall, repeat
+7. **Key advantage**: All prompts evaluated on identical data → directly comparable scores, no noise from different samples
 
-**Stratified Sampling:**
-- ProTeGi uses stratified sampling without replacement for better dataset coverage
-- Tracks used indices, resets when >80% of dataset seen
-- Helps avoid overfitting to specific examples
+**Evaluation Sampling Strategies:**
+- **OPRO**: Fixed evaluation set (same examples for all prompts) - ensures comparable scores, avoids noisy signals
+- **ProTeGi**: Stratified sampling without replacement for better dataset coverage
+  - Tracks used indices, resets when >80% of dataset seen
+  - Helps avoid overfitting to specific examples
 
 **Diversity Management:**
 - ProTeGi beam selection includes diversity penalty (SequenceMatcher similarity)
