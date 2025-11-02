@@ -915,7 +915,7 @@ Output:"""
 
                 if verbose:
                     print(f"  Accuracy: {results['accuracy']:.1%}, Score: {score:.1%}")
-                    print_failed_examples_protegi(results, num_examples=2)
+                    # print_failed_examples_protegi(results, num_examples=2)
 
                 # Generate multiple gradients from different error groups
                 error_details = [d for d in results['details'] if not d['correct']]

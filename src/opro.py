@@ -359,7 +359,7 @@ class OPRO:
             if verbose:
                 print(f"Score: {score:.1%} | Prompt: {prompt}")
                 # Show failed examples
-                print_failed_examples_opro(results, num_examples=3)
+                # print_failed_examples_opro(results, num_examples=3)
 
         # Optimization loop
         for iteration in range(self.num_iterations):
@@ -392,7 +392,7 @@ class OPRO:
                 if verbose:
                     print(f"Score: {score:.1%}")
                     # Show failed examples
-                    print_failed_examples_opro(results, num_examples=3)
+                    # print_failed_examples_opro(results, num_examples=3)
 
                 # Record history
                 self.history.append({
