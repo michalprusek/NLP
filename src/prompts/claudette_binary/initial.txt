@@ -1,1 +1,0 @@
-Classify this Terms of Service clause as FAIR or UNFAIR. MOST clauses (90%) are FAIR. Mark as UNFAIR only if it contains: liability limits, unilateral termination/changes, mandatory arbitration, content removal, jurisdiction/choice of law, or "at our sole discretion". Output format: "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR".

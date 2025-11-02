@@ -9,7 +9,7 @@ set -e
 TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}  # Qwen/Qwen2.5-7B-Instruct or Equall/Saul-7B-Instruct-v1
 META_MODEL=${META_MODEL:-""}  # haiku
 METHOD=${METHOD:-"opro"}
-TASK=${TASK:-"claudette_binary"}
+TASK=${TASK:-"gsm8k"}
 
 echo "=========================================="
 echo "Dual GPU Prompt Optimization"
@@ -39,7 +39,7 @@ CMD="$CMD --backend vllm"
 CMD="$CMD --tensor-parallel-size 2"
 CMD="$CMD --gpu-ids 0,1"
 CMD="$CMD --iterations 100"
-CMD="$CMD --minibatch-size 250"
+CMD="$CMD --minibatch-size 260"
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 
