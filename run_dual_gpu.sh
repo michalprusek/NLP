@@ -38,8 +38,8 @@ CMD="$CMD --model $TASK_MODEL"
 CMD="$CMD --backend vllm"
 CMD="$CMD --tensor-parallel-size 2"
 CMD="$CMD --gpu-ids 0,1"
-CMD="$CMD --iterations 100"
-CMD="$CMD --minibatch-size 260"
+CMD="$CMD --iterations 100" # 6 ProTeGi, 200 OPRO
+CMD="$CMD --minibatch-size 260" # 64 ProTeGi, 260 OPRO
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 

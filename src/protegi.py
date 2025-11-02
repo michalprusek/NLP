@@ -98,11 +98,19 @@ class PromptCandidate:
             UCB(p) = Qt(p) + c * sqrt(log(t) / Nt(p))
 
         Args:
-            t: Time step (iteration count in selection loop, not total evals)
-            c: Exploration constant
+            t: Total number of pulls (evaluations) across all candidates in the pool.
+               This follows standard bandit convention where t grows with each pull.
+            c: Exploration constant (default 2.0 as per paper)
 
         Returns:
             UCB score
+
+        Note:
+            This implementation uses pull-based counting (standard bandit theory):
+            - t = total pulls across all candidates
+            - Nt(p) = number of times this candidate was evaluated
+            Paper Algorithm 3 uses sample-based counting (t=iteration, Nt+=|minibatch|).
+            Both are valid; this implementation has stronger exploration.
         """
         if self.num_evals == 0:
             return float('inf')
@@ -259,7 +267,6 @@ class ProTeGi:
         num_iterations: int = 10,
         minibatch_size: int = 20,
         ucb_constant: float = 2.0,
-        num_candidates_per_gradient: int = 4,
         task_description: str = "Solve math word problems step by step and provide the final numerical answer.",
         validation_evaluator = None,
         early_stopping_patience: int = 3,
@@ -271,16 +278,19 @@ class ProTeGi:
         Args:
             task_llm_client: LLM client for task evaluation (the model being optimized)
             evaluator: GSM8K evaluator for training
-            beam_size: Number of prompt candidates to maintain
-            num_iterations: Number of optimization iterations
-            minibatch_size: Examples per evaluation
-            ucb_constant: UCB exploration constant
-            num_candidates_per_gradient: Number of new prompts to generate per gradient
+            beam_size: Number of prompt candidates to maintain (default: 4, as per paper)
+            num_iterations: Number of optimization iterations (default: 10; paper uses 6)
+            minibatch_size: Examples per evaluation (default: 20; paper uses 64)
+            ucb_constant: UCB exploration constant (default: 2.0, as per paper)
             task_description: Description of the task for meta-prompts
             validation_evaluator: Optional separate evaluator for validation set
             early_stopping_patience: Number of iterations without improvement before stopping
             meta_llm_client: Optional separate LLM client for meta-optimization (gradient generation, editing).
                            If None, uses task_llm_client for both.
+
+        Note:
+            Paper Section 3.2 uses: minibatch_size=64, num_iterations=6, beam_size=4.
+            This implementation defaults differ for practical reasons but can be overridden.
         """
         self.task_llm = task_llm_client
         self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
@@ -332,6 +342,8 @@ class ProTeGi:
             template_dir = 'gsm8k'
 
         # Load templates from appropriate directory
+        # NOTE: These templates are significantly enhanced compared to paper Appendix 1.1
+        # See src/prompts/README.md for detailed comparison and rationale
         self.gradient_prompt_template = load_prompt_template(template_dir, 'gradient')
         self.edit_prompt_template = load_prompt_template(template_dir, 'edit')
 
@@ -971,6 +983,19 @@ Output:"""
 
             if verbose:
                 print(f"\n Generated {len(new_candidates)} new candidates from {len(beam)} parents")
+
+            # ================================================================
+            # Random sampling of successors (as per paper Section 3.2)
+            # "To avoid computational overruns, we randomly sampled 8 successor
+            # candidates per parent prompt prior to bandit selection."
+            # ================================================================
+            max_successors_per_parent = 8
+            max_total_successors = max_successors_per_parent * len(beam)
+
+            if len(new_candidates) > max_total_successors:
+                if verbose:
+                    print(f" Sampling {max_total_successors} successors (max {max_successors_per_parent} per parent) from {len(new_candidates)} generated")
+                new_candidates = random.sample(new_candidates, max_total_successors)
 
             # ================================================================
             # PHASE 2: BUDGETED SELECTION - Allocate evaluation budget via UCB

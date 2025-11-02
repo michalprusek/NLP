@@ -188,16 +188,22 @@ Both ProTeGi and OPRO now support separate models for different roles:
 
 Both algorithms use carefully engineered meta-prompts:
 
-**ProTeGi GRADIENT_PROMPT** (src/protegi.py:171-244):
+**IMPORTANT:** This implementation uses **significantly enhanced meta-prompts** compared to the original paper (Appendix 1.1). See `src/prompts/README.md` for detailed comparison and rationale. Key differences:
+- Paper uses minimal prompts (~5 lines), we use structured prompts (26-74 lines)
+- We add brevity constraints, output format rules, anti-artifact measures
+- We explain evaluation system (Math-Verify) to generate better critiques
+- Trade-off: Better quality prompts vs. less faithful to paper
+
+**ProTeGi GRADIENT_PROMPT** (src/prompts/gsm8k/gradient.txt):
 - Critiques current prompt based on error examples
 - Explains Math-Verify evaluation system (3-step extraction/parsing/verification)
 - Requests 2-4 issues with root causes and specific improvements
-- Structured JSON output format
+- Structured output format: ISSUE / Root cause / Suggested improvements
 
-**ProTeGi EDIT_PROMPT** (src/protegi.py:252-278):
+**ProTeGi EDIT_PROMPT** (src/prompts/gsm8k/edit.txt):
 - Applies critic's feedback to improve prompt
 - Hard constraints: brevity (max 3 sentences/150 words), no meta-text, output only improved prompt
-- Includes extensive post-processing to remove LLM artifacts
+- Includes extensive post-processing to remove LLM artifacts (see `apply_gradient` method)
 
 **OPRO META_PROMPT** (src/opro.py:25-64):
 - Analyzes previous scored prompts
