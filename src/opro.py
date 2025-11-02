@@ -11,22 +11,44 @@ import random
 import json
 
 
-def load_prompt_template(task_type: str, template_name: str, default_template: str) -> str:
+def load_prompt_template(task_type: str, template_name: str) -> str:
     """
-    Load prompt template from file if exists, otherwise return default.
+    Load prompt template from file.
 
     Args:
         task_type: Type of task (e.g., 'claudette', 'gsm8k')
-        template_name: Name of the template file (without .txt extension)
-        default_template: Default template to use if file doesn't exist
+        template_name: Name of template file (e.g., 'opro_meta')
 
     Returns:
-        Loaded or default template string
+        Prompt template string
+
+    Raises:
+        FileNotFoundError: If template file doesn't exist
     """
     prompt_file = Path(__file__).parent / 'prompts' / task_type / f'{template_name}.txt'
     if prompt_file.exists():
         return prompt_file.read_text(encoding='utf-8')
-    return default_template
+    raise FileNotFoundError(f"Prompt template not found: {prompt_file}")
+
+
+def bucket_score(score: float, num_buckets: int = 20) -> float:
+    """
+    Bucketize score into discrete buckets.
+
+    Args:
+        score: Original score (0.0 to 1.0)
+        num_buckets: Number of buckets (default: 20, as per OPRO paper)
+                    20 buckets = rounding to nearest multiple of 5%
+
+    Returns:
+        Bucketed score rounded to nearest bucket
+
+    Example:
+        bucket_score(0.73, 20) -> 0.75  # rounds to nearest 5%
+        bucket_score(0.72, 20) -> 0.70  # rounds to nearest 5%
+    """
+    bucket_size = 1.0 / num_buckets
+    return round(score / bucket_size) * bucket_size
 
 
 @dataclass
@@ -82,7 +104,7 @@ def print_failed_examples_opro(results: Dict, num_examples: int = 3):
             pred_str = str(pred)
 
         # Get text (question/text field)
-        text = result.get('text', result.get('question', ''))[:80]
+        text = result.get('text', result.get('question', ''))
 
         print(f"  {i}. GT: {gt_str:6} | Pred: {pred_str:6} | {text}...")
 
@@ -96,44 +118,6 @@ def print_failed_examples_opro(results: Dict, num_examples: int = 3):
 
 class OPRO:
     """OPRO optimizer using LLM as meta-optimizer"""
-
-    # Meta-prompt for generating new prompt candidates
-    META_PROMPT = """You are an optimization algorithm generating instruction prompts for solving math word problems.
-
-TASK: {task_description}
-
-EXAMPLE PROBLEMS:
-{example_problems}
-
-EVALUATION SYSTEM (INVARIANT):
-- Extracts LAST number from model output
-- Recognizes: "#### NUMBER", "\\boxed{{NUMBER}}", "answer is NUMBER"
-- Normalizes: "1,234" → "1234", "$50" → "50"
-- Requires EXACT match (no partial credit)
-
-PREVIOUS PROMPTS AND SCORES:
-{scored_prompts}
-
-YOUR TASK:
-Generate a NEW instruction prompt that will achieve HIGHER accuracy than previous ones.
-
-REQUIREMENTS:
-1. Prompt must be 2-4 sentences
-2. Must instruct to provide answer in format "#### NUMBER"
-3. Should encourage step-by-step reasoning
-4. Should be clear and actionable
-5. Must be DIFFERENT from previous prompts
-6. Explore different instruction strategies based on what worked well before
-
-OUTPUT FORMAT:
-Write EXACTLY ONE prompt.
-NO numbering, NO bullet points, NO explanations.
-JUST the instruction prompt itself.
-
-EXAMPLE OUTPUT:
-Solve the math problem step by step and provide the answer as #### NUMBER.
-
-NOW GENERATE YOUR NEW PROMPT:"""
 
     def __init__(
         self,
@@ -192,15 +176,19 @@ NOW GENERATE YOUR NEW PROMPT:"""
         task_name = getattr(evaluator, 'task_name', None)
         task_type = getattr(evaluator, 'task_type', 'regression')
 
+        # Determine template directory
         if task_name:
             # Use specific task name if provided (e.g., 'claudette_binary')
-            self.meta_prompt_template = load_prompt_template(task_name, 'opro_meta', self.META_PROMPT)
+            template_dir = task_name
         elif task_type == 'classification':
             # Default to 'claudette' for generic classification
-            self.meta_prompt_template = load_prompt_template('claudette', 'opro_meta', self.META_PROMPT)
+            template_dir = 'claudette'
         else:
-            # Use default GSM8K template
-            self.meta_prompt_template = self.META_PROMPT
+            # Default to 'gsm8k' for math/regression tasks
+            template_dir = 'gsm8k'
+
+        # Load meta-prompt template from file (always required)
+        self.meta_prompt_template = load_prompt_template(template_dir, 'opro_meta')
 
     def _get_score(self, results: Dict[str, Any]) -> float:
         """
@@ -235,7 +223,7 @@ NOW GENERATE YOUR NEW PROMPT:"""
             if example_batch:
                 ex = example_batch[0]
                 # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
-                question = ex.get('question', ex.get('text', ''))[:150]
+                question = ex.get('question', ex.get('text', ''))
                 answer = ex.get('answer', ex.get('label', ''))
                 examples.append(f"Example {i+1}:\nQ: {question}...\nA: {answer}")
 
@@ -282,10 +270,12 @@ NOW GENERATE YOUR NEW PROMPT:"""
             List of new prompt candidates
         """
         # Format scored prompts for the meta-prompt (keep top 20 as in paper)
+        # Sort in ASCENDING order (worst to best) as per paper - shows progressive improvement
+        # Bucketize scores to 20 buckets (round to nearest 5%) as per OPRO paper Section 3.2
         if self.scored_prompts:
             scored_prompts_text = "\n".join([
-                f"Score: {sp.score:.1%} | Prompt: \"{sp.prompt}\""
-                for sp in sorted(self.scored_prompts, key=lambda x: x.score, reverse=True)
+                f"Score: {bucket_score(sp.score, num_buckets=20):.0%} | Prompt: \"{sp.prompt}\""
+                for sp in sorted(self.scored_prompts, key=lambda x: x.score)  # ascending order
             ])
         else:
             scored_prompts_text = "(No prompts evaluated yet)"
@@ -294,7 +284,7 @@ NOW GENERATE YOUR NEW PROMPT:"""
         candidates = []
         seen = set(sp.prompt for sp in self.scored_prompts)
 
-        for i in range(self.num_candidates_per_iter):
+        for _ in range(self.num_candidates_per_iter):
             # Get 3 random examples for this generation (paper uses 3 random exemplars)
             example_problems = self._get_random_examples(num_examples=3)
 
@@ -344,9 +334,9 @@ NOW GENERATE YOUR NEW PROMPT:"""
         """
         if initial_prompts is None:
             initial_prompts = [
-                "Solve the math problem step by step.",
-                "Let's solve this math problem carefully. Show your work and provide the final answer.",
-                "Think through this problem step by step and calculate the answer.",
+                "",
+                "Solve the following problem.",
+                "Let's solve the problem.",
             ]
 
         if verbose:
