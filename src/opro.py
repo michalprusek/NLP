@@ -140,7 +140,7 @@ class OPRO:
             evaluator: GSM8K evaluator
             num_iterations: Number of optimization iterations
             num_candidates_per_iter: Number of new candidates to generate per iteration
-            minibatch_size: Examples per evaluation
+            minibatch_size: Size of fixed evaluation set (paper uses 3.5% of training data)
             keep_top_k: Number of top prompts to keep in memory
             task_description: Description of the task
         """
@@ -170,6 +170,25 @@ class OPRO:
         else:
             self.optimization_metric = 'accuracy'  # Default: accuracy (GSM8K, etc.)
             print(f"  Optimization metric: Accuracy")
+
+        # OPRO paper method: Create fixed evaluation set (same set for all prompts)
+        # This ensures comparable scores across all candidates
+        # Paper uses small fixed subset (~3.5% of training data for GSM8K)
+        dataset_size = len(evaluator)
+        eval_size = min(minibatch_size, dataset_size)
+
+        # Sample random indices for fixed evaluation set
+        eval_indices = random.sample(range(dataset_size), eval_size)
+
+        # Load fixed evaluation set once
+        self.fixed_eval_set = []
+        for idx in eval_indices:
+            batch = evaluator.get_batch(idx, 1)
+            if batch:
+                self.fixed_eval_set.append(batch[0])
+
+        print(f"  Fixed evaluation set: {len(self.fixed_eval_set)} examples ({100*len(self.fixed_eval_set)/dataset_size:.1f}% of training data)")
+        print(f"  All prompts will be evaluated on the SAME fixed set for comparable scores")
 
         # Detect task type from evaluator and load appropriate templates
         # Prefer task_name (specific) over task_type (generic) for template selection
@@ -229,20 +248,23 @@ class OPRO:
 
         return "\n\n".join(examples)
 
-    def evaluate_prompt(self, prompt: str, start_idx: int, return_details: bool = False) -> Tuple[float, Any]:
+    def evaluate_prompt(self, prompt: str, return_details: bool = False) -> Tuple[float, Any]:
         """
-        Evaluate a prompt on a minibatch.
+        Evaluate a prompt on the fixed evaluation set.
+
+        OPRO paper method: All prompts are evaluated on the SAME fixed set,
+        ensuring scores are directly comparable (no noise from different data samples).
 
         Args:
             prompt: Prompt to evaluate
-            start_idx: Starting index in dataset
             return_details: If True, return (score, results) tuple; if False, return just score
 
         Returns:
             If return_details=False: Optimization score (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
             If return_details=True: Tuple of (score, results) where results contains detailed evaluation info
         """
-        batch = self.evaluator.get_batch(start_idx, self.minibatch_size)
+        # Use fixed evaluation set (same for all prompts)
+        batch = self.fixed_eval_set
 
         # Generate answers (handle both 'question' and 'text' fields)
         questions = [example.get('question', example.get('text', '')) for example in batch]
@@ -344,15 +366,13 @@ class OPRO:
             print("OPRO Optimization")
             print(f"{'='*80}\n")
 
-        data_idx = 0
-
         # Evaluate initial prompts
         if verbose:
             print("Evaluating initial prompts...\n")
 
         for prompt in initial_prompts:
-            score, results = self.evaluate_prompt(prompt, data_idx, return_details=True)
-            data_idx = (data_idx + self.minibatch_size) % len(self.evaluator)
+            # All prompts evaluated on same fixed set (no data_idx needed)
+            score, results = self.evaluate_prompt(prompt, return_details=True)
 
             self.scored_prompts.append(ScoredPrompt(prompt=prompt, score=score))
 
@@ -384,8 +404,8 @@ class OPRO:
                 if verbose:
                     print(f"Evaluating: {candidate[:80]}...")
 
-                score, results = self.evaluate_prompt(candidate, data_idx, return_details=True)
-                data_idx = (data_idx + self.minibatch_size) % len(self.evaluator)
+                # All prompts evaluated on same fixed set (no data_idx needed)
+                score, results = self.evaluate_prompt(candidate, return_details=True)
 
                 self.scored_prompts.append(ScoredPrompt(prompt=candidate, score=score))
 
