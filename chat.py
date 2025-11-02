@@ -4,7 +4,12 @@
 Interactive terminal-based conversation interface supporting multiple LLM models.
 
 Usage:
-    python chat.py
+    python chat.py [--model MODEL_NAME]
+
+Examples:
+    python chat.py                    # Use default model (qwen)
+    python chat.py --model saul       # Start with Saul model
+    python chat.py --model haiku      # Start with Claude Haiku
 """
 
 import os
@@ -13,6 +18,8 @@ import sys
 import logging
 import contextlib
 import atexit
+import argparse
+import gc
 from typing import List, Dict, Optional
 
 # Enable readline for arrow key history (Linux/Mac)
@@ -109,9 +116,76 @@ class ChatSession:
             print(f"FATAL: Cannot initialize chat without a working model.")
             sys.exit(1)
 
+    def _cleanup_model(self) -> None:
+        """
+        Clean up existing model and free memory before loading a new one.
+
+        This is critical for preventing memory overflow when switching models,
+        especially for large models on GPU.
+        """
+        if self.llm_client is None:
+            return
+
+        print("Unloading previous model and freeing memory...")
+
+        # Get backend type before cleanup
+        old_backend = self.MODEL_CONFIG[self.model_key]["backend"]
+
+        # Clean up based on backend type
+        if old_backend == "vllm":
+            # vLLM cleanup: destroy the LLM engine
+            if hasattr(self.llm_client, 'llm'):
+                try:
+                    # vLLM's LLM object has internal cleanup
+                    del self.llm_client.llm
+                except Exception as e:
+                    print(f"Warning: Error during vLLM cleanup: {e}")
+
+        elif old_backend == "transformers":
+            # Transformers cleanup: delete model and tokenizer
+            if hasattr(self.llm_client, 'model'):
+                try:
+                    # Move model to CPU first to free GPU memory
+                    if hasattr(self.llm_client.model, 'cpu'):
+                        self.llm_client.model.cpu()
+                    del self.llm_client.model
+                except Exception as e:
+                    print(f"Warning: Error during model cleanup: {e}")
+
+            if hasattr(self.llm_client, 'tokenizer'):
+                try:
+                    del self.llm_client.tokenizer
+                except Exception as e:
+                    print(f"Warning: Error during tokenizer cleanup: {e}")
+
+        # Claude client doesn't need special cleanup (API-based)
+
+        # Delete the client object itself
+        del self.llm_client
+        self.llm_client = None
+
+        # Force garbage collection
+        gc.collect()
+
+        # Clear GPU caches if available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                print("Cleared CUDA cache")
+            elif torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+                print("Cleared MPS cache")
+        except Exception as e:
+            print(f"Warning: Error clearing GPU cache: {e}")
+
     def switch_model(self, model_key: str) -> bool:
         """
         Switch to a different model.
+
+        Properly unloads the existing model and frees memory before loading
+        the new model to prevent memory overflow issues.
 
         Args:
             model_key: Model identifier from MODEL_CONFIG
@@ -128,6 +202,10 @@ class ChatSession:
 
         try:
             config = self.MODEL_CONFIG[model_key]
+
+            # Clean up existing model BEFORE loading new one
+            self._cleanup_model()
+
             print(f"\nLoading {config['display_name']}...")
 
             # Validate API key exists in environment (should be loaded from .env via dotenv)
@@ -432,12 +510,51 @@ Note: Setting a new system prompt will clear the conversation history.
         return "Available models:\n" + "\n".join(models)
 
 
+def parse_args():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="CLI Chat Interface for LLM Models",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available Models:
+  qwen    - Qwen 2.5 7B Instruct (default)
+  saul    - Saul 7B Legal Model
+  haiku   - Claude Haiku 4.5 (requires ANTHROPIC_API_KEY)
+
+Examples:
+  %(prog)s                    # Use default model (qwen)
+  %(prog)s --model saul       # Start with Saul model
+  %(prog)s --model haiku      # Start with Claude Haiku
+        """
+    )
+
+    parser.add_argument(
+        '--model',
+        type=str,
+        default='qwen',
+        choices=['qwen', 'saul', 'haiku'],
+        help='Model to use for chat (default: qwen)'
+    )
+
+    return parser.parse_args()
+
+
 def main():
     """Main CLI loop."""
+    # Parse command-line arguments
+    args = parse_args()
+
     print(f"{Colors.RED}{'='*80}")
     print("CLI Chat Interface")
     print("="*80)
-    print(f"\nInitializing with default model (Qwen 2.5 7B)...{Colors.RESET}")
+
+    # Display which model is being initialized
+    model_display_names = {
+        'qwen': 'Qwen 2.5 7B',
+        'saul': 'Saul 7B Legal Model',
+        'haiku': 'Claude Haiku 4.5'
+    }
+    print(f"\nInitializing with {model_display_names.get(args.model, args.model)}...{Colors.RESET}")
 
     # Setup readline history for arrow key navigation (↑/↓)
     if readline:
@@ -455,9 +572,9 @@ def main():
         # Save history on exit
         atexit.register(lambda: readline.write_history_file(history_file))
 
-    # Initialize with default model
+    # Initialize with specified model from command-line
     try:
-        session = ChatSession(initial_model="qwen", system_prompt="")
+        session = ChatSession(initial_model=args.model, system_prompt="")
     except Exception as e:
         print(f"{Colors.RED}Failed to initialize: {e}{Colors.RESET}")
         sys.exit(1)
