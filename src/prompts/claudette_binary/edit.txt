@@ -6,6 +6,11 @@ CURRENT PROMPT
 {prompt}
 >>>
 
+FAILED EXAMPLES (the current prompt gets these wrong):
+<<<
+{errors}
+>>>
+
 CRITIC FEEDBACK (parse it and use the top-priority, highest-impact actions):
 <<<
 {gradient}

@@ -7,7 +7,6 @@ https://arxiv.org/abs/2305.03495
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from dataclasses import dataclass
-import json
 import re
 import random
 from difflib import SequenceMatcher
@@ -300,7 +299,6 @@ class ProTeGi:
         self.num_iterations = num_iterations
         self.minibatch_size = minibatch_size
         self.ucb_constant = ucb_constant
-        self.num_candidates_per_gradient = num_candidates_per_gradient
         self.task_description = task_description
         self.early_stopping_patience = early_stopping_patience
 
@@ -615,6 +613,36 @@ class ProTeGi:
 
         return results
 
+    def _format_error_examples(self, error_list: List[Dict[str, Any]]) -> str:
+        """
+        Format error examples for meta-prompts (gradient and edit prompts).
+
+        Args:
+            error_list: List of error detail dicts from evaluation results
+
+        Returns:
+            Formatted error examples string
+        """
+        if not error_list:
+            return "All examples correct!"
+
+        formatted = []
+        for i, d in enumerate(error_list, 1):
+            question = d.get('question') or d.get('text', 'N/A')
+            output = d.get('output', d.get('predicted', 'N/A'))
+            predicted = d.get('predicted', 'N/A')
+            ground_truth = d.get('ground_truth', 'N/A')
+
+            formatted.append(
+                f"EXAMPLE {i}:\n"
+                f"Question: {question}\n"
+                f"Model Output: {output}\n"
+                f"Extracted Answer: {predicted}\n"
+                f"Correct Answer: {ground_truth}"
+            )
+
+        return "\n\n".join(formatted)
+
     def generate_gradient(self, candidate: PromptCandidate, results: Dict[str, Any]) -> str:
         """
         Generate textual gradient (critique) for a prompt.
@@ -626,18 +654,10 @@ class ProTeGi:
         Returns:
             Textual gradient (critique)
         """
-        # Format results for the gradient prompt
-        # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
+        # Format error examples for gradient prompt
         # Paper uses groups of 4 errors per gradient (Section 3.2)
-        error_examples = []
-        for d in results['details'][:4]:  # Use only 4 errors as per paper
-            if not d['correct']:
-                question_field = d.get('question') or d.get('text', 'N/A')
-                error_examples.append(
-                    f"Question: {question_field}\nPredicted: {d['predicted']}\nCorrect: {d['ground_truth']}"
-                )
-
-        results_text = "\n\n".join(error_examples) if error_examples else "All examples correct!"
+        failed_examples = [d for d in results['details'] if not d['correct']]
+        results_text = self._format_error_examples(failed_examples[:4])
 
         # Extract task-specific metrics for gradient prompt
         # For binary classification (claudette_binary): use F1/precision/recall for positive class
@@ -729,13 +749,14 @@ Output:"""
 
         return True
 
-    def apply_gradient(self, candidate: PromptCandidate, gradient: str, verbose: bool = False, candidate_num: int = 1) -> Optional[str]:
+    def apply_gradient(self, candidate: PromptCandidate, gradient: str, error_examples: str = "", verbose: bool = False, candidate_num: int = 1) -> Optional[str]:
         """
         Apply textual gradient to generate improved prompt.
 
         Args:
             candidate: Current prompt candidate
             gradient: Textual gradient (critique)
+            error_examples: Formatted error examples (as per paper Appendix 1.1)
             verbose: Print debug info
             candidate_num: Candidate number for logging
 
@@ -745,6 +766,7 @@ Output:"""
         edit_prompt = self.edit_prompt_template.format(
             prompt=candidate.prompt,
             gradient=gradient,
+            errors=error_examples,
         )
 
         # Paper uses temperature=1.0 for prompt editing (exploration)
@@ -956,8 +978,11 @@ Output:"""
                     if verbose:
                         print(f"  Gradient {grad_idx+1}: {gradient[:80]}...")
 
+                    # Format error examples for edit prompt (as per paper Appendix 1.1)
+                    error_examples_str = self._format_error_examples(error_sample)
+
                     # Apply gradient to generate new prompt (q=1 per gradient)
-                    new_prompt = self.apply_gradient(parent, gradient, verbose=verbose, candidate_num=grad_idx+1)
+                    new_prompt = self.apply_gradient(parent, gradient, error_examples=error_examples_str, verbose=verbose, candidate_num=grad_idx+1)
 
                     if new_prompt is None:
                         continue
