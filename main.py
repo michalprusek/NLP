@@ -13,7 +13,6 @@ from datetime import datetime
 
 from src.llm_client import create_llm_client
 from src.evaluator import GSM8KEvaluator
-from src.math_verify_evaluator import MathVerifyEvaluator
 from src.claudette_evaluator import ClaudetteEvaluator
 from src.claudette_binary_evaluator import ClaudetteBinaryEvaluator
 from src.protegi import ProTeGi
@@ -163,13 +162,13 @@ def main():
         help="Initial prompt (defaults to task-specific prompt from src/prompts/<task>/initial.txt)",
     )
 
-    # Evaluator selection
+    # Evaluator selection (GSM8K only uses standard evaluator now)
     parser.add_argument(
         "--evaluator",
         type=str,
-        default="math-verify",
-        choices=["strict-em", "math-verify"],
-        help="Evaluator to use: strict-em (exact match) or math-verify (robust symbolic)",
+        default="standard",
+        choices=["standard"],
+        help="Evaluator to use: standard (exact match with numerical tolerance)",
     )
 
     # Output settings
@@ -342,14 +341,8 @@ def main():
             debug=args.debug,
         )
     else:  # gsm8k
-        print(f"  Evaluator: {args.evaluator}")
-        # Select evaluator class for GSM8K
-        if args.evaluator == "math-verify":
-            EvaluatorClass = MathVerifyEvaluator
-            print("  Using Math-Verify evaluator (robust symbolic verification)")
-        else:
-            EvaluatorClass = GSM8KEvaluator
-            print("  Using Strict EM evaluator (exact string matching)")
+        print(f"  Evaluator: GSM8KEvaluator (exact match with numerical tolerance)")
+        EvaluatorClass = GSM8KEvaluator
 
         train_evaluator = EvaluatorClass(
             dataset_path=args.dataset_path,

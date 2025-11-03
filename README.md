@@ -169,10 +169,9 @@ uv run python main.py \
 **Optional:**
 - `--task`: Task to optimize (`gsm8k` or `claudette`, default: `gsm8k`)
 - `--backend`: LLM backend (`transformers` or `vllm`, default: `transformers`)
-- `--evaluator`: Evaluator type for GSM8K (`strict-em` or `math-verify`, default: `math-verify`)
-  - `strict-em`: Exact string matching (strict)
-  - `math-verify`: Robust symbolic verification (handles equivalent expressions, **recommended**)
-  - Note: Claudette always uses classification evaluator
+- `--evaluator`: Evaluator type for GSM8K (`standard`, default: `standard`)
+  - `standard`: Simplified evaluator with numerical tolerance for floating point comparisons
+  - Note: Claudette tasks always use specialized classification evaluators
 - `--dataset-path`: Path to dataset (defaults: `datasets/gsm8k` for GSM8K, `tommasobonomo/sem_eval_2023_task_4` for Claudette)
 - `--train-split`: Dataset split for training/optimization (`train` or `test`, default: `train`)
 - `--val-split`: Dataset split for validation (`train` or `test`, default: `test`)
@@ -302,29 +301,22 @@ Both ProTeGi and OPRO support separate models for different roles:
 
 **Paper-Compliant Implementation:** Our OPRO follows the original paper (arXiv:2309.03409) with temperature=1.0, random examples, and independent generation calls for maximum diversity.
 
-### Answer Evaluation (Math-Verify)
+### Answer Evaluation
 
-The framework uses a robust 3-step evaluation process:
+The framework uses a simplified evaluation process:
 
-**Step 1 - Extraction** (prioritizes later matches):
-- Highest priority: `\boxed{NUMBER}`, `#### NUMBER`, `final_answer: NUMBER`
-- Medium priority: `the answer is NUMBER`, `therefore NUMBER`
+**Extraction** (prioritized patterns):
+- Priority: `final_answer: NUMBER`, `#### NUMBER`, `\boxed{NUMBER}`
 - Fallback: last number in output
 
-**Step 2 - Parsing** (normalization):
-- Removes: commas (1,234 → 1234), currency symbols ($50 → 50), units
-- Handles: percentages (50% → 0.5), fractions (1/3), decimals (3.14)
-- Converts to symbolic representation for smart comparison
+**Normalization**:
+- Removes comma thousands separators (1,234 → 1234)
+- Handles decimal points and negative numbers
 
-**Step 3 - Verification** (multiple strategies):
-- Numerical equality with tolerance (1/3 ≈ 0.333...)
-- Symbolic simplification (checks if predicted - ground_truth = 0)
-- Expression equivalence (different forms of same answer)
-
-This is **more forgiving** than exact string matching:
-- "1/3" and "0.333" are considered equivalent
-- "42 km" and "42" are considered equivalent
-- Different mathematical representations of same value are equivalent
+**Comparison**:
+- Numerical equality with tolerance for floating point comparisons
+- Integer values must match exactly
+- Floating point values compared with 1e-6 tolerance
 
 ## Output
 
@@ -385,9 +377,9 @@ Correct: 1148/1319
 │   └── gsm8k/                        # GSM8K dataset (7,473 train, 1,319 test)
 ├── src/
 │   ├── __init__.py
-│   ├── evaluator.py                  # GSM8K evaluator (strict exact match)
-│   ├── math_verify_evaluator.py      # Math-Verify evaluator (robust symbolic)
-│   ├── claudette_evaluator.py        # Claudette evaluator (classification)
+│   ├── evaluator.py                  # Simplified GSM8K evaluator with numerical tolerance
+│   ├── claudette_evaluator.py        # Claudette multi-label evaluator (ToS classification)
+│   ├── claudette_binary_evaluator.py # Claudette binary evaluator (fair vs unfair)
 │   ├── llm_client.py                 # LLM client abstraction (Transformers + vLLM)
 │   ├── protegi.py                    # ProTeGi implementation (multi-task)
 │   ├── opro.py                       # OPRO implementation (multi-task)
@@ -433,8 +425,7 @@ uv run python evaluate_gsm8k.py \
 # Using vLLM for faster inference
 uv run python evaluate_gsm8k.py \
     --backend vllm \
-    --num-samples 10 \
-    --evaluator math-verify
+    --num-samples 10
 
 # Quick test on subset
 uv run python evaluate_gsm8k.py \

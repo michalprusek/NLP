@@ -112,7 +112,7 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 - `--num-candidates`: Candidates per iteration for OPRO (default: 8, as per paper)
 
 **Evaluation:**
-- `--evaluator`: `strict-em` (exact match) or `math-verify` (robust symbolic verification, recommended)
+- `--evaluator`: GSM8K evaluator with numerical tolerance (exact match with tolerance for floating point comparisons)
 - `--train-split` / `--val-split`: Which GSM8K split to use for training/validation
 
 **Hardware:**
@@ -132,9 +132,10 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 10
 - `opro.py`: OPRO implementation with meta-prompting for candidate generation
 
 **Evaluation** (src/):
-- `evaluator.py`: GSM8K evaluator with exact match (strict string comparison)
-- `math_verify_evaluator.py`: Robust symbolic verification (handles equivalent mathematical expressions)
-- Answer extraction uses prioritized patterns: `\boxed{NUMBER}`, `#### NUMBER`, `final_answer: NUMBER`, fallback to last number
+- `evaluator.py`: Simplified GSM8K evaluator with numerical tolerance
+- `claudette_evaluator.py`: Multi-label ToS classification evaluator
+- `claudette_binary_evaluator.py`: Binary ToS classification evaluator (fair vs unfair)
+- Answer extraction uses prioritized patterns: `final_answer: NUMBER`, `#### NUMBER`, `\boxed{NUMBER}`, fallback to last number
 
 **LLM Clients** (src/llm_client.py):
 - `TransformersClient`: HuggingFace transformers backend (CPU/GPU/MPS)
@@ -191,12 +192,12 @@ Both algorithms use carefully engineered meta-prompts:
 **IMPORTANT:** This implementation uses **significantly enhanced meta-prompts** compared to the original paper (Appendix 1.1). See `src/prompts/README.md` for detailed comparison and rationale. Key differences:
 - Paper uses minimal prompts (~5 lines), we use structured prompts (26-74 lines)
 - We add brevity constraints, output format rules, anti-artifact measures
-- We explain evaluation system (Math-Verify) to generate better critiques
+- We explain evaluation system to generate better critiques
 - Trade-off: Better quality prompts vs. less faithful to paper
 
 **ProTeGi GRADIENT_PROMPT** (src/prompts/gsm8k/gradient.txt):
 - Critiques current prompt based on error examples
-- Explains Math-Verify evaluation system (3-step extraction/parsing/verification)
+- Explains evaluation system (extraction patterns and numerical comparison)
 - Requests 2-4 issues with root causes and specific improvements
 - Structured output format: ISSUE / Root cause / Suggested improvements
 
@@ -257,9 +258,9 @@ JSON includes: method, model, config, best_prompt, history (all iterations), val
 - Claude API models have no local memory requirements
 
 **Answer Format:**
-- Models should output final answer as `#### NUMBER` (preferred)
-- Math-Verify also handles: `\boxed{NUMBER}`, `final_answer: NUMBER`, `the answer is NUMBER`
-- Evaluation is more forgiving than exact string match (handles fractions, decimals, units)
+- Models should output final answer as `final_answer: NUMBER` (preferred) or `#### NUMBER`
+- Evaluator also handles: `\boxed{NUMBER}` and fallback to last number in output
+- Numerical comparison with tolerance for floating point values
 
 **Chat Templates:**
 - Both LLM clients auto-detect Instruct models and apply chat templates
@@ -283,7 +284,6 @@ JSON includes: method, model, config, best_prompt, history (all iterations), val
 - ProTeGi's `apply_gradient` includes extensive cleaning logic
 - If prompts look malformed, check `apply_gradient` post-processing
 
-**Evaluation mismatch:**
-- Use `--evaluator math-verify` for robust symbolic verification
-- `strict-em` requires exact string match (less reliable)
-- Debug with `--debug` flag to see extraction process
+**Evaluation issues:**
+- Evaluator uses numerical tolerance for floating point comparisons
+- Debug with `--debug` flag to see extraction process and exact matching logic

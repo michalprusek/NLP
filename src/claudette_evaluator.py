@@ -1,13 +1,11 @@
 """
-Claudette (ToS clause classification) evaluator
-
-Evaluates multi-label classification for Terms of Service fairness analysis.
+Claudette (ToS clause classification) evaluator - simplified version
 """
 import re
 from typing import Dict, List, Any, Optional, Set
 from pathlib import Path
 
-from src.metrics import compute_multilabel_metrics, format_metrics_table, format_metrics_compact
+from src.metrics import compute_multilabel_metrics
 
 
 # Label mapping from metadata.json
@@ -29,14 +27,11 @@ TEXT_TO_IDX = {name.lower(): idx for idx, name in LABEL_MAP.items()}
 
 def extract_labels_from_output(text: str, verbose: bool = False) -> Set[int]:
     """
-    Extract predicted labels from model output.
+    Extract predicted labels from model output - simplified version.
 
-    Supports both numeric (0-8) and text formats:
-    - "LABEL: 0, 4, 7" or "Labels: [0, 4, 7]"
-    - "Categories: Arbitration, Limitation of liability"
-    - "final_labels: 0, 3"
-
-    Returns set of numeric labels.
+    Supports:
+    - Numeric format: "LABEL: 0, 4, 7" or "Labels: [0, 4, 7]"
+    - NONE indicators for fair clauses
     """
     if not text or not text.strip():
         return set()
@@ -44,12 +39,11 @@ def extract_labels_from_output(text: str, verbose: bool = False) -> Set[int]:
     text = text.strip()
     labels = set()
 
-    # Strategy 1: Look for explicit label markers with numbers
+    # Strategy 1: Look for explicit numeric labels
     patterns = [
         r'final_labels?\s*:\s*\[?([0-9,\s]+)\]?',
         r'labels?\s*:\s*\[?([0-9,\s]+)\]?',
         r'categories?\s*:\s*\[?([0-9,\s]+)\]?',
-        r'classification\s*:\s*\[?([0-9,\s]+)\]?',
     ]
 
     for pattern in patterns:
@@ -67,65 +61,26 @@ def extract_labels_from_output(text: str, verbose: bool = False) -> Set[int]:
             if labels:
                 return labels
 
-    # Strategy 2: Look for explicit label markers with text
-    text_patterns = [
-        r'final_labels?\s*:\s*\[?([^\]]+)\]?',
-        r'labels?\s*:\s*\[?([^\]]+)\]?',
-        r'categories?\s*:\s*\[?([^\]]+)\]?',
+    # Strategy 2: Check for NONE indicators (for 90% neutral clauses)
+    none_patterns = [
+        r'\bNONE\b',
+        r'\bno\s+labels?\b',
+        r'\bfair\b',
     ]
+    for pattern in none_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            if verbose:
+                print(f"  Extracted NONE via pattern '{pattern}'")
+            return set()
 
-    for pattern in text_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            content = match.group(1).lower()
-            # Check each label name
-            for label_text, idx in TEXT_TO_IDX.items():
-                if label_text in content:
-                    labels.add(idx)
-
-            if labels and verbose:
-                print(f"  Extracted text labels: {sorted(labels)}")
-
-            if labels:
-                return labels
-
-    # Strategy 3: Search for label mentions in full text
-    text_lower = text.lower()
-    for label_text, idx in TEXT_TO_IDX.items():
-        # Use word boundaries for multi-word labels
-        pattern = r'\b' + re.escape(label_text) + r'\b'
-        if re.search(pattern, text_lower):
-            labels.add(idx)
-
-    # Strategy 4: Look for explicit "NONE" indicators (for 90% neutral clauses)
-    if not labels:
-        none_patterns = [
-            r'\bNONE\b',
-            r'\bno\s+labels?\b',
-            r'\bno\s+categories?\b',
-            r'\bfair\b',
-            r'\bneutral\b',
-        ]
-        for pattern in none_patterns:
-            if re.search(pattern, text_lower):
-                if verbose:
-                    print(f"  Extracted NONE via pattern '{pattern}'")
-                return set()  # Explicitly return empty set for neutral clauses
-
-    # Strategy 5: Fallback - extract numbers ONLY if in "answer" context (not in explanations)
-    # Look for numbers near end of text (last 100 chars) to avoid picking up explanation mentions
-    if not labels:
-        # Only check last portion of text to avoid false positives from reasoning
-        last_portion = text[-100:] if len(text) > 100 else text
-        nums = re.findall(r'\b([0-8])\b', last_portion)
-        for n in nums:
-            labels.add(int(n))
-
-        if verbose and labels:
-            print(f"  Extracted from last portion (fallback): {sorted(labels)}")
+    # Strategy 3: Fallback - extract numbers from last portion (last 50 chars)
+    last_portion = text[-50:] if len(text) > 50 else text
+    nums = re.findall(r'\b([0-8])\b', last_portion)
+    for n in nums:
+        labels.add(int(n))
 
     if verbose and labels:
-        print(f"  Final extracted labels: {sorted(labels)}")
+        print(f"  Extracted from last portion: {sorted(labels)}")
 
     return labels
 
@@ -133,19 +88,7 @@ def extract_labels_from_output(text: str, verbose: bool = False) -> Set[int]:
 def get_ground_truth_labels(example: Dict[str, Any]) -> Set[int]:
     """
     Extract ground truth labels from Claudette dataset example.
-
-    The dataset has boolean fields for each category:
-    - ltd (0): Limitation of liability
-    - ter (1): Unilateral termination
-    - ch (2): Unilateral change
-    - a (3): Arbitration
-    - cr (4): Content removal
-    - law (5): Choice of law
-    - pinc (6): Other
-    - use (7): Contract by using
-    - j (8): Jurisdiction
     """
-    # Map boolean fields to label indices
     field_to_idx = {
         'ltd': 0,
         'ter': 1,
@@ -169,14 +112,9 @@ def get_ground_truth_labels(example: Dict[str, Any]) -> Set[int]:
 def compute_metrics(pred_labels: Set[int], true_labels: Set[int]) -> Dict[str, float]:
     """
     Compute metrics for multi-label classification.
-
-    Claudette is a multi-label dataset (examples can have multiple ToS categories),
-    though most examples have a single label in practice.
     """
-    # Exact match (all labels correct)
     exact_match = pred_labels == true_labels
 
-    # Precision, Recall, F1
     if len(pred_labels) == 0:
         precision = 1.0 if len(true_labels) == 0 else 0.0
     else:
@@ -205,7 +143,7 @@ class ClaudetteEvaluator:
 
     # Task metadata (for template selection)
     task_type = "classification"
-    task_name = "claudette"  # For prompt template loading
+    task_name = "claudette"
 
     def __init__(
         self,
@@ -215,11 +153,6 @@ class ClaudetteEvaluator:
     ):
         """
         Initialize Claudette evaluator.
-
-        Args:
-            dataset_path: Path to Claudette dataset (supports both Arrow and JSON formats)
-            split: 'train', 'validation', or 'test'
-            debug: Enable verbose logging
         """
         dataset_dir = Path(dataset_path)
 
@@ -228,16 +161,13 @@ class ClaudetteEvaluator:
         has_json = len([f for f in json_files if f.stem in ['train', 'validation', 'test']]) > 0
 
         if has_json:
-            # Load JSON dataset using wrapper
             from src.json_dataset_wrapper import JSONDatasetDict
             ds = JSONDatasetDict.load_from_disk(dataset_path)
         else:
-            # Load HuggingFace Arrow format
             from datasets import load_from_disk
             ds = load_from_disk(dataset_path)
 
         if split not in ds:
-            # Handle split mismatch - use available split
             available_splits = list(ds.keys())
             print(f"Warning: Split '{split}' not found. Available: {available_splits}")
             if 'test' in available_splits:
@@ -261,21 +191,6 @@ class ClaudetteEvaluator:
     ) -> Dict[str, Any]:
         """
         Evaluate batch of model outputs with comprehensive multi-label metrics.
-
-        Args:
-            outputs: List of model outputs
-            indices: List of example indices
-            verbose: Print detailed output
-
-        Returns:
-            Dictionary with:
-            - accuracy (subset accuracy/exact match)
-            - micro/macro/weighted F1, precision, recall
-            - per-class metrics
-            - confusion matrix
-            - hamming loss
-            - details (per-example results)
-            - failed_extractions count
         """
         if len(outputs) != len(indices):
             raise ValueError("outputs and indices must have same length")
@@ -296,11 +211,11 @@ class ClaudetteEvaluator:
             y_true.append(true_labels)
             y_pred.append(pred_labels)
 
-            # Compute per-example metrics (for backward compatibility)
+            # Compute per-example metrics
             per_example_metrics = compute_metrics(pred_labels, true_labels)
             is_correct = per_example_metrics['exact_match'] == 1.0
 
-            if not pred_labels:
+            if not pred_labels and true_labels:
                 failed_extractions += 1
 
             # Debug output
@@ -330,24 +245,22 @@ class ClaudetteEvaluator:
             label_names=LABEL_MAP,
         )
 
-        # Combine with details for full output
         total = len(outputs)
         correct = int(multilabel_metrics['subset_accuracy'] * total)
 
-        # Build result dict with backward compatibility + new metrics
         result = {
-            # Backward compatible fields (used by optimizers)
+            # Backward compatible fields
             'accuracy': multilabel_metrics['subset_accuracy'],
             'correct': correct,
             'total': total,
             'failed_extractions': failed_extractions,
 
-            # Legacy per-example averaged metrics (for compatibility)
+            # Legacy averaged metrics
             'avg_precision': sum(d['metrics']['precision'] for d in details) / total if total > 0 else 0.0,
             'avg_recall': sum(d['metrics']['recall'] for d in details) / total if total > 0 else 0.0,
             'avg_f1': sum(d['metrics']['f1'] for d in details) / total if total > 0 else 0.0,
 
-            # New comprehensive metrics
+            # Comprehensive metrics
             'micro_f1': multilabel_metrics['micro_f1'],
             'micro_precision': multilabel_metrics['micro_precision'],
             'micro_recall': multilabel_metrics['micro_recall'],
@@ -366,7 +279,6 @@ class ClaudetteEvaluator:
             'confusion_matrix': multilabel_metrics['confusion_matrix'],
             'support': multilabel_metrics['support'],
 
-            # Per-example details
             'details': details,
         }
 
@@ -375,18 +287,13 @@ class ClaudetteEvaluator:
     def get_batch(self, start_idx: int, batch_size: int) -> List[Dict[str, Any]]:
         """
         Get batch of examples.
-
-        Returns examples in format compatible with main.py:
-        {'idx': int, 'question': str, 'answer': str}
-
-        Note: 'question' is aliased to 'sentence' field, 'answer' to labels
         """
         end_idx = min(start_idx + batch_size, len(self.dataset))
         return [
             {
                 'idx': i,
-                'question': self.dataset[i]['sentence'],  # Alias for compatibility
-                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),  # Convert labels to string
+                'question': self.dataset[i]['sentence'],
+                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),
             }
             for i in range(start_idx, end_idx)
         ]
@@ -394,15 +301,12 @@ class ClaudetteEvaluator:
     def get_batch_by_indices(self, indices: List[int]) -> List[Dict[str, Any]]:
         """
         Get batch of examples by specific indices.
-
-        Returns examples in format compatible with main.py:
-        {'idx': int, 'question': str, 'answer': str}
         """
         return [
             {
                 'idx': i,
-                'question': self.dataset[i]['sentence'],  # Alias for compatibility
-                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),  # Convert labels to string
+                'question': self.dataset[i]['sentence'],
+                'answer': str(sorted(get_ground_truth_labels(self.dataset[i]))),
             }
             for i in indices
         ]
