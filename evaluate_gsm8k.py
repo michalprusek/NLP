@@ -275,7 +275,7 @@ def main():
     # Self-consistency configuration
     parser.add_argument('--num-samples', type=int, default=1,
                         help='Number of samples per question (1 = disabled, 5-10 recommended for self-consistency)')
-    parser.add_argument('--temperature', type=float, default=0.7,
+    parser.add_argument('--temperature', type=float, default=0.0,
                         help='Sampling temperature (higher = more diverse responses)')
     
     # Dataset configuration
