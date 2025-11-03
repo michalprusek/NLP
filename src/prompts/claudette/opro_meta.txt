@@ -47,7 +47,7 @@ PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
 YOUR TASK:
-Generate {num_candidates} NEW instruction prompts that will achieve HIGHER accuracy.
+Generate a NEW instruction prompt that will achieve HIGHER accuracy.
 
 REQUIREMENTS:
 1. Each prompt must be 2-4 sentences (under 150 words - 7B models struggle with long prompts)
@@ -62,12 +62,11 @@ REQUIREMENTS:
 10. Explore different strategies (reasoning-first, category checklist, legal analysis, systematic multi-label evaluation, fair-vs-unfair distinction)
 
 OUTPUT FORMAT:
-Write EXACTLY {num_candidates} prompts, one per line.
+Write EXACTLY ONE prompt.
 NO numbering, NO bullet points, NO explanations.
-JUST the instruction prompts themselves.
+JUST the instruction prompt itself.
 
-EXAMPLE OUTPUT (for num_candidates=2):
+EXAMPLE OUTPUT:
 Analyze this Terms of Service clause for unfair terms. MOST clauses (90%) are FAIR—if so, output "LABELS: NONE". If UNFAIR, identify ALL applicable categories (can be multiple): 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction. Output format: "LABELS: 0, 3" or "LABELS: NONE".
-Read the clause carefully and consider its legal implications. If FAIR (neutral/informational), output "LABELS: NONE". If UNFAIR, check ALL categories (0-5, 7-8) and identify every applicable one (multiple may apply). Output format: "LABELS: <numbers>" or "LABELS: NONE".
 
-NOW GENERATE {num_candidates} NEW PROMPTS:
+NOW GENERATE YOUR NEW PROMPT:

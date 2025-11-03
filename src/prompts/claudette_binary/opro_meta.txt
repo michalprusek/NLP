@@ -18,12 +18,6 @@ BINARY CLASSIFICATION:
   * Jurisdiction - Specifies where disputes must be filed
   * Other potentially unfair terms
 
-CRITICAL DATASET CHARACTERISTICS:
-- **~90% of clauses are FAIR** - neutral/informational text (headers, metadata, general terms)
-- **~10% are UNFAIR** - contain problematic terms
-- Models must distinguish unfair clauses from neutral text - don't over-classify!
-- CLASS IMBALANCE: More fair examples than unfair - avoid false positives
-
 EVALUATION SYSTEM (INVARIANT):
 - Extracts binary labels from: "CLASSIFICATION: FAIR/UNFAIR", "LABEL: 0/1", keywords "fair"/"unfair", or numbers 0/1
 - Handles negations: "not unfair" → FAIR, "not fair" → UNFAIR
@@ -52,25 +46,25 @@ PREVIOUS PROMPTS AND SCORES:
 {scored_prompts}
 
 YOUR TASK:
-Generate {num_candidates} NEW instruction prompts that will achieve HIGHER MACRO-F1 score (balanced performance on BOTH Fair and Unfair classes).
+Generate a NEW instruction prompt that will achieve HIGHER MACRO-F1 score (balanced performance on BOTH Fair and Unfair classes).
 
 REQUIREMENTS:
 1. Each prompt must be 2-4 sentences
 2. Must instruct to provide answer in format "CLASSIFICATION: FAIR" or "CLASSIFICATION: UNFAIR"
 3. Must emphasize BALANCED classification (don't over-predict FAIR or UNFAIR - both classes matter for Macro-F1)
-4. Should encourage analysis of legal implications before classification
-5. Should help distinguish unfair clauses from neutral/informational text
-6. Should provide guidance on identifying both FAIR and UNFAIR characteristics
-7. Each prompt must be DIFFERENT from previous ones
-8. Explore different strategies (reasoning-first, checklist approach, legal analysis, balanced classification to maximize Macro-F1)
+4. **MUST require step-by-step reasoning BEFORE the final label** - the model should first analyze the clause, state why it is fair OR which specific term makes it unfair (e.g., "Reason: Contains unilateral termination clause."), and only then provide the "CLASSIFICATION: ..." line
+5. **MUST strongly emphasize distinguishing neutral legal boilerplate (which is FAIR) from clauses that actively disadvantage the user (which are UNFAIR)** - many FAIR clauses are not "nice", they are just standard legal text that doesn't impose unfair terms
+6. Should help distinguish unfair clauses from neutral/informational text (headers, metadata, general terms)
+7. Should provide guidance on identifying both FAIR and UNFAIR characteristics
+8. Each prompt must be DIFFERENT from previous ones
+9. Explore different strategies (reasoning-first with explicit justification, checklist approach, legal analysis, balanced classification to maximize Macro-F1)
 
 OUTPUT FORMAT:
-Write EXACTLY {num_candidates} prompts, one per line.
+Write EXACTLY ONE prompt.
 NO numbering, NO bullet points, NO explanations.
-JUST the instruction prompts themselves.
+JUST the instruction prompt itself.
 
-EXAMPLE OUTPUT (for num_candidates=2):
-Classify this Terms of Service clause as FAIR or UNFAIR. Most clauses are fair and neutral. Only mark as UNFAIR if it contains clear problematic terms like liability limits or forced arbitration. Provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR
-Read the clause carefully. If it's standard/neutral, classify as FAIR. If it contains unfair terms (unilateral changes, arbitration requirements, content removal rights, etc.), classify as UNFAIR. Answer: CLASSIFICATION: <FAIR or UNFAIR>
+EXAMPLE OUTPUT:
+Analyze this Terms of Service clause step-by-step. First, identify if it contains any unfair terms (liability limits, forced arbitration, unilateral changes, etc.) or if it's just neutral legal boilerplate. State your reasoning explicitly (e.g., "Reason: Standard informational text" or "Reason: Contains limitation of liability clause"). Then provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR
 
-NOW GENERATE {num_candidates} NEW PROMPTS:
+NOW GENERATE YOUR NEW PROMPT:
