@@ -117,18 +117,22 @@ def train(
     val_loader: DataLoader,
     config,
     device: torch.device,
-    class_weights: Optional[torch.Tensor] = None
+    class_weights: Optional[torch.Tensor] = None,
+    rank: int = 0,
+    is_distributed: bool = False
 ) -> Tuple[list[float], list[dict]]:
     """Train the model with validation and early stopping.
 
     Args:
-        encoder: Legal-BERT encoder
-        classifier: MLP classifier
+        encoder: Legal-BERT encoder (possibly wrapped in DDP)
+        classifier: MLP classifier (possibly wrapped in DDP)
         train_loader: Training data loader
         val_loader: Validation data loader
         config: Training configuration
         device: Device to train on
         class_weights: Class weights for loss function
+        rank: Process rank for distributed training
+        is_distributed: Whether using distributed training
 
     Returns:
         Tuple of (train_losses, val_metrics_history)
@@ -142,12 +146,16 @@ def train(
         focal_gamma=config.focal_gamma
     )
 
+    # Unwrap DDP if needed
+    encoder_model = encoder.module if hasattr(encoder, 'module') else encoder
+    classifier_model = classifier.module if hasattr(classifier, 'module') else classifier
+
     # Setup optimizer with different learning rates for encoder and classifier
     # Only include parameters that require gradients
     optimizer_params = []
 
     # Add encoder parameters only if they require gradients (not frozen)
-    encoder_trainable_params = [p for p in encoder.parameters() if p.requires_grad]
+    encoder_trainable_params = [p for p in encoder_model.parameters() if p.requires_grad]
     if encoder_trainable_params:
         optimizer_params.append({
             'params': encoder_trainable_params,
@@ -156,7 +164,7 @@ def train(
 
     # Classifier is always trainable
     optimizer_params.append({
-        'params': classifier.parameters(),
+        'params': classifier_model.parameters(),
         'lr': config.learning_rate
     })
 
@@ -175,12 +183,18 @@ def train(
     val_metrics_history = []
     best_val_f1 = 0.0
 
-    print(f"\nStarting training for {config.num_epochs} epochs...")
-    print(f"Device: {device}")
-    print(f"Encoder LR: {config.encoder_lr}, Classifier LR: {config.learning_rate}")
+    # Only print from main process
+    if rank == 0:
+        print(f"\nStarting training for {config.num_epochs} epochs...")
+        print(f"Device: {device}")
+        print(f"Encoder LR: {config.encoder_lr}, Classifier LR: {config.learning_rate}")
 
     for epoch in range(config.num_epochs):
         start_time = time.time()
+
+        # Set epoch for DistributedSampler to ensure proper shuffling
+        if is_distributed and hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(epoch)
 
         # Train one epoch
         train_loss = train_epoch(
@@ -198,22 +212,23 @@ def train(
 
         epoch_time = time.time() - start_time
 
-        # Print progress
-        print(f"\nEpoch {epoch + 1}/{config.num_epochs} ({epoch_time:.1f}s)")
-        print(f"Train Loss: {train_loss:.4f}")
-        print(f"Val - Acc: {val_metrics['accuracy']:.4f}, "
-              f"P: {val_metrics['precision']:.4f}, "
-              f"R: {val_metrics['recall']:.4f}, "
-              f"F1: {val_metrics['f1']:.4f}, "
-              f"AUROC: {val_metrics['auroc']:.4f}")
+        # Print progress (only from main process)
+        if rank == 0:
+            print(f"\nEpoch {epoch + 1}/{config.num_epochs} ({epoch_time:.1f}s)")
+            print(f"Train Loss: {train_loss:.4f}")
+            print(f"Val - Acc: {val_metrics['accuracy']:.4f}, "
+                  f"P: {val_metrics['precision']:.4f}, "
+                  f"R: {val_metrics['recall']:.4f}, "
+                  f"F1: {val_metrics['f1']:.4f}, "
+                  f"AUROC: {val_metrics['auroc']:.4f}")
 
-        # Save best model
-        if config.save_best_model and val_metrics['f1'] > best_val_f1:
+        # Save best model (only from main process)
+        if config.save_best_model and val_metrics['f1'] > best_val_f1 and rank == 0:
             best_val_f1 = val_metrics['f1']
             torch.save({
                 'epoch': epoch,
-                'encoder_state_dict': encoder.state_dict(),
-                'classifier_state_dict': classifier.state_dict(),
+                'encoder_state_dict': encoder_model.state_dict(),
+                'classifier_state_dict': classifier_model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_metrics': val_metrics,
                 'config': config
@@ -222,7 +237,8 @@ def train(
 
         # Early stopping check
         if early_stopping(val_metrics['f1']):
-            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            if rank == 0:
+                print(f"\nEarly stopping triggered after {epoch + 1} epochs")
             break
 
     return train_losses, val_metrics_history

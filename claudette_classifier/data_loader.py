@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data.distributed import DistributedSampler
 
 
 class ClaudetteDataset(Dataset):
@@ -157,45 +158,83 @@ def create_dataloaders(
     val_dataset: ClaudetteDataset,
     test_dataset: ClaudetteDataset,
     batch_size: int = 32,
-    use_oversampling: bool = True
+    use_oversampling: bool = True,
+    use_distributed: bool = False,
+    world_size: int = 1,
+    rank: int = 0
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Create PyTorch dataloaders with optional oversampling.
+    """Create PyTorch dataloaders with optional oversampling and distributed support.
 
     Args:
         train_dataset: Training dataset
         val_dataset: Validation dataset
         test_dataset: Test dataset
-        batch_size: Batch size
-        use_oversampling: Whether to use weighted sampling for training
+        batch_size: Batch size per GPU
+        use_oversampling: Whether to use weighted sampling for training (disabled with DDP)
+        use_distributed: Whether to use DistributedSampler for multi-GPU training
+        world_size: Number of GPUs (for distributed training)
+        rank: Current process rank (for distributed training)
 
     Returns:
         Tuple of (train_loader, val_loader, test_loader)
     """
-    if use_oversampling:
+    # Training loader
+    if use_distributed:
+        # Use DistributedSampler for DDP (oversampling not compatible with DDP)
+        train_sampler = DistributedSampler(
+            train_dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=train_sampler,
+            num_workers=4,
+            pin_memory=True
+        )
+        if rank == 0:
+            print(f"Using DistributedSampler for training (world_size={world_size})")
+    elif use_oversampling:
         sampler = create_weighted_sampler(train_dataset.labels)
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
-            sampler=sampler
+            sampler=sampler,
+            num_workers=4,
+            pin_memory=True
         )
         print("Using weighted random sampler for training (oversampling minority class)")
     else:
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
-            shuffle=True
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
         )
+
+    # Validation and test loaders (no special sampling needed)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False) if use_distributed else None
+    test_sampler = DistributedSampler(test_dataset, shuffle=False) if use_distributed else None
 
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
-        shuffle=False
+        shuffle=False,
+        sampler=val_sampler,
+        num_workers=4,
+        pin_memory=True
     )
 
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False
+        shuffle=False,
+        sampler=test_sampler,
+        num_workers=4,
+        pin_memory=True
     )
 
     return train_loader, val_loader, test_loader
