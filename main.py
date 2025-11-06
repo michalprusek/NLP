@@ -52,8 +52,8 @@ def main():
         "--backend",
         type=str,
         default="auto",
-        choices=["transformers", "vllm", "claude", "auto"],
-        help="LLM backend for task model (auto detects Claude models)",
+        choices=["transformers", "vllm", "claude", "openai", "auto"],
+        help="LLM backend for task model (auto detects Claude and OpenAI models)",
     )
 
     # Meta-optimizer model (for gradient generation, prompt editing)
@@ -68,8 +68,8 @@ def main():
         "--meta-backend",
         type=str,
         default="auto",
-        choices=["transformers", "vllm", "claude", "auto"],
-        help="Backend for meta-optimizer model (auto detects Claude models)",
+        choices=["transformers", "vllm", "claude", "openai", "auto"],
+        help="Backend for meta-optimizer model (auto detects Claude and OpenAI models)",
     )
 
     parser.add_argument(
@@ -292,12 +292,12 @@ def main():
         "temperature": 0.7,
     }
 
-    # Only add device/dtype for non-Claude backends
-    if args.meta_backend not in ["claude", "auto"] or "claude" not in args.meta_model.lower():
+    # Only add device/dtype for non-API backends (Claude and OpenAI use API)
+    if args.meta_backend not in ["claude", "openai", "auto"] or ("claude" not in args.meta_model.lower() and "gpt" not in args.meta_model.lower()):
         meta_llm_kwargs["device"] = args.device
         meta_llm_kwargs["torch_dtype"] = args.torch_dtype
 
-    # Add tensor parallelism for vLLM (not for Claude)
+    # Add tensor parallelism for vLLM (not for Claude or OpenAI)
     if args.meta_backend == "vllm":
         meta_llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
 
