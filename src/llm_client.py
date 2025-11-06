@@ -450,6 +450,88 @@ class ClaudeClient(LLMClient):
         return results
 
 
+class OpenAIClient(LLMClient):
+    """LLM client using OpenAI's API"""
+
+    def __init__(
+        self,
+        model_name: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+    ):
+        """
+        Initialize OpenAI client.
+
+        Args:
+            model_name: OpenAI model identifier (e.g., 'gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo')
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Environment variables required:
+            OPENAI_API_KEY: Your OpenAI API key
+        """
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise ImportError(
+                "openai package not installed. Install with: pip install openai"
+            )
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+
+        # Get API key from environment
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY not found in environment variables. "
+                "Please add it to your .env file or set it as an environment variable."
+            )
+
+        self.client = OpenAI(api_key=api_key)
+        print(f"Initialized OpenAI client with model: {model_name}")
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text from a single prompt"""
+        return self.generate_batch([prompt], **kwargs)[0]
+
+    def generate_batch(self, prompts: List[str], **kwargs) -> List[str]:
+        """
+        Generate text for multiple prompts.
+
+        Args:
+            prompts: List of prompts
+            **kwargs: Override default generation parameters
+
+        Returns:
+            List of generated texts
+        """
+        # Override defaults with kwargs
+        max_new_tokens = kwargs.get('max_new_tokens', self.max_new_tokens)
+        temperature = kwargs.get('temperature', self.temperature)
+
+        results = []
+        for prompt in prompts:
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                # Extract text from response
+                text = response.choices[0].message.content
+                results.append(text)
+            except Exception as e:
+                print(f"Error generating with OpenAI: {e}")
+                results.append("")
+
+        return results
+
+
 def create_llm_client(
     model_name: str,
     backend: str = "auto",
@@ -459,18 +541,20 @@ def create_llm_client(
     Factory function to create LLM client.
 
     Args:
-        model_name: Model identifier (supports aliases: 'haiku' -> latest Haiku, 'sonnet' -> latest Sonnet)
-        backend: Backend to use ('transformers', 'vllm', 'claude', or 'auto')
-                 'auto' will detect Claude models automatically
+        model_name: Model identifier (supports aliases: 'haiku' -> latest Haiku, 'sonnet' -> latest Sonnet, 'gpt-3.5-turbo')
+        backend: Backend to use ('transformers', 'vllm', 'claude', 'openai', or 'auto')
+                 'auto' will detect Claude and OpenAI models automatically
         **kwargs: Additional arguments for the client
 
     Returns:
         LLMClient instance
     """
-    # Model aliases for Claude models (always use latest versions)
+    # Model aliases for Claude and OpenAI models (always use latest versions)
     MODEL_ALIASES = {
         "haiku": "claude-haiku-4-5-20251001",      # Latest Haiku (4.5)
         "sonnet": "claude-sonnet-4-5-20251022",    # Latest Sonnet (4.5)
+        "gpt-3.5": "gpt-3.5-turbo",                # OpenAI GPT-3.5
+        "gpt-4": "gpt-4-turbo",                    # OpenAI GPT-4 Turbo
     }
 
     # Resolve alias if present
@@ -479,10 +563,12 @@ def create_llm_client(
         model_name = MODEL_ALIASES[model_name.lower()]
         print(f"Resolved model alias '{original_model_name}' -> '{model_name}'")
 
-    # Auto-detect Claude models
+    # Auto-detect model backend
     if backend == "auto":
         if "claude" in model_name.lower():
             backend = "claude"
+        elif "gpt" in model_name.lower():
+            backend = "openai"
         else:
             backend = "transformers"
 
@@ -502,5 +588,12 @@ def create_llm_client(
             if k in ['max_new_tokens', 'temperature']
         }
         return ClaudeClient(model_name, **claude_kwargs)
+    elif backend == "openai":
+        # Filter out parameters not supported by OpenAIClient
+        openai_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in ['max_new_tokens', 'temperature']
+        }
+        return OpenAIClient(model_name, **openai_kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend}. Choose from: transformers, vllm, claude, auto")
+        raise ValueError(f"Unknown backend: {backend}. Choose from: transformers, vllm, claude, openai, auto")
