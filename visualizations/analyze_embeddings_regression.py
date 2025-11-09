@@ -13,6 +13,7 @@ Note: Ridge regularization is necessary because we have p >> n (768 features, ~8
 import argparse
 from pathlib import Path
 from typing import List, Tuple
+import sys
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge, RidgeCV
@@ -39,9 +40,9 @@ def compute_studentized_residuals_ridge(
     the effective degrees of freedom and leverage approximation.
 
     Args:
-        y_true: True values
-        y_pred: Predicted values
-        X: Design matrix (without intercept, centered)
+        y_true: True values (n,)
+        y_pred: Predicted values (n,)
+        X: Design matrix (n, p) without intercept, centered
         alpha: Ridge regularization parameter
 
     Returns:
@@ -62,8 +63,10 @@ def compute_studentized_residuals_ridge(
         H = X @ np.linalg.solve(XtX_ridge, X.T)
         h = np.diag(H)  # Leverage values
         df_eff = np.trace(H)  # Effective degrees of freedom
-    except np.linalg.LinAlgError:
+    except np.linalg.LinAlgError as e:
         # Fallback if matrix is singular
+        print(f"WARNING: Hat matrix computation failed ({e}). Using approximate leverage values.", file=sys.stderr)
+        print(f"WARNING: Studentized residuals may be less accurate with this approximation.", file=sys.stderr)
         h = np.ones(n) * (p / n)
         df_eff = p
 
@@ -157,8 +160,12 @@ def plot_studentized_residuals(
     )
 
     # Save
-    fig.write_html(output_path)
-    print(f"\nStudentized residuals plot saved to: {output_path}")
+    try:
+        fig.write_html(output_path)
+        print(f"\nStudentized residuals plot saved to: {output_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing studentized residuals plot to {output_path}: {e}", file=sys.stderr)
+        print("Warning: Could not save studentized residuals plot", file=sys.stderr)
 
     # Print outlier statistics
     n_outliers = df['outlier'].sum()
@@ -229,8 +236,12 @@ def plot_qq_plot(
         showlegend=True
     )
 
-    fig.write_html(output_path)
-    print(f"Q-Q plot saved to: {output_path}")
+    try:
+        fig.write_html(output_path)
+        print(f"Q-Q plot saved to: {output_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing Q-Q plot to {output_path}: {e}", file=sys.stderr)
+        print("Warning: Could not save Q-Q plot", file=sys.stderr)
 
     # Shapiro-Wilk test for normality
     stat, p_value = stats.shapiro(studentized_residuals)
@@ -282,15 +293,30 @@ def main():
     base_name = Path(args.json_path).stem
 
     # Load data
-    prompts, scores, iterations = load_optimization_results(args.json_path)
-    scores_array = np.array(scores)
+    try:
+        prompts, scores, iterations = load_optimization_results(args.json_path)
+        scores_array = np.array(scores)
+    except FileNotFoundError:
+        print(f"Error: File not found: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except PermissionError:
+        print(f"Error: Permission denied when reading: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading optimization results: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Generate embeddings
-    embeddings = embed_prompts(
-        prompts,
-        model_name=args.embedding_model,
-        device=args.device
-    )
+    try:
+        embeddings = embed_prompts(
+            prompts,
+            model_name=args.embedding_model,
+            device=args.device
+        )
+    except Exception as e:
+        print(f"Error generating embeddings with model '{args.embedding_model}': {e}", file=sys.stderr)
+        print("Possible issues: model not found, network error during download, or device incompatibility", file=sys.stderr)
+        sys.exit(1)
 
     # Split data into 80% train, 20% test
     print("\n" + "="*60)
@@ -442,8 +468,12 @@ def main():
     })
 
     csv_path = output_dir / f"{base_name}_regression_results.csv"
-    results_df.to_csv(csv_path, index=False)
-    print(f"\nDetailed results saved to: {csv_path}")
+    try:
+        results_df.to_csv(csv_path, index=False)
+        print(f"\nDetailed results saved to: {csv_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing CSV to {csv_path}: {e}", file=sys.stderr)
+        print("Warning: Could not save detailed results to CSV", file=sys.stderr)
 
     print("\n✓ Regression analysis complete!")
 

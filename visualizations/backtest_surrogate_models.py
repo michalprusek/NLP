@@ -9,6 +9,7 @@ the actual OPRO optimization process: train on iterations 0..i, predict i+1.
 import argparse
 from pathlib import Path
 from typing import List, Dict
+import sys
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
@@ -72,9 +73,13 @@ class EnsembleRegressor:
         for name, model in self.models.items():
             if self.verbose:
                 print(f"    Training {name}...")
-            model.fit(X, y)
+            try:
+                model.fit(X, y)
+            except Exception as e:
+                print(f"Error training {name} model: {e}", file=sys.stderr)
+                raise RuntimeError(f"Failed to train {name} model: {e}") from e
 
-        # Compute weights based on training performance (simple equal weights for now)
+        # Fixed weights (CatBoost: 40%, RandomForest: 30%, NGBoost: 30%)
         self.weights = {'catboost': 0.4, 'random_forest': 0.3, 'ngboost': 0.3}
         self.is_fitted = True
 
@@ -336,8 +341,12 @@ def plot_backtest_results(results: Dict, output_path: str):
         font=dict(size=11)
     )
 
-    fig.write_html(output_path)
-    print(f"\nBacktest visualization saved to: {output_path}")
+    try:
+        fig.write_html(output_path)
+        print(f"\nBacktest visualization saved to: {output_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing backtest visualization to {output_path}: {e}", file=sys.stderr)
+        print("Warning: Could not save backtest visualization", file=sys.stderr)
 
 
 def print_summary_statistics(results: Dict):
@@ -405,8 +414,12 @@ def save_detailed_results(results: Dict, prompts: List[str], output_path: str):
             })
 
     df = pd.DataFrame(rows)
-    df.to_csv(output_path, index=False)
-    print(f"Detailed results saved to: {output_path}")
+    try:
+        df.to_csv(output_path, index=False)
+        print(f"Detailed results saved to: {output_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing detailed results to {output_path}: {e}", file=sys.stderr)
+        print("Warning: Could not save detailed results to CSV", file=sys.stderr)
 
 
 def main():
@@ -448,16 +461,31 @@ def main():
     base_name = Path(args.json_path).stem
 
     # Load data
-    prompts, scores, iterations = load_optimization_results(args.json_path)
-    scores_array = np.array(scores)
-    iterations_array = np.array(iterations)
+    try:
+        prompts, scores, iterations = load_optimization_results(args.json_path)
+        scores_array = np.array(scores)
+        iterations_array = np.array(iterations)
+    except FileNotFoundError:
+        print(f"Error: File not found: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except PermissionError:
+        print(f"Error: Permission denied when reading: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading optimization results: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Generate embeddings
-    embeddings = embed_prompts(
-        prompts,
-        model_name=args.embedding_model,
-        device=args.device
-    )
+    try:
+        embeddings = embed_prompts(
+            prompts,
+            model_name=args.embedding_model,
+            device=args.device
+        )
+    except Exception as e:
+        print(f"Error generating embeddings with model '{args.embedding_model}': {e}", file=sys.stderr)
+        print("Possible issues: model not found, network error during download, or device incompatibility", file=sys.stderr)
+        sys.exit(1)
 
     # Run backtest
     results = backtest_sequential(

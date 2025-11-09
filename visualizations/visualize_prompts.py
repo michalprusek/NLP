@@ -16,6 +16,7 @@ Generates 4 HTML files (when dimensions='both'):
 import argparse
 from pathlib import Path
 from typing import List
+import sys
 import numpy as np
 import pandas as pd
 import umap
@@ -51,22 +52,40 @@ def reduce_dimensionality(
     Returns:
         Reduced embeddings of shape (n_prompts, n_components)
     """
+    # Validate parameters
+    if n_components not in [2, 3]:
+        raise ValueError(f"n_components must be 2 or 3, got {n_components}")
+
+    if n_neighbors < 2 or n_neighbors >= len(embeddings):
+        raise ValueError(f"n_neighbors must be between 2 and {len(embeddings)-1}, got {n_neighbors}")
+
+    if min_dist < 0 or min_dist > 1:
+        raise ValueError(f"min_dist must be between 0 and 1, got {min_dist}")
+
+    if len(embeddings) < n_neighbors:
+        raise ValueError(f"Number of samples ({len(embeddings)}) is less than n_neighbors ({n_neighbors})")
+
     print(f"\nReducing to {n_components}D using UMAP...")
     print(f"Parameters: n_neighbors={n_neighbors}, min_dist={min_dist}, metric={metric}")
 
-    reducer = umap.UMAP(
-        n_components=n_components,
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        metric=metric,
-        random_state=random_state,
-        verbose=True
-    )
+    try:
+        reducer = umap.UMAP(
+            n_components=n_components,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            metric=metric,
+            random_state=random_state,
+            verbose=True
+        )
 
-    reduced = reducer.fit_transform(embeddings)
-    print(f"Reduced shape: {reduced.shape}")
+        reduced = reducer.fit_transform(embeddings)
+        print(f"Reduced shape: {reduced.shape}")
 
-    return reduced
+        return reduced
+
+    except Exception as e:
+        print(f"Error during UMAP dimensionality reduction: {e}", file=sys.stderr)
+        raise RuntimeError(f"UMAP failed: {e}") from e
 
 
 def create_2d_visualization(
@@ -152,9 +171,13 @@ def create_2d_visualization(
         )
 
     # Save
-    fig.write_html(output_path)
-    color_type = "by iteration" if color_by == 'iteration' else ""
-    print(f"\n2D visualization {color_type} saved to: {output_path}".strip())
+    try:
+        fig.write_html(output_path)
+        color_type = "by iteration" if color_by == 'iteration' else ""
+        print(f"\n2D visualization {color_type} saved to: {output_path}".strip())
+    except (IOError, PermissionError) as e:
+        print(f"Error writing 2D visualization to {output_path}: {e}", file=sys.stderr)
+        raise IOError(f"Failed to save visualization: {e}") from e
 
 
 def create_3d_visualization(
@@ -230,9 +253,13 @@ def create_3d_visualization(
     )
 
     # Save
-    fig.write_html(output_path)
-    color_type = "by iteration" if color_by == 'iteration' else ""
-    print(f"3D visualization {color_type} saved to: {output_path}".strip())
+    try:
+        fig.write_html(output_path)
+        color_type = "by iteration" if color_by == 'iteration' else ""
+        print(f"3D visualization {color_type} saved to: {output_path}".strip())
+    except (IOError, PermissionError) as e:
+        print(f"Error writing 3D visualization to {output_path}: {e}", file=sys.stderr)
+        raise IOError(f"Failed to save visualization: {e}") from e
 
 
 
@@ -302,14 +329,29 @@ def main():
     base_name = Path(args.json_path).stem
 
     # Load data
-    prompts, scores, iterations = load_optimization_results(args.json_path)
+    try:
+        prompts, scores, iterations = load_optimization_results(args.json_path)
+    except FileNotFoundError:
+        print(f"Error: File not found: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except PermissionError:
+        print(f"Error: Permission denied when reading: {args.json_path}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error loading optimization results: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Generate embeddings
-    embeddings = embed_prompts(
-        prompts,
-        model_name=args.embedding_model,
-        device=args.device
-    )
+    try:
+        embeddings = embed_prompts(
+            prompts,
+            model_name=args.embedding_model,
+            device=args.device
+        )
+    except Exception as e:
+        print(f"Error generating embeddings with model '{args.embedding_model}': {e}", file=sys.stderr)
+        print("Possible issues: model not found, network error during download, or device incompatibility", file=sys.stderr)
+        sys.exit(1)
 
     # Create visualizations
     if args.dimensions in ['2d', 'both']:

@@ -144,4 +144,9 @@ papers/
 # *.pth
 # *.bin
 # *.safetensors
-.env
+
+# Visualization outputs
+visualizations/output/
+
+# CatBoost training info
+catboost_info/

@@ -8,12 +8,23 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import argparse
 from pathlib import Path
+import sys
 
 
 def load_backtest_results(csv_path):
     """Load backtest results from CSV."""
-    df = pd.read_csv(csv_path)
-    return df
+    try:
+        df = pd.read_csv(csv_path)
+        return df
+    except FileNotFoundError:
+        print(f"Error: File not found: {csv_path}", file=sys.stderr)
+        raise
+    except PermissionError:
+        print(f"Error: Permission denied when reading: {csv_path}", file=sys.stderr)
+        raise
+    except Exception as e:
+        print(f"Error loading CSV file {csv_path}: {e}", file=sys.stderr)
+        raise
 
 
 def create_comparison_plot(results_dict, output_path):
@@ -136,8 +147,12 @@ def create_comparison_plot(results_dict, output_path):
         font=dict(size=12)
     )
 
-    fig.write_html(output_path)
-    print(f"Comparison plot saved to: {output_path}")
+    try:
+        fig.write_html(output_path)
+        print(f"Comparison plot saved to: {output_path}")
+    except (IOError, PermissionError) as e:
+        print(f"Error writing comparison plot to {output_path}: {e}", file=sys.stderr)
+        raise IOError(f"Failed to save comparison plot: {e}") from e
 
 
 def print_comparison_table(results_dict):
@@ -203,24 +218,32 @@ def main():
 
     # Load results
     results_dict = {}
-    for i, csv_path in enumerate(args.csv_paths):
-        if args.labels and i < len(args.labels):
-            label = args.labels[i]
-        else:
-            # Extract meaningful name from path
-            path = Path(csv_path)
-            if 'gpt' in path.stem.lower():
-                label = 'GPT-3.5'
-            elif 'qwen' in path.stem.lower():
-                label = 'Qwen2.5-7B'
+    try:
+        for i, csv_path in enumerate(args.csv_paths):
+            if args.labels and i < len(args.labels):
+                label = args.labels[i]
             else:
-                label = path.stem.replace('_backtest_details', '')
+                # Extract meaningful name from path
+                path = Path(csv_path)
+                if 'gpt' in path.stem.lower():
+                    label = 'GPT-3.5'
+                elif 'qwen' in path.stem.lower():
+                    label = 'Qwen2.5-7B'
+                else:
+                    label = path.stem.replace('_backtest_details', '')
 
-        results_dict[label] = load_backtest_results(csv_path)
-        print(f"Loaded {label}: {len(results_dict[label])} predictions")
+            results_dict[label] = load_backtest_results(csv_path)
+            print(f"Loaded {label}: {len(results_dict[label])} predictions")
+    except Exception as e:
+        print(f"Error loading backtest results: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Create comparison plot
-    create_comparison_plot(results_dict, args.output)
+    try:
+        create_comparison_plot(results_dict, args.output)
+    except Exception as e:
+        print(f"Error creating comparison plot: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Print comparison table
     print_comparison_table(results_dict)
