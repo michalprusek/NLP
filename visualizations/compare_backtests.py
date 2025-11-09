@@ -81,15 +81,8 @@ def create_comparison_plot(results_dict, output_path):
             row=1, col=2
         )
 
-        # 3. Compute R² per iteration (approximation)
-        # R² ≈ 1 - (MSE / Var(y))
-        for iter_num in iterations:
-            iter_data = df[df['iteration'] == iter_num]
-            mse = (iter_data['error'] ** 2).mean()
-            var_y = iter_data['actual_accuracy'].var()
-            r2 = 1 - (mse / var_y) if var_y > 0 else -1
-
-        # For simplicity, just plot error variance
+        # 3. Plot error variance instead of R² computation
+        # (Original R² loop wasn't using its results)
         fig.add_trace(
             go.Scatter(
                 x=iterations,
@@ -105,10 +98,10 @@ def create_comparison_plot(results_dict, output_path):
         )
 
         # 4. Cumulative performance
-        cumulative_rmse = []
-        for i in range(1, len(iterations) + 1):
-            subset = df[df['iteration'] <= iterations.iloc[i-1]]
-            cumulative_rmse.append(subset['abs_error'].mean())
+        cumulative_rmse = [
+            df[df['iteration'] <= iterations.iloc[i-1]]['abs_error'].mean()
+            for i in range(1, len(iterations) + 1)
+        ]
 
         fig.add_trace(
             go.Scatter(

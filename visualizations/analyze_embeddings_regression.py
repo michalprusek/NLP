@@ -10,63 +10,20 @@ well/poorly given their semantic embedding.
 Note: Ridge regularization is necessary because we have p >> n (768 features, ~80 samples).
 """
 
-import json
 import argparse
 from pathlib import Path
 from typing import List, Tuple
 import numpy as np
 import pandas as pd
-from sentence_transformers import SentenceTransformer
-from sklearn.linear_model import LinearRegression, Ridge, RidgeCV
+from sklearn.linear_model import Ridge, RidgeCV
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from sklearn.model_selection import cross_val_score, train_test_split
 import plotly.graph_objects as go
 import plotly.express as px
 from scipy import stats
 
-
-def load_optimization_results(json_path: str) -> Tuple[List[str], List[float], List[int]]:
-    """Load prompts, scores, and iterations from optimization JSON."""
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-
-    prompts = []
-    scores = []
-    iterations = []
-
-    for entry in data['history']:
-        prompts.append(entry['prompt'])
-        scores.append(entry['score'])
-        iterations.append(entry['iteration'])
-
-    print(f"Loaded {len(prompts)} prompts from {data['method'].upper()} optimization")
-
-    if 'model' in data:
-        print(f"Model: {data['model']}")
-    elif 'task_model' in data:
-        print(f"Task model: {data['task_model']}")
-
-    return prompts, scores, iterations
-
-
-def embed_prompts(
-    prompts: List[str],
-    model_name: str = 'all-mpnet-base-v2',
-    device: str = 'cpu'
-) -> np.ndarray:
-    """Create embeddings for prompts using sentence transformers."""
-    print(f"\nGenerating embeddings with {model_name}...")
-    model = SentenceTransformer(model_name, device=device)
-
-    embeddings = model.encode(
-        prompts,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        batch_size=32
-    )
-
-    print(f"Embeddings shape: {embeddings.shape}")
-    return embeddings
+# Import shared utilities
+from utils import load_optimization_results, embed_prompts
 
 
 def compute_studentized_residuals_ridge(
@@ -96,15 +53,12 @@ def compute_studentized_residuals_ridge(
     # Raw residuals
     residuals = y_true - y_pred
 
-    # Residual sum of squares
-    rss = np.sum(residuals ** 2)
+    # Compute hat matrix H = X(X'X + alpha*I)^{-1}X' for Ridge
+    # and extract leverage values
+    XtX = X.T @ X
+    XtX_ridge = XtX + alpha * np.eye(p)
 
-    # For Ridge, effective degrees of freedom
-    # df = tr(H) where H is the hat matrix for Ridge
-    # H = X(X'X + alpha*I)^{-1}X'
     try:
-        XtX = X.T @ X
-        XtX_ridge = XtX + alpha * np.eye(p)
         H = X @ np.linalg.solve(XtX_ridge, X.T)
         h = np.diag(H)  # Leverage values
         df_eff = np.trace(H)  # Effective degrees of freedom
@@ -113,25 +67,17 @@ def compute_studentized_residuals_ridge(
         h = np.ones(n) * (p / n)
         df_eff = p
 
-    # Residual standard error with effective df
-    if n - df_eff > 0:
-        mse = rss / (n - df_eff)
-    else:
-        mse = rss / max(n - p, 1)
+    # Compute mean squared error with effective degrees of freedom
+    rss = np.sum(residuals ** 2)
+    mse = rss / max(n - df_eff, 1) if n > df_eff else rss / max(n - p, 1)
 
     # Standardized residuals
-    if mse > 1e-10:  # Avoid division by very small numbers
-        standardized_residuals = residuals / np.sqrt(mse)
-    else:
-        standardized_residuals = residuals
+    standardized_residuals = residuals / np.sqrt(mse) if mse > 1e-10 else residuals
 
     # Studentized residuals (externally studentized)
     # Account for leverage: Var(e_i) = sigma^2 * (1 - h_i)
     h_safe = np.clip(h, 0, 0.99)  # Prevent division by zero
-    if mse > 1e-10:
-        studentized_residuals = residuals / np.sqrt(mse * (1 - h_safe))
-    else:
-        studentized_residuals = standardized_residuals
+    studentized_residuals = residuals / np.sqrt(mse * (1 - h_safe)) if mse > 1e-10 else standardized_residuals
 
     return residuals, standardized_residuals, studentized_residuals
 

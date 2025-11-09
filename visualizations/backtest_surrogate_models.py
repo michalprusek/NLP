@@ -6,70 +6,23 @@ Tests ensemble regressor (CatBoost + RandomForest + NGBoost) by simulating
 the actual OPRO optimization process: train on iterations 0..i, predict i+1.
 """
 
-import json
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Dict
 import numpy as np
 import pandas as pd
-from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from catboost import CatBoostRegressor
 from ngboost import NGBRegressor
 from ngboost.distns import Normal
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 import warnings
 warnings.filterwarnings('ignore')
 
-
-def load_optimization_results(json_path: str) -> Tuple[List[str], List[float], List[int]]:
-    """Load prompts, scores, and iterations from optimization JSON."""
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-
-    prompts = []
-    scores = []
-    iterations = []
-
-    for entry in data['history']:
-        prompts.append(entry['prompt'])
-        scores.append(entry['score'])
-        iterations.append(entry['iteration'])
-
-    print(f"Loaded {len(prompts)} prompts from {data['method'].upper()} optimization")
-
-    if 'model' in data:
-        print(f"Model: {data['model']}")
-    elif 'task_model' in data:
-        print(f"Task model: {data['task_model']}")
-
-    print(f"Iterations: 0-{max(iterations)}")
-    print(f"Score range: {min(scores):.4f} - {max(scores):.4f}")
-
-    return prompts, scores, iterations
-
-
-def embed_prompts(
-    prompts: List[str],
-    model_name: str = 'all-mpnet-base-v2',
-    device: str = 'cpu'
-) -> np.ndarray:
-    """Create embeddings for prompts using sentence transformers."""
-    print(f"\nGenerating embeddings with {model_name}...")
-    model = SentenceTransformer(model_name, device=device)
-
-    embeddings = model.encode(
-        prompts,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        batch_size=32
-    )
-
-    print(f"Embeddings shape: {embeddings.shape}")
-    return embeddings
+# Import shared utilities
+from utils import load_optimization_results, embed_prompts
 
 
 class EnsembleRegressor:
@@ -130,23 +83,13 @@ class EnsembleRegressor:
         if not self.is_fitted:
             raise ValueError("Model must be fitted before prediction")
 
-        predictions = []
-        weights = []
-
-        for name, model in self.models.items():
-            if name == 'ngboost':
-                # NGBoost returns distribution, get mean
-                pred = model.predict(X)
-            else:
-                pred = model.predict(X)
-
-            predictions.append(pred)
-            weights.append(self.weights[name])
+        # Get predictions from all models
+        predictions = np.array([
+            model.predict(X) for model in self.models.values()
+        ])
 
         # Weighted average
-        predictions = np.array(predictions)
-        weights = np.array(weights)
-
+        weights = np.array([self.weights[name] for name in self.models.keys()])
         return np.average(predictions, axis=0, weights=weights)
 
     def predict_with_uncertainty(self, X):
@@ -154,22 +97,13 @@ class EnsembleRegressor:
         if not self.is_fitted:
             raise ValueError("Model must be fitted before prediction")
 
-        predictions = []
+        # Get predictions from all models
+        predictions = np.array([
+            model.predict(X) for model in self.models.values()
+        ])
 
-        for name, model in self.models.items():
-            if name == 'ngboost':
-                pred = model.predict(X)
-            else:
-                pred = model.predict(X)
-            predictions.append(pred)
-
-        predictions = np.array(predictions)
-
-        # Ensemble mean and std
-        mean = np.mean(predictions, axis=0)
-        std = np.std(predictions, axis=0)
-
-        return mean, std
+        # Return ensemble mean and std
+        return np.mean(predictions, axis=0), np.std(predictions, axis=0)
 
 
 def backtest_sequential(
@@ -291,44 +225,28 @@ def plot_backtest_results(results: Dict, output_path: str):
 
     iterations = results['iteration']
 
-    # 1. RMSE over iterations
-    fig.add_trace(
-        go.Scatter(
-            x=iterations,
-            y=results['rmse'],
-            mode='lines+markers',
-            name='RMSE',
-            line=dict(color='red', width=2),
-            marker=dict(size=8)
-        ),
-        row=1, col=1
-    )
+    # Define metrics and their configurations
+    metric_configs = [
+        ('rmse', 'RMSE', 'red', 1, 1),
+        ('mae', 'MAE', 'orange', 1, 2),
+        ('r2', 'R²', 'green', 2, 1),
+    ]
 
-    # 2. MAE over iterations
-    fig.add_trace(
-        go.Scatter(
-            x=iterations,
-            y=results['mae'],
-            mode='lines+markers',
-            name='MAE',
-            line=dict(color='orange', width=2),
-            marker=dict(size=8)
-        ),
-        row=1, col=2
-    )
+    # Add metric traces
+    for metric_key, name, color, row, col in metric_configs:
+        fig.add_trace(
+            go.Scatter(
+                x=iterations,
+                y=results[metric_key],
+                mode='lines+markers',
+                name=name,
+                line=dict(color=color, width=2),
+                marker=dict(size=8)
+            ),
+            row=row, col=col
+        )
 
-    # 3. R² over iterations
-    fig.add_trace(
-        go.Scatter(
-            x=iterations,
-            y=results['r2'],
-            mode='lines+markers',
-            name='R²',
-            line=dict(color='green', width=2),
-            marker=dict(size=8)
-        ),
-        row=2, col=1
-    )
+    # Add R² baseline
     fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5, row=2, col=1)
 
     # 4. Training size growth
