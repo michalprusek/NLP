@@ -130,14 +130,14 @@ def main():
     parser.add_argument(
         "--iterations",
         type=int,
-        default=10,
+        default=20,
         help="Number of optimization iterations",
     )
 
     parser.add_argument(
         "--minibatch-size",
         type=int,
-        default=20,
+        default=261,
         help="Number of examples per evaluation",
     )
 
@@ -202,19 +202,16 @@ def main():
         elif args.task == "claudette_binary":
             args.dataset_path = "datasets/tos_local"  # Same dataset, binary labels
 
-    # Load initial prompt from file if not provided
-    if args.initial_prompt is None:
+    # Load initial prompt from file if provided
+    if args.initial_prompt is not None:
+        # User provided explicit initial prompt
+        pass
+    else:
+        # Try to load from file
         prompt_file = Path(__file__).parent / "src" / "prompts" / args.task / "initial.txt"
         if prompt_file.exists():
             args.initial_prompt = prompt_file.read_text(encoding='utf-8').strip()
-        else:
-            # Fallback defaults
-            if args.task == "gsm8k":
-                args.initial_prompt = "Solve the following math problem step by step. Show your reasoning and provide the final numerical answer."
-            elif args.task == "claudette":
-                args.initial_prompt = "Analyze this Terms of Service clause for unfair terms. MOST clauses (90%) are FAIR—if so, output 'LABELS: NONE'. If UNFAIR, identify ALL applicable categories (can be multiple): 0=Limitation of liability, 1=Unilateral termination, 2=Unilateral change, 3=Arbitration, 4=Content removal, 5=Choice of law, 7=Contract by using, 8=Jurisdiction. Output format: 'LABELS: 0, 3' or 'LABELS: NONE'."
-            elif args.task == "claudette_binary":
-                args.initial_prompt = "Classify the following Terms of Service clause as either FAIR or UNFAIR. Most clauses are fair. Provide: CLASSIFICATION: FAIR or CLASSIFICATION: UNFAIR"
+        # Otherwise leave as None - optimizer will use its own defaults
 
     # Set GPU visibility
     import os
@@ -402,8 +399,10 @@ def main():
             minibatch_size=args.minibatch_size,
             task_description=task_description,
         )
+        # Pass initial prompts if provided, otherwise None (optimizer uses defaults)
+        initial_prompts_arg = [args.initial_prompt] if args.initial_prompt is not None else None
         best_prompt, history = optimizer.optimize(
-            initial_prompts=[args.initial_prompt],
+            initial_prompts=initial_prompts_arg,
             verbose=not args.quiet,
         )
 

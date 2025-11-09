@@ -244,7 +244,7 @@ class OPRO:
                 # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
                 question = ex.get('question', ex.get('text', ''))
                 answer = ex.get('answer', ex.get('label', ''))
-                examples.append(f"Example {i+1}:\nQ: {question}...\nA: {answer}")
+                examples.append(f"Problem:\nQ: {question}\nA: <INS>\nGround truth answer: {answer}")
 
         return "\n\n".join(examples)
 
@@ -268,7 +268,7 @@ class OPRO:
 
         # Generate answers (handle both 'question' and 'text' fields)
         questions = [example.get('question', example.get('text', '')) for example in batch]
-        prompts = [f"{prompt}\n\nQuestion: {q}\nAnswer:" for q in questions]
+        prompts = [f"Question: {q}\n\n{prompt}\n\nAnswer:" for q in questions]
         outputs = self.task_llm.generate_batch(prompts, temperature=0.0)
 
         # Evaluate
@@ -296,7 +296,7 @@ class OPRO:
         # Bucketize scores to 20 buckets (round to nearest 5%) as per OPRO paper Section 3.2
         if self.scored_prompts:
             scored_prompts_text = "\n".join([
-                f"Score: {bucket_score(sp.score, num_buckets=20):.0%} | Prompt: \"{sp.prompt}\""
+                f"text: {sp.prompt}\nscore: {int(bucket_score(sp.score, num_buckets=20) * 100)}"
                 for sp in sorted(self.scored_prompts, key=lambda x: x.score)  # ascending order
             ])
         else:
@@ -321,16 +321,21 @@ class OPRO:
             # Generate candidate (temperature=1.0 as in paper for diversity)
             response = self.meta_llm.generate(meta_prompt, temperature=1.0, max_new_tokens=500)
 
-            # Extract the prompt (remove numbering, bullets, etc.)
+            # Extract the prompt from <INS>...</INS> tags
             candidate = response.strip()
 
-            # Clean up common artifacts
-            for prefix in ['1. ', '2. ', '3. ', '4. ', '- ', '* ', 'Prompt: ', '"']:
-                if candidate.startswith(prefix):
-                    candidate = candidate[len(prefix):]
-
-            # Remove trailing quotes
-            candidate = candidate.strip().strip('"').strip()
+            # Look for <INS>...</INS> tags
+            if '<INS>' in candidate and '</INS>' in candidate:
+                start_idx = candidate.find('<INS>') + 5
+                end_idx = candidate.find('</INS>')
+                candidate = candidate[start_idx:end_idx].strip()
+            else:
+                # Fallback: clean up common artifacts
+                for prefix in ['1. ', '2. ', '3. ', '4. ', '- ', '* ', 'Prompt: ', '"']:
+                    if candidate.startswith(prefix):
+                        candidate = candidate[len(prefix):]
+                # Remove trailing quotes
+                candidate = candidate.strip().strip('"').strip()
 
             # Skip if empty or duplicate
             if candidate and candidate not in seen:
