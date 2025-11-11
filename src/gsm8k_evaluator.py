@@ -54,42 +54,14 @@ def compare_numbers(predicted: str, ground_truth: str, tolerance: float = 1e-6) 
 def extract_answer(text: str, verbose: bool = False) -> Optional[str]:
     """
     Extract final number from model output.
-    Priority:
-    1) final_answer: <num>
-    2) #### <num>
-    3) \\boxed{<num>}
-    4) last number in text
+    Simply returns the last number found in text.
     """
     if not text:
         return None
 
     text = text.strip()
 
-    # 1) final_answer:
-    match = re.search(rf'final_answer\s*:\s*({NUMBER_PATTERN})', text, re.IGNORECASE)
-    if match:
-        result = normalize_number(match.group(1))
-        if verbose and result:
-            print(f"  Found via final_answer: {result}")
-        return result
-
-    # 2) #### NUMBER
-    match = re.search(rf'####\s*({NUMBER_PATTERN})', text)
-    if match:
-        result = normalize_number(match.group(1))
-        if verbose and result:
-            print(f"  Found via ####: {result}")
-        return result
-
-    # 3) \boxed{NUMBER}
-    match = re.search(rf'\\boxed\{{({NUMBER_PATTERN})\}}', text)
-    if match:
-        result = normalize_number(match.group(1))
-        if verbose and result:
-            print(f"  Found via \\boxed{{}}: {result}")
-        return result
-
-    # 4) Last number in text (fallback)
+    # Find all numbers and return the last one
     numbers = re.findall(NUMBER_PATTERN, text)
     if numbers:
         result = normalize_number(numbers[-1])

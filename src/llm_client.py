@@ -253,7 +253,7 @@ class VLLMClient(LLMClient):
         self,
         model_name: str,
         max_new_tokens: int = 512,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
         tensor_parallel_size: int = 1,
     ):
         """
@@ -290,7 +290,7 @@ class VLLMClient(LLMClient):
             model=model_name,
             tensor_parallel_size=tensor_parallel_size,
             dtype="auto",
-            gpu_memory_utilization=0.75,  # Reduce from default 0.9 to leave more headroom
+            gpu_memory_utilization=0.85,  # Reduce from default 0.9 to leave more headroom
             max_model_len=4096,  # Limit context length to reduce KV cache size
             enforce_eager=enforce_eager,  # Use eager mode for tensor parallelism
         )
@@ -326,6 +326,8 @@ class VLLMClient(LLMClient):
             return prompt
 
         # Use chat template for Instruct models
+        # Solve this math problem step by step.
+        # "<|im_start|>user\nSolve this math problem step by step.\n\nQuestion: 2+2\nAnswer:<|im_end|>\n<|im_start|>assistant\n"
         messages = [{'role': 'user', 'content': prompt}]
         return self.tokenizer.apply_chat_template(
             messages,
@@ -364,7 +366,7 @@ class VLLMClient(LLMClient):
         )
 
         # Disable progress bar to avoid ZeroDivisionError in vLLM for fast generations
-        outputs = self.llm.generate(formatted_prompts, sampling_params, use_tqdm=False)
+        outputs = self.llm.generate(formatted_prompts, sampling_params, use_tqdm=True)
         return [output.outputs[0].text for output in outputs]
 
 
@@ -457,7 +459,7 @@ class OpenAIClient(LLMClient):
         self,
         model_name: str,
         max_new_tokens: int = 512,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
     ):
         """
         Initialize OpenAI client.

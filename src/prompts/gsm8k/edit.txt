@@ -24,7 +24,7 @@ INSTRUCTIONS
 5. Preserve the core structure and any parts that work well
 
 HARD RULES
-- OUTPUT FORMAT: Ensure prompt guides models to output "#### NUMBER" as final answer
+- OUTPUT FORMAT: Ensure the final numerical answer is the LAST number in the response
 - REASONING FIRST: Final answer must come AFTER step-by-step work, not before
 - CLARITY: Make it unambiguous which number is the final answer
 - BREVITY: Output ONLY the improved prompt text - no preface, no quotes, no code fences, no meta-commentary

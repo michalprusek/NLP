@@ -259,11 +259,7 @@ def main():
 
     # Load initial prompt from file if provided (optimize mode)
     if args.mode == "optimize":
-        if args.initial_prompt is not None:
-            # User provided explicit initial prompt
-            pass
-        else:
-            # Try to load from file
+        if args.initial_prompt is None:
             prompt_file = Path(__file__).parent / "src" / "prompts" / args.task / "initial.txt"
             if prompt_file.exists():
                 args.initial_prompt = prompt_file.read_text(encoding='utf-8').strip()
@@ -320,19 +316,7 @@ def main():
     # Initialize Task LLM client (the model being optimized)
     print(f"\nInitializing TASK model ({args.backend}):")
     print(f"  Model: {args.model}")
-
-    # Warning for small models
-    if any(size in args.model.lower() for size in ['0.5b', '1.5b', '1b']):
-        print("\n" + "="*80)
-        print("⚠️  WARNING: You are using a very small model (<2B parameters)")
-        print("="*80)
-        print("Small models often struggle with:")
-        print("  • Math reasoning (solving GSM8K problems)")
-        print("  • Following complex instructions")
-        print()
-        print("RECOMMENDATION: Use at least a 3B model for better results:")
-        print("  --model Qwen/Qwen2.5-3B-Instruct")
-        print("="*80 + "\n")
+    
 
     # Prepare Task LLM client kwargs
     task_llm_kwargs = {

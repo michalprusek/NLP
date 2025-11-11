@@ -11,13 +11,13 @@ CURRENT_PROMPT:
 - PERFORMANCE:
   * Accuracy: {accuracy:.2%} (correct={correct}, total={total}, minibatch={num_examples})
 
-EVALUATION METHOD (Math-Verify):
-The system uses 3-step verification:
-1. EXTRACTION: Prioritizes "\boxed{{NUMBER}}", "#### NUMBER", "final_answer: NUMBER" (prefers LATER matches). Fallback: last number.
-2. PARSING: Normalizes to SymPy (removes units, commas, currency; handles fractions/decimals/percentages)
-3. VERIFICATION: Checks numerical equality with tolerance + symbolic equivalence
+EVALUATION METHOD:
+The system extracts the LAST NUMBER found in the model's output and compares it to the ground truth.
+- Numbers are normalized (removes commas, handles decimals)
+- Comparison uses numerical equality with tolerance
+- Units are ignored ("42 km" = "42")
 
-KEY: "1/3" ≈ "0.333", "42 km" = "42", different forms of same value are EQUIVALENT.
+KEY: The final answer must be the LAST number in the response.
 
 YOUR TASK:
 Analyze these FAILURE EXAMPLES to identify systematic issues with the current prompt:
@@ -51,5 +51,4 @@ CONSTRAINTS:
 - Keep total response under 600 tokens
 - Reference specific patterns from the failure examples above
 - Focus on systematic issues visible across multiple errors
-- Ensure actions guide models to provide answers in "#### NUMBER" format
 - Actions should be concrete and testable (not vague like "improve clarity")
