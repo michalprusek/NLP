@@ -643,16 +643,17 @@ class ProTeGi:
 
         return "\n\n".join(formatted)
 
-    def generate_gradient(self, candidate: PromptCandidate, results: Dict[str, Any]) -> str:
+    def generate_gradient(self, candidate: PromptCandidate, results: Dict[str, Any], save_debug_info: bool = False) -> Tuple[str, Any]:
         """
         Generate textual gradient (critique) for a prompt.
 
         Args:
             candidate: Prompt candidate
             results: Evaluation results
+            save_debug_info: If True, return debug info (gradient_prompt)
 
         Returns:
-            Textual gradient (critique)
+            Tuple of (gradient, debug_info) where debug_info is None if save_debug_info=False
         """
         # Format error examples for gradient prompt
         # Paper uses groups of 4 errors per gradient (Section 3.2)
@@ -695,7 +696,15 @@ class ProTeGi:
 
         # Paper uses temperature=1.0 for gradient generation (exploration)
         gradient = self.meta_llm.generate(gradient_prompt, temperature=1.0, max_new_tokens=4000)
-        return gradient
+
+        debug_info = None
+        if save_debug_info:
+            debug_info = {
+                'gradient_prompt': gradient_prompt,
+                'gradient': gradient,
+            }
+
+        return gradient, debug_info
 
     def _generate_paraphrases(self, prompt: str, num_paraphrases: int = 2) -> List[str]:
         """
@@ -749,7 +758,7 @@ Output:"""
 
         return True
 
-    def apply_gradient(self, candidate: PromptCandidate, gradient: str, error_examples: str = "", verbose: bool = False, candidate_num: int = 1) -> Optional[str]:
+    def apply_gradient(self, candidate: PromptCandidate, gradient: str, error_examples: str = "", verbose: bool = False, candidate_num: int = 1, save_debug_info: bool = False) -> Tuple[Optional[str], Any]:
         """
         Apply textual gradient to generate improved prompt.
 
@@ -759,9 +768,10 @@ Output:"""
             error_examples: Formatted error examples (as per paper Appendix 1.1)
             verbose: Print debug info
             candidate_num: Candidate number for logging
+            save_debug_info: If True, return debug info (edit_prompt)
 
         Returns:
-            New improved prompt, or None if generation/validation fails
+            Tuple of (new_prompt, debug_info) where debug_info is None if save_debug_info=False
         """
         edit_prompt = self.edit_prompt_template.format(
             prompt=candidate.prompt,
@@ -894,14 +904,22 @@ Output:"""
                 print(f"⚠️  Candidate {candidate_num} REJECTED (invalid)")
                 print(f"    Reason: Failed validation checks")
                 print(f"    Prompt: {new_prompt[:100]}...")
-            return None
+            debug_info = {'edit_prompt': edit_prompt} if save_debug_info else None
+            return None, debug_info
 
         if verbose:
             print(f"✓ Candidate {candidate_num}: {new_prompt}")
 
-        return new_prompt
+        debug_info = None
+        if save_debug_info:
+            debug_info = {
+                'edit_prompt': edit_prompt,
+                'new_prompt': new_prompt,
+            }
 
-    def optimize(self, initial_prompt: str, verbose: bool = True) -> Tuple[str, List[Dict]]:
+        return new_prompt, debug_info
+
+    def optimize(self, initial_prompt: str, verbose: bool = True, save_intermediate_prompts: bool = False) -> Tuple[str, List[Dict]]:
         """
         Run ProTeGi optimization with correct budgeted beam search.
 
@@ -913,6 +931,8 @@ Output:"""
         Args:
             initial_prompt: Starting prompt
             verbose: Whether to print progress
+            save_intermediate_prompts: If True, save gradient prompts, gradients, edit prompts,
+                                      and formatted task prompts to history for debugging
 
         Returns:
             Tuple of (best_prompt, optimization_history)
@@ -930,6 +950,15 @@ Output:"""
             if verbose:
                 print(f"\n--- Iteration {iteration + 1}/{self.num_iterations} ---")
                 print(f"Current beam size: {len(beam)}")
+
+            # For debugging: save first gradient and edit in this iteration
+            iteration_debug_info = None
+            if save_intermediate_prompts:
+                iteration_debug_info = {
+                    'gradient_info': None,
+                    'edit_info': None,
+                    'example_formatted_task_prompt': None,
+                }
 
             # ================================================================
             # PHASE 1: EXPAND - Generate candidates from ALL parents in beam
@@ -973,7 +1002,11 @@ Output:"""
                     }
 
                     # Generate gradient
-                    gradient = self.generate_gradient(parent, mini_results)
+                    gradient, gradient_debug = self.generate_gradient(parent, mini_results, save_debug_info=save_intermediate_prompts)
+
+                    # Save first gradient debug info for this iteration
+                    if save_intermediate_prompts and iteration_debug_info['gradient_info'] is None:
+                        iteration_debug_info['gradient_info'] = gradient_debug
 
                     if verbose:
                         print(f"  Gradient {grad_idx+1}: {gradient[:80]}...")
@@ -982,7 +1015,11 @@ Output:"""
                     error_examples_str = self._format_error_examples(error_sample)
 
                     # Apply gradient to generate new prompt (q=1 per gradient)
-                    new_prompt = self.apply_gradient(parent, gradient, error_examples=error_examples_str, verbose=verbose, candidate_num=grad_idx+1)
+                    new_prompt, edit_debug = self.apply_gradient(parent, gradient, error_examples=error_examples_str, verbose=verbose, candidate_num=grad_idx+1, save_debug_info=save_intermediate_prompts)
+
+                    # Save first edit debug info for this iteration
+                    if save_intermediate_prompts and iteration_debug_info['edit_info'] is None and edit_debug:
+                        iteration_debug_info['edit_info'] = edit_debug
 
                     if new_prompt is None:
                         continue
@@ -1082,12 +1119,26 @@ Output:"""
 
             # Record history (best candidate stats)
             best = beam[0]
-            self.history.append({
+            history_entry = {
                 'iteration': iteration,
                 'prompt': best.prompt,
                 'score': best.score,
                 'num_evals': best.num_evals,
-            })
+            }
+
+            # Add debug info if requested
+            if save_intermediate_prompts and iteration_debug_info:
+                # Create example formatted task prompt using evaluation method
+                # ProTeGi uses stratified sampling, so grab first example from dataset
+                if hasattr(self.evaluator, 'dataset') and len(self.evaluator.dataset) > 0:
+                    example = self.evaluator.dataset[0]
+                    question = example.get('question', '')
+                    formatted_task_prompt = f"{best.prompt}\n\nQuestion: {question}\nAnswer:"
+                    iteration_debug_info['example_formatted_task_prompt'] = formatted_task_prompt
+
+                history_entry['debug'] = iteration_debug_info
+
+            self.history.append(history_entry)
 
             if verbose:
                 best = beam[0]

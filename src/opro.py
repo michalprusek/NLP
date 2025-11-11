@@ -281,15 +281,18 @@ class OPRO:
             return score, results
         return score
 
-    def generate_candidates(self) -> List[str]:
+    def generate_candidates(self, save_debug_info: bool = False) -> Tuple[List[str], Any]:
         """
         Generate new prompt candidates using LLM as meta-optimizer.
 
         Paper implementation: Makes N independent calls to the optimizer LLM
         (each at temperature 1.0) to generate N diverse instructions.
 
+        Args:
+            save_debug_info: If True, return debug info (meta_prompt, raw responses)
+
         Returns:
-            List of new prompt candidates
+            Tuple of (candidates, debug_info) where debug_info is None if save_debug_info=False
         """
         # Format scored prompts for the meta-prompt (keep top 20 as in paper)
         # Sort in ASCENDING order (worst to best) as per paper - shows progressive improvement
@@ -306,7 +309,15 @@ class OPRO:
         candidates = []
         seen = set(sp.prompt for sp in self.scored_prompts)
 
-        for _ in range(self.num_candidates_per_iter):
+        # For debugging: save first meta-prompt and all raw responses
+        debug_info = None
+        if save_debug_info:
+            debug_info = {
+                'meta_prompt': None,
+                'raw_responses': [],
+            }
+
+        for i in range(self.num_candidates_per_iter):
             # Get 3 random examples for this generation (paper uses 3 random exemplars)
             example_problems = self._get_random_examples(num_examples=3)
 
@@ -318,8 +329,16 @@ class OPRO:
                 num_candidates=1,  # Generate 1 candidate per call
             )
 
+            # Save first meta-prompt for debugging
+            if save_debug_info and i == 0:
+                debug_info['meta_prompt'] = meta_prompt
+
             # Generate candidate (temperature=1.0 as in paper for diversity)
             response = self.meta_llm.generate(meta_prompt, temperature=1.0, max_new_tokens=500)
+
+            # Save raw response for debugging
+            if save_debug_info:
+                debug_info['raw_responses'].append(response)
 
             # Extract the prompt from <INS>...</INS> tags
             candidate = response.strip()
@@ -342,12 +361,13 @@ class OPRO:
                 candidates.append(candidate)
                 seen.add(candidate)
 
-        return candidates
+        return candidates, debug_info
 
     def optimize(
         self,
         initial_prompts: List[str] = None,
-        verbose: bool = True
+        verbose: bool = True,
+        save_intermediate_prompts: bool = False
     ) -> Tuple[str, List[Dict]]:
         """
         Run OPRO optimization.
@@ -355,6 +375,8 @@ class OPRO:
         Args:
             initial_prompts: Starting prompts (if None, generate from scratch)
             verbose: Whether to print progress
+            save_intermediate_prompts: If True, save meta-prompts, generated candidates,
+                                      and formatted task prompts to history for debugging
 
         Returns:
             Tuple of (best_prompt, optimization_history)
@@ -404,7 +426,7 @@ class OPRO:
             if verbose:
                 print("Generating new candidates...\n")
 
-            candidates = self.generate_candidates()
+            candidates, debug_info = self.generate_candidates(save_debug_info=save_intermediate_prompts)
 
             if not candidates:
                 if verbose:
@@ -412,7 +434,7 @@ class OPRO:
                 break
 
             # Evaluate new candidates
-            for candidate in candidates:
+            for i, candidate in enumerate(candidates):
                 if verbose:
                     print(f"Evaluating: {candidate[:80]}...")
 
@@ -427,11 +449,29 @@ class OPRO:
                     # print_failed_examples_opro(results, num_examples=3)
 
                 # Record history
-                self.history.append({
+                history_entry = {
                     'iteration': iteration,
                     'prompt': candidate,
                     'score': score,
-                })
+                }
+
+                # Add debug info for first candidate of this iteration
+                if save_intermediate_prompts and i == 0 and debug_info:
+                    # Add meta-prompt and generated candidates
+                    history_entry['debug'] = {
+                        'meta_prompt': debug_info['meta_prompt'],
+                        'generated_candidates': candidates,
+                        'raw_meta_responses': debug_info['raw_responses'],
+                    }
+
+                    # Add example formatted task prompt
+                    if self.fixed_eval_set:
+                        example = self.fixed_eval_set[0]
+                        question = example.get('question', example.get('text', ''))
+                        formatted_task_prompt = f"Question: {question}\n\n{candidate}\n\nAnswer:"
+                        history_entry['debug']['example_formatted_task_prompt'] = formatted_task_prompt
+
+                self.history.append(history_entry)
 
             # Keep only top-k prompts
             self.scored_prompts.sort(key=lambda x: x.score, reverse=True)

@@ -10,6 +10,7 @@ TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}  # Qwen/Qwen2.5-7B-Instruct
 META_MODEL=${META_MODEL:-""}  # haiku
 METHOD=${METHOD:-"opro"}
 TASK=${TASK:-"claudette_binary"}
+SAVE_INTERMEDIATE=${SAVE_INTERMEDIATE:-"false"}  # Set to "true" to save intermediate prompts for debugging
 
 echo "=========================================="
 echo "Dual GPU Prompt Optimization"
@@ -47,6 +48,12 @@ CMD="$CMD --num-candidates 8"
 # Add meta-model if specified
 if [ -n "$META_MODEL" ]; then
     CMD="$CMD --meta-model $META_MODEL"
+fi
+
+# Add save-intermediate-prompts flag if enabled
+if [ "$SAVE_INTERMEDIATE" = "true" ]; then
+    CMD="$CMD --save-intermediate-prompts"
+    echo "Saving intermediate prompts to results JSON for debugging"
 fi
 
 # Execute

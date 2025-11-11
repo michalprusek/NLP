@@ -222,6 +222,12 @@ def main():
     )
 
     parser.add_argument(
+        "--save-intermediate-prompts",
+        action="store_true",
+        help="Save intermediate prompts (meta-prompts, gradients, formatted examples) to results JSON for debugging",
+    )
+
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug output (shows model outputs and extraction details)",
@@ -431,6 +437,7 @@ def main():
             best_prompt, history = optimizer.optimize(
                 initial_prompt=args.initial_prompt,
                 verbose=not args.quiet,
+                save_intermediate_prompts=args.save_intermediate_prompts,
             )
 
             # Save results
@@ -452,6 +459,7 @@ def main():
             best_prompt, history = optimizer.optimize(
                 initial_prompts=initial_prompts_arg,
                 verbose=not args.quiet,
+                save_intermediate_prompts=args.save_intermediate_prompts,
             )
 
             # Save results
