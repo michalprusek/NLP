@@ -1,20 +1,21 @@
 #!/bin/bash
 
-# Run prompt optimization with dual GPU support (tensor parallelism)
-# This script uses both NVIDIA L40S GPUs to accelerate a single optimization run
+# Run prompt optimization
+# Supports both local models (vLLM/transformers) and API models (OpenAI/Claude)
 
-set -e
+set -e  # Exit on error
+set -o pipefail  # Catch errors in pipes
 
 # Configuration
-TASK_MODEL=${TASK_MODEL:-"Qwen/Qwen2.5-7B-Instruct"}  # Qwen/Qwen2.5-7B-Instruct or Equall/Saul-7B-Instruct-v1
-META_MODEL=${META_MODEL:-""}  # haiku
+TASK_MODEL=${TASK_MODEL:-"gpt-3.5-turbo"}  # gpt-3.5-turbo, claude-3-haiku-20240307, or Qwen/Qwen2.5-7B-Instruct
+META_MODEL=${META_MODEL:-""}  # haiku, sonnet, or leave empty to use same as task model
 METHOD=${METHOD:-"opro"}
-TASK=${TASK:-"claudette_binary"}
-SAVE_INTERMEDIATE=${SAVE_INTERMEDIATE:-"false"}  # Set to "true" to save intermediate prompts for debugging
+TASK=${TASK:-"gsm8k"}
+SAVE_INTERMEDIATE=${SAVE_INTERMEDIATE:-"true"}  # Set to "true" to save intermediate prompts for debugging
 
 echo "=========================================="
-echo "Dual GPU Prompt Optimization"
-echo "Backend: vLLM (with tensor parallelism)"
+echo "Prompt Optimization"
+echo "Backend: auto (detects based on model)"
 echo "=========================================="
 echo "Task: $TASK"
 echo "Method: $METHOD"
@@ -37,11 +38,9 @@ CMD="$CMD --mode optimize"
 CMD="$CMD --task $TASK"
 CMD="$CMD --method $METHOD"
 CMD="$CMD --model $TASK_MODEL"
-CMD="$CMD --backend vllm"
-CMD="$CMD --tensor-parallel-size 2"
-CMD="$CMD --gpu-ids 0,1"
+CMD="$CMD --backend auto"
 CMD="$CMD --iterations 10" # 6 ProTeGi, 200 OPRO
-CMD="$CMD --minibatch-size 300" # 64 ProTeGi, 260 OPRO
+CMD="$CMD --minibatch-size 20" # 64 ProTeGi, 260 OPRO
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 
@@ -56,11 +55,25 @@ if [ "$SAVE_INTERMEDIATE" = "true" ]; then
     echo "Saving intermediate prompts to results JSON for debugging"
 fi
 
-# Execute
-eval $CMD
-
 echo ""
-echo "=========================================="
-echo "Optimization complete!"
-echo "Check results/ directory for outputs"
-echo "=========================================="
+echo "Running command:"
+echo "$CMD"
+echo ""
+
+# Execute (run directly instead of eval to catch errors)
+$CMD
+
+# Check exit code
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "=========================================="
+    echo "Optimization complete!"
+    echo "Check results/ directory for outputs"
+    echo "=========================================="
+else
+    echo ""
+    echo "=========================================="
+    echo "ERROR: Optimization failed!"
+    echo "=========================================="
+    exit 1
+fi
