@@ -32,6 +32,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 # Build command with optional meta-model
 CMD="uv run python main.py"
+CMD="$CMD --mode optimize"
 CMD="$CMD --task $TASK"
 CMD="$CMD --method $METHOD"
 CMD="$CMD --model $TASK_MODEL"

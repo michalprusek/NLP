@@ -381,8 +381,15 @@ class OPRO:
 
             self.scored_prompts.append(ScoredPrompt(prompt=prompt, score=score))
 
+            # Record initial prompts in history (iteration -1 to distinguish from generated prompts)
+            self.history.append({
+                'iteration': -1,  # -1 indicates initial/seed prompt
+                'prompt': prompt,
+                'score': score,
+            })
+
             if verbose:
-                print(f"Score: {score:.1%} | Prompt: {prompt}")
+                print(f"Score: {score:.1%} | Prompt: {prompt if prompt else '(empty prompt)'}")
                 # Show failed examples
                 # print_failed_examples_opro(results, num_examples=3)
 

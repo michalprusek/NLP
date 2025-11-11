@@ -132,12 +132,8 @@ dmypy.json
 # macOS
 .DS_Store
 
-# Results and cache
-results/
+# Cache
 .cache/
-
-# Research papers
-papers/
 
 # Model checkpoints (optional - comment out if you want to track them)
 # *.pt
