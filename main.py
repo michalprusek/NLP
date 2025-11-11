@@ -18,7 +18,7 @@ from pathlib import Path
 from datetime import datetime
 
 from src.llm_client import create_llm_client
-from src.evaluator import GSM8KEvaluator
+from src.gsm8k_evaluator import GSM8KEvaluator
 from src.claudette_evaluator import ClaudetteEvaluator
 from src.claudette_binary_evaluator import ClaudetteBinaryEvaluator
 from src.protegi import ProTeGi
