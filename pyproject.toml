@@ -6,8 +6,11 @@ requires-python = ">=3.9,<3.14"
 dependencies = [
     "accelerate>=1.10.1",
     "anthropic>=0.71.0",
+    "bokeh>=3.4.3",
     "catboost>=1.2.0",
     "datasets>=4.2.0",
+    "ipykernel>=6.31.0",
+    "jupyter>=1.1.1",
     "ngboost>=0.5.1",
     "numpy>=1.21.0",
     "openai>=2.5.0",

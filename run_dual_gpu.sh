@@ -60,11 +60,16 @@ echo "Running command:"
 echo "$CMD"
 echo ""
 
-# Execute (run directly instead of eval to catch errors)
-$CMD
+# Execute and capture exit code
+set +e  # Temporarily disable exit on error to catch status
+echo "Starting optimization at $(date)..."
+eval $CMD 2>&1
+EXIT_CODE=$?
+echo "Finished at $(date) with exit code $EXIT_CODE"
+set -e  # Re-enable exit on error
 
 # Check exit code
-if [ $? -eq 0 ]; then
+if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "=========================================="
     echo "Optimization complete!"
@@ -73,7 +78,7 @@ if [ $? -eq 0 ]; then
 else
     echo ""
     echo "=========================================="
-    echo "ERROR: Optimization failed!"
+    echo "ERROR: Optimization failed with exit code $EXIT_CODE"
     echo "=========================================="
-    exit 1
+    exit $EXIT_CODE
 fi

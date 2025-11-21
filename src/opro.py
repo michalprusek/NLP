@@ -436,7 +436,7 @@ class OPRO:
             # Evaluate new candidates
             for i, candidate in enumerate(candidates):
                 if verbose:
-                    print(f"Evaluating: {candidate[:80]}...")
+                    print(f"Evaluating: {candidate[:]}...")
 
                 # All prompts evaluated on same fixed set (no data_idx needed)
                 score, results = self.evaluate_prompt(candidate, return_details=True)

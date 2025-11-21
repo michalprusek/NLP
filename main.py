@@ -687,5 +687,5 @@ def main():
             f.write(f"{'='*80}\n")
 
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
