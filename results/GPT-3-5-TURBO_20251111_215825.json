@@ -1,0 +1,652 @@
+{
+  "task": "gsm8k",
+  "method": "opro",
+  "task_model": "gpt-3.5-turbo",
+  "task_backend": "auto",
+  "meta_model": "gpt-3.5-turbo",
+  "meta_backend": "auto",
+  "timestamp": "20251111_215825",
+  "config": {
+    "iterations": 10,
+    "minibatch_size": 20,
+    "beam_size": null,
+    "num_candidates": 8,
+    "train_split": "train",
+    "val_split": "test",
+    "train_size": 7473,
+    "val_size": 1319,
+    "initial_prompt": [
+      "",
+      "Solve the following problem.",
+      "Let's solve the problem."
+    ]
+  },
+  "best_prompt": "Let's solve the problem.",
+  "history": [
+    {
+      "iteration": -1,
+      "prompt": "",
+      "score": 0.5
+    },
+    {
+      "iteration": -1,
+      "prompt": "Solve the following problem.",
+      "score": 0.75
+    },
+    {
+      "iteration": -1,
+      "prompt": "Let's solve the problem.",
+      "score": 0.85
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the total number of employees laid off.",
+      "score": 0.7,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: \nscore: 50\ntext: Solve the following problem.\nscore: 75\ntext: Let's solve the problem.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: A company has 1000 employees. There will be three rounds of layoffs. For each round of layoff, 10% of the remaining employees will be laid off. How many employees will be laid off in total?\nA: <INS>\nGround truth answer: The first round will result in 1000 * 10% = <<1000*10*.01=100>>100 employee layoffs.\nThere are 1000 - 100 = <<1000-100=900>>900 employees remaining.\nThe second round will result in 900 * 10% = <<900*10*.01=90>>90 employee layoffs.\nThere are 900 - 90 = <<900-90=810>>810 employees remaining.\nThe third round will result in 810 * 10% = <<810*10*.01=81>>81 employee layoffs.\nThe total number of of employees laid off is 100 + 90 + 81 = <<100+90+81=271>>271.\n#### 271\n\nProblem:\nQ: Tom decides to renovate a house.  There are 3 bedrooms and each bedroom takes 4 hours to renovate.  The kitchen takes 50% longer than each bedroom.  The living room took twice as much time as everything else combined.  How long did everything take?\nA: <INS>\nGround truth answer: The kitchen took 4 * .5 = <<4*.5=2>>2 hours longer than the bedrooms\nSo the kitchen took 4 + 2 = <<4+2=6>>6 hours\nThe bedrooms took 3 * 4 = <<3*4=12>>12 hours\nSo the kitchen and bedrooms combined took 12 + 6 = <<12+6=18>>18 hours\nThe living room took 18 * 2 = <<18*2=36>>36 hours\nSo everything took a total of 18 + 36 = <<18+36=54>>54 hours\n#### 54\n\nProblem:\nQ: Two-thirds of the class have brown eyes. Half of the students with brown eyes have black hair. If there are 6 students in the class with brown eyes and black hair, how many students are there in total?\nA: <INS>\nGround truth answer: There are 6 * 2 = <<6*2=12>>12 students with brown eyes and hair of any color.\nThere are 12 * 3/2 = <<12*3/2=18>>18 students in total.\n#### 18\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Calculate the total number of employees laid off.",
+          "Calculate the total cost or percentage by multiplying the given values.",
+          "Calculate the total number of open spots and full spots from the information given.",
+          "Find the solution step by step.",
+          "Break down the problem into smaller steps and solve each step before moving on to the next.",
+          "Calculate the difference between the given quantities.",
+          "Calculate the final distance or result.",
+          "Calculate the total expected outcome based on given parameters."
+        ],
+        "raw_meta_responses": [
+          "<INS>Calculate the total number of employees laid off.</INS>",
+          "<INS>Calculate the total cost or percentage by multiplying the given values.</INS>",
+          "<INS>Calculate the total number of open spots and full spots from the information given.</INS>",
+          "<INS>Find the solution step by step.</INS>",
+          "<INS>Break down the problem into smaller steps and solve each step before moving on to the next. </INS>",
+          "<INS>Calculate the difference between the given quantities.</INS>",
+          "<INS>Calculate the final distance or result.</INS>",
+          "<INS>Calculate the total expected outcome based on given parameters.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nCalculate the total number of employees laid off.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the total cost or percentage by multiplying the given values.",
+      "score": 0.75
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the total number of open spots and full spots from the information given.",
+      "score": 0.4
+    },
+    {
+      "iteration": 0,
+      "prompt": "Find the solution step by step.",
+      "score": 0.7
+    },
+    {
+      "iteration": 0,
+      "prompt": "Break down the problem into smaller steps and solve each step before moving on to the next.",
+      "score": 0.65
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the difference between the given quantities.",
+      "score": 0.8
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the final distance or result.",
+      "score": 0.85
+    },
+    {
+      "iteration": 0,
+      "prompt": "Calculate the total expected outcome based on given parameters.",
+      "score": 0.8
+    },
+    {
+      "iteration": 1,
+      "prompt": "Break down the problem into smaller parts, identify key information, and solve step by step to reach the solution.",
+      "score": 0.65,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Calculate the total number of open spots and full spots from the information given.\nscore: 40\ntext: \nscore: 50\ntext: Break down the problem into smaller steps and solve each step before moving on to the next.\nscore: 65\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Keenan needs to write an essay that is 1200 words. Her essay is due at midnight. She writes 400 words per hour for the first two hours. After that, she writes 200 words per hour. How many hours before the deadline does she need to start to finish on time?\nA: <INS>\nGround truth answer: In the first two hours, Keenan writes 800 words because 400*2=<<400*2=800>>800.\nAfter that, she still needs to write 400 words because 1200-800=<<1200-800=400>>400.\nSince she writes 200 words per hour, she will take 2 hours to write the last 400 words because 400/200=<<400/200=2>>2.\nThus, she needs to start 4 hours before the deadline because 2+2=<<4=4>>4.\n#### 4\n\nProblem:\nQ: Sally is saving up for a trip to Sea World. She already has $28 saved. It costs her $10 to park, $55 to get into the park and $25 for a meal pass. Sea World is 165 miles away and her car gets 30 miles per gallon of gas. If gas costs $3 a gallon, how much more will she have to save up?\nA: <INS>\nGround truth answer: She will be driving 330 miles for her trip because 2 x 165 = <<2*165=330>>330\nThey will need 11 gallons of gas because 330 / 30 =<<330/30=11>>11\nThe gas will cost $33 because 11 x 3 = <<11*3=33>>33\nHer total cost is $123 because 10 + 55 + 25 + 33 = <<10+55+25+33=123>>123\nShe needs to save $95 more because 123 - 28 = <<123-28=95>>95\n#### 95\n\nProblem:\nQ: On a particular week, Fatima's restaurant served 25 people food and drinks, and 3/5 of that number came to buy coffee. How many people did not buy coffee in the restaurant?\nA: <INS>\nGround truth answer: The number of customers who were served coffee in the restaurant is 3/5*25 = <<3/5*25=15>>15\nIf the total number of customers who came to the restaurant was 25, then 25-15 = <<25-15=10>>10 customers did not buy coffee\n#### 10\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into smaller parts, identify key information, and solve step by step to reach the solution.",
+          "Break down the problem into individual components and calculate each part before combining the results.",
+          "Break down the problem into smaller, manageable steps to find the solution efficiently.",
+          "Break down the problem into smaller steps to simplify the solution process.",
+          "Simplify the problem by breaking it down into smaller, manageable steps.",
+          "Break down the problem into smaller steps and solve each step before moving on."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into smaller parts, identify key information, and solve step by step to reach the solution.</INS>",
+          "<INS> Break down the problem into individual components and calculate each part before combining the results. </INS>",
+          "<INS> Break down the problem into smaller, manageable steps to find the solution efficiently. </INS>",
+          "<INS>Break down the problem into smaller steps to simplify the solution process.</INS>",
+          "<INS> Break down the problem into smaller steps and solve each step before moving on to the next. </INS>",
+          "<INS>Simplify the problem by breaking it down into smaller, manageable steps.</INS>",
+          "<INS> Break down the problem into smaller steps and solve each step before moving on.</INS>",
+          "<INS>Break down the problem into smaller steps and solve each step before moving on to the next.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into smaller parts, identify key information, and solve step by step to reach the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 1,
+      "prompt": "Break down the problem into individual components and calculate each part before combining the results.",
+      "score": 0.7
+    },
+    {
+      "iteration": 1,
+      "prompt": "Break down the problem into smaller, manageable steps to find the solution efficiently.",
+      "score": 0.7
+    },
+    {
+      "iteration": 1,
+      "prompt": "Break down the problem into smaller steps to simplify the solution process.",
+      "score": 0.8
+    },
+    {
+      "iteration": 1,
+      "prompt": "Simplify the problem by breaking it down into smaller, manageable steps.",
+      "score": 0.6
+    },
+    {
+      "iteration": 1,
+      "prompt": "Break down the problem into smaller steps and solve each step before moving on.",
+      "score": 0.5
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into essential components and logically progress through each step to reach a solution efficiently.",
+      "score": 0.7,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Calculate the total number of open spots and full spots from the information given.\nscore: 40\ntext: \nscore: 50\ntext: Break down the problem into smaller steps and solve each step before moving on.\nscore: 50\ntext: Simplify the problem by breaking it down into smaller, manageable steps.\nscore: 60\ntext: Break down the problem into smaller steps and solve each step before moving on to the next.\nscore: 65\ntext: Break down the problem into smaller parts, identify key information, and solve step by step to reach the solution.\nscore: 65\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Break down the problem into individual components and calculate each part before combining the results.\nscore: 70\ntext: Break down the problem into smaller, manageable steps to find the solution efficiently.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Pam has some bags of apples. Each of her bags has as many apples as 3 of Gerald's bags. Gerald's bags have 40 apples each. If Pam has 1200 apples in total, how many bags of apples does she have?\nA: <INS>\nGround truth answer: Each of Pam's bags contain 40*3=<<40*3=120>>120 apples.\nPam has 1200/120=<<1200/120=10>>10 bags of apples.\n#### 10\n\nProblem:\nQ: Samuel is going to the cinema with his brother, Kevin. They both have a total budget of $20 for their outing. Samuel buys his $14 ticket, then spends $6 on drinks and food. Kevin buys his ticket, then spends $2 on drinks. They have both used their entire budget. How much did Kevin spend on food?\nA: <INS>\nGround truth answer: We know Kevin bought a ticket and drinks, and this cost him 14 + 2 = <<14+2=16>>16 dollars.\nSince Kevin spent his entire budget, his food must have cost 20 \u2013 16 = <<20-16=4>>4 dollars.\n#### 4\n\nProblem:\nQ: Carson runs a carpool for five of his friends. The five of them cover all the gas expenses to compensate Carson for his time. Their total commute is 21 miles one way, gas costs $2.50/gallon, Carson's car gets 30 miles/gallon, and they commute to work 5 days a week, 4 weeks a month. How much does each person pay toward gas monthly?\nA: <INS>\nGround truth answer: First find the total number of monthly commutes: 5 days/week * 4 weeks/month = <<5*4=20>>20 days/month\nThen multiply the distance of the commute one way by the two ways: 21 miles * 2 = <<21*2=42>>42 miles\nThen multiply the number of commutes by the number of miles per commute: 42 miles/commute * 20 commutes = <<42*20=840>>840 miles\nThen divide the number of miles by the car's gas mileage: 840 miles / 30 miles/gallon = <<840/30=28>>28 gallons\nThen multiply that number by the cost of each gallon to find the total cost: 28 gallons * $2.50/gallon = $<<28*2.5=70>>70\nThen divide the total cost by the number of friends to find the cost per person: $70 / 5 people = $<<70/5=14>>14/person\n#### 14\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into essential components and logically progress through each step to reach a solution efficiently.",
+          "Break down the problem into smaller steps, analyze key information, and solve methodically to reach the solution efficiently.",
+          "Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.",
+          "Break down the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.",
+          "Break down the problem into manageable chunks and tackle each step methodically to find the solution efficiently.",
+          "Break down the problem into smaller, manageable steps to efficiently find the solution.",
+          "Break down the problem into smaller steps, identify key information, and solve systematically to reach the solution efficiently.",
+          "Break down the problem into manageable steps and approach each step methodically to find the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into essential components and logically progress through each step to reach a solution efficiently.</INS>",
+          "<INS> Break down the problem into smaller steps, analyze key information, and solve methodically to reach the solution efficiently. </INS>",
+          "<INS>Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.</INS>",
+          "<INS>Break down the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.</INS>",
+          "<INS>Break down the problem into manageable chunks and tackle each step methodically to find the solution efficiently.</INS>",
+          "<INS> Break down the problem into smaller, manageable steps to efficiently find the solution. </INS>",
+          "<INS> Break down the problem into smaller steps, identify key information, and solve systematically to reach the solution efficiently.</INS>",
+          "<INS>Break down the problem into manageable steps and approach each step methodically to find the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into essential components and logically progress through each step to reach a solution efficiently.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into smaller steps, analyze key information, and solve methodically to reach the solution efficiently.",
+      "score": 0.65
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.",
+      "score": 0.75
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.",
+      "score": 0.65
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into manageable chunks and tackle each step methodically to find the solution efficiently.",
+      "score": 0.7
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into smaller, manageable steps to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into smaller steps, identify key information, and solve systematically to reach the solution efficiently.",
+      "score": 0.65
+    },
+    {
+      "iteration": 2,
+      "prompt": "Break down the problem into manageable steps and approach each step methodically to find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.",
+      "score": 0.75,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Break down the problem into smaller steps and solve each step before moving on to the next.\nscore: 65\ntext: Break down the problem into smaller parts, identify key information, and solve step by step to reach the solution.\nscore: 65\ntext: Break down the problem into smaller steps, analyze key information, and solve methodically to reach the solution efficiently.\nscore: 65\ntext: Break down the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 65\ntext: Break down the problem into smaller steps, identify key information, and solve systematically to reach the solution efficiently.\nscore: 65\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Break down the problem into individual components and calculate each part before combining the results.\nscore: 70\ntext: Break down the problem into smaller, manageable steps to find the solution efficiently.\nscore: 70\ntext: Break down the problem into essential components and logically progress through each step to reach a solution efficiently.\nscore: 70\ntext: Break down the problem into manageable chunks and tackle each step methodically to find the solution efficiently.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: It will cost $60 to rent a sailboat and $80 per hour to rent a ski boat. Ken rented a sailboat while Aldrich rented a ski boat. How much more did it cost Aldrich to rent the ski boat than Ken to rent a sailboat for three hours a day in two days?\nA: <INS>\nGround truth answer: Ken paid $60 x 3 = $<<60*3=180>>180 to rent a sailboat for 3 hours in a day\nAldrich paid $80 x 3 = $<<80*3=240>>240 to rent a ski boat in 3 hours in a day.\nSo Aldrich paid $240 - $180 = $<<240-180=60>>60 more to rent a ski boat than Ken to rent the sailboat each day.\nTherefore, it cost Aldrich $60 x 2 = $<<60*2=120>>120 more to rent a ski boat than Ken to rent the sailboat in two days.\n#### 120\n\nProblem:\nQ: Andrew holds a bake sale to fundraise for charity. The bake sale earns a total of $400. Andrew keeps $100 to cover the cost of ingredients. He donates half of the remaining total to the local homeless shelter, and the other half to the local food bank. Andrew also decides to donate $10 from his own piggy bank to the local homeless shelter. How much money in total does Andrew donate to the homeless shelter?\nA: <INS>\nGround truth answer: After paying off the cost of ingredients, Andrew has $400 - $100 = $<<400-100=300>>300\nSince half of the money goes to the homeless shelter, the shelter receives $300 / 2 = $<<300/2=150>>150\nAfter contributing some of his own money, Andrew donates $150 + $10 = $<<150+10=160>>160 to the shelter.\n#### 160\n\nProblem:\nQ: Tony decided he wanted to be an astronaut.  He went to college for 4 years to get a degree in science.  He then went on to get 2 more degrees in other fields for the same period of time.  He also got a graduate degree in physics, which took another 2 years.  How many years in total did Tony go to school to be an astronaut?\nA: <INS>\nGround truth answer: Tony got 3 degrees which each took 4 years, for 3*4=<<3*4=12>>12 years spent.\nHe then got his graduate degree, which was another 2 years added to the previous total, for 12+2=<<12+2=14>>14 years in total.\n#### 14\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.",
+          "Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.",
+          "Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.",
+          "Break down the problem into sequential steps, considering all given information, and methodically solve each step to reach the solution efficiently.",
+          "Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.",
+          "Break down the problem into its fundamental elements and solve each part systematically to reach the solution efficiently.",
+          "Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.",
+          "Break down the problem into its fundamental components, analyze the key information provided, and methodically solve step by step to efficiently reach the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.</INS>",
+          "<INS>Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into sequential steps, considering all given information, and methodically solve each step to reach the solution efficiently.</INS>",
+          "<INS>Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its fundamental elements and solve each part systematically to reach the solution efficiently.</INS>",
+          "<INS>Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.</INS>",
+          "<INS>Break down the problem into its fundamental components, analyze the key information provided, and methodically solve step by step to efficiently reach the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into sequential steps, considering all given information, and methodically solve each step to reach the solution efficiently.",
+      "score": 0.65
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into its fundamental elements and solve each part systematically to reach the solution efficiently.",
+      "score": 0.65
+    },
+    {
+      "iteration": 3,
+      "prompt": "Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.",
+      "score": 0.8
+    },
+    {
+      "iteration": 3,
+      "prompt": "Break down the problem into its fundamental components, analyze the key information provided, and methodically solve step by step to efficiently reach the solution.",
+      "score": 0.6
+    },
+    {
+      "iteration": 4,
+      "prompt": "Break down the problem into its core components and systematically work through each step to efficiently find the solution.",
+      "score": 0.7,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Break down the problem into individual components and calculate each part before combining the results.\nscore: 70\ntext: Break down the problem into smaller, manageable steps to find the solution efficiently.\nscore: 70\ntext: Break down the problem into essential components and logically progress through each step to reach a solution efficiently.\nscore: 70\ntext: Break down the problem into manageable chunks and tackle each step methodically to find the solution efficiently.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Bridge and Sarah have $3 between them. If Bridget has 50 cents more than Sarah, how many cents does Sarah have?\nA: <INS>\nGround truth answer: Let X be the amount of money Sarah has, so Bridget has X + 50 cents\nWe know that Sarah and Bridget combined have $3, or 300 cents, so X + X + 50 = 300\nWe therefore know that 2X = 250\nSo Sarah has 250 / 2 = <<250/2=125>>125 cents\n#### 125\n\nProblem:\nQ: Fred was having a party and was responsible for buying canned soda.  He figured every guest would drink 2 sodas and he was inviting 15 people to the party.  The local store had a deal on sodas that week.  Every 6 pack of canned sodas was on sale for $3.00.  How much would it cost Fred to buy enough sodas for every guest to have 2 cans?\nA: <INS>\nGround truth answer: He planned on 2 sodas per guest and invited 15 guests so 2*15 =<<2*15=30>>30 cans of soda\nEach pack of soda had 6 cans. He needed to buy 30 cans of soda for his guest so 30/6 = <<30/6=5>>5 packs of soda\nThe soda was on sale for $3.00 per 6 pack and he was buying 5 packs so 3*5 = $<<3*5=15.00>>15.00 for soda\n#### 15\n\nProblem:\nQ: Jacob is building ladders. One of his clients needs 10 ladders with 50 rungs, and 20 ladders with 60 rungs. Jacob has to charge $2 for every rung. How much does the client have to pay for the ladders?\nA: <INS>\nGround truth answer: 10 ladders with 50 rungs have a total of 10*50=<<10*50=500>>500 rungs.\n20 ladders with 60 rungs have a total of 20*60=<<20*60=1200>>1200 rungs.\nIn total there are 1200+500=<<1200+500=1700>>1700 rungs.\nThe client must pay 2*1700=$<<2*1700=3400>>3400.\n#### 3,400\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into its core components and systematically work through each step to efficiently find the solution.",
+          "Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.",
+          "Approach the problem with a methodical strategy to efficiently find the solution.",
+          "Break down the problem into its basic components and solve each step methodically to efficiently find the solution.",
+          "Break down each problem into smaller components, analyze the information given carefully, and systematically solve each step to efficiently find the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into its core components and systematically work through each step to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components and systematically work through each step to efficiently find the solution.</INS>",
+          "<INS>Approach the problem with a methodical strategy to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its basic components and solve each step methodically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components and systematically work through each step to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.</INS>",
+          "<INS>Break down each problem into smaller components, analyze the information given carefully, and systematically solve each step to efficiently find the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into its core components and systematically work through each step to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 4,
+      "prompt": "Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 4,
+      "prompt": "Approach the problem with a methodical strategy to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 4,
+      "prompt": "Break down the problem into its basic components and solve each step methodically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 4,
+      "prompt": "Break down each problem into smaller components, analyze the information given carefully, and systematically solve each step to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into smaller, more manageable steps, and systematically analyze key information to efficiently find the solution.",
+      "score": 0.65,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Break down the problem into individual components and calculate each part before combining the results.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.\nscore: 75\ntext: Approach the problem with a methodical strategy to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its basic components and solve each step methodically to efficiently find the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Samuel swept the porch and cleared nine-tenths of the dust particles from it. As he walked across the porch afterward, his shoes left 223 dust particles behind. How many dust particles were on the porch before Samuel swept if there were 331 after he walked across it?\nA: <INS>\nGround truth answer: Before Samuel walked across the porch, there were 331 - 223 = <<331-223=108>>108 dust particles.\nThose 108 were 1/10 of the original amount, so there were 108 * 10 = <<108*10=1080>>1080 dust particles on the porch before Samuel swept.\n#### 1080\n\nProblem:\nQ: Alan went to the market and bought 20 eggs at the price of $2 per egg. He bought 6 chickens for the price of $8 per chicken. How much money did Alan spend at the market?\nA: <INS>\nGround truth answer: The cost of 20 eggs is 20 * $2 = $<<20*2=40>>40.\nThe cost of 6 chickens is 6 * $8 = $<<6*8=48>>48.\nThe total amount Alan spent at the market is $40 + $48 = $<<40+48=88>>88.\n#### 88\n\nProblem:\nQ: Jenna is buying concert tickets for her group of five friends. She's able to get two of the tickets from the concert website for $50 each before they sell out. A scalper offers to sell her two more tickets for 240% of the normal price, but Jenna convinces him to give her $10 off that total payment. Finally, one of her friends gets a discounted ticket through her job for 60% of the normal price. How much do Jenna's friends pay for their tickets in total?\nA: <INS>\nGround truth answer: First calculate the price of the two normally priced tickets by multiplying the price and the quantity: $50 * 2 = $<<50*2=100>>100\nThen calculate the scalper's initial asking price by multiplying the normal cost of two tickets by 240%: $100 * 2.4 = $<<100*2.4=240>>240\nThen subtract the $10 discount Jenna negotiated: $240 - $10 = $<<240-10=230>>230\nNow calculate the price of the discounted ticket Jenna's friend gets through her job by multiplying the normal ticket price by 60%: $50 * .6 = $<<50*.6=30>>30\nFinally, add up the price of all the tickets to find the total: $100 + $230 + $30 = $<<100+230+30=360>>360\n#### 360\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into smaller, more manageable steps, and systematically analyze key information to efficiently find the solution.",
+          "Break down the problem into smaller, manageable steps, analyze key information, and solve systematically to efficiently find the solution.",
+          "Break down the problem into its core components and approach each step methodically to efficiently find the solution",
+          "Break down the problem into smaller, manageable steps, utilize given information efficiently, and systematically solve to find the solution with precision.",
+          "Break down the problem into its core components and methodically solve each step to efficiently reach the solution.",
+          "Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.",
+          "Break down the problem into its core components and systematically analyze each part to efficiently reach the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into smaller, more manageable steps, and systematically analyze key information to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into smaller, manageable steps, analyze key information, and solve systematically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components and approach each step methodically to efficiently find the solution</INS>",
+          "<INS> Break down the problem into smaller, manageable steps, utilize given information efficiently, and systematically solve to find the solution with precision. </INS>",
+          "<INS>Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.</INS>",
+          "<INS> Break down the problem into its core components and methodically solve each step to efficiently reach the solution. </INS>",
+          "<INS>Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.</INS>",
+          "<INS>Break down the problem into its core components and systematically analyze each part to efficiently reach the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into smaller, more manageable steps, and systematically analyze key information to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into smaller, manageable steps, analyze key information, and solve systematically to efficiently find the solution.",
+      "score": 0.6
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into its core components and approach each step methodically to efficiently find the solution",
+      "score": 0.7
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into smaller, manageable steps, utilize given information efficiently, and systematically solve to find the solution with precision.",
+      "score": 0.7
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into its core components and methodically solve each step to efficiently reach the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 5,
+      "prompt": "Break down the problem into its core components and systematically analyze each part to efficiently reach the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 6,
+      "prompt": "Break down the problem into essential components, evaluate all factors thoroughly, and proceed systematically to efficiently find the solution.",
+      "score": 0.5,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Calculate the total number of employees laid off.\nscore: 70\ntext: Find the solution step by step.\nscore: 70\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.\nscore: 75\ntext: Approach the problem with a methodical strategy to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its basic components and solve each step methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Madeline needs $1200 to pay rent, $400 for groceries, $200 for medical expenses, and $60 for utilities. She also wants to save $200 in case of an emergency. She makes $15 per hour at her job. How many hours will Madeline need to work this month?\nA: <INS>\nGround truth answer: Madeline needs 1200+400+200+60+200 = $<<1200+400+200+60+200=2060>>2060 to pay all of her bills.\nShe will need to work $2060/$15 per hour = 137.33 hours.\nShe will need to work 138 hours to pay all of her bills\n#### 138\n\nProblem:\nQ: There was some money in the cookie jar. Doris spent $6 from the cookie jar. Martha spent half as much as Doris. If there were $15 left in the cookie jar, how much money, in dollars, was there in the cookie jar at first?\nA: <INS>\nGround truth answer: Martha spent 6/2=<<6/2=3>>3 dollars.\nMartha and Doris spent 6+3=<<6+3=9>>9 dollars.\nThere were 15+9=<<15+9=24>>24 dollars in the cookie jar at first.\n#### 24\n\nProblem:\nQ: The school decided to have a fundraiser to collect $750 for new basketball equipment. Families could donate $25, $50, or $100. Families who donated $25 got Bronze Status. Families who donated $50 got Silver Status. Families who donated $100 got Gold Status. With one day left in the fundraiser, the school has 10 Bronze Status families, 7 Silver Status Families and 1 Gold Status family. How much do they need to raise on the final day to reach their goal?\nA: <INS>\nGround truth answer: They collected $250 from Bronze Status families because 10 times 25 equals <<10*25=250>>250.\nThey collected $350 from Silver Status families because 7 times 50 equals <<7*50=350>>350.\nThey collected $100 from Gold Status families because 1 times 100 equals 100.\nTherefore, they collected $700 thus far because 250 plus 350 plus 100 equals <<250+350+100=700>>700.\nThey need to collect $50 more because 750 minus 700 equals 50.\n#### 50\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into essential components, evaluate all factors thoroughly, and proceed systematically to efficiently find the solution.",
+          "Break down the problem into its essential components, analyze the information provided, and methodically solve each step to efficiently reach the solution.",
+          "Break down the problem into manageable steps, identify key information, and systematically solve each component to efficiently find the solution.",
+          "Use a systematic approach to efficiently find the solution.",
+          "Simplify the problem by breaking it down into smaller, manageable steps, and methodically analyze each component to efficiently find the solution.",
+          "Break down the problem into essential components, methodically analyze each part, and systematically solve to efficiently find the solution.",
+          "Approach the problem with a strategic plan to efficiently find the solution.",
+          "Break down the problem into its core components, analyze each detail methodically, and systematically solve each step to efficiently find the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into essential components, evaluate all factors thoroughly, and proceed systematically to efficiently find the solution.</INS>",
+          "<INS> Break down the problem into its essential components, analyze the information provided, and methodically solve each step to efficiently reach the solution. </INS>",
+          "<INS>Break down the problem into manageable steps, identify key information, and systematically solve each component to efficiently find the solution.</INS>",
+          "<INS>Use a systematic approach to efficiently find the solution.</INS>",
+          "<INS>Simplify the problem by breaking it down into smaller, manageable steps, and methodically analyze each component to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into essential components, methodically analyze each part, and systematically solve to efficiently find the solution.</INS>",
+          "<INS>Approach the problem with a strategic plan to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components, analyze each detail methodically, and systematically solve each step to efficiently find the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into essential components, evaluate all factors thoroughly, and proceed systematically to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 6,
+      "prompt": "Break down the problem into its essential components, analyze the information provided, and methodically solve each step to efficiently reach the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 6,
+      "prompt": "Break down the problem into manageable steps, identify key information, and systematically solve each component to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 6,
+      "prompt": "Use a systematic approach to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 6,
+      "prompt": "Simplify the problem by breaking it down into smaller, manageable steps, and methodically analyze each component to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 6,
+      "prompt": "Break down the problem into essential components, methodically analyze each part, and systematically solve to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 6,
+      "prompt": "Approach the problem with a strategic plan to efficiently find the solution.",
+      "score": 0.8
+    },
+    {
+      "iteration": 6,
+      "prompt": "Break down the problem into its core components, analyze each detail methodically, and systematically solve each step to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 7,
+      "prompt": "Break down the problem into smaller steps, analyze key information, and solve systematically to efficiently find the solution.",
+      "score": 0.7,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.\nscore: 75\ntext: Approach the problem with a methodical strategy to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its basic components and solve each step methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into manageable steps, identify key information, and systematically solve each component to efficiently find the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Approach the problem with a strategic plan to efficiently find the solution.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Greg bought a 20-pack of granola bars to eat at lunch for the week. He set aside one for each day of the week, traded three of the remaining bars to his friend Pete for a soda, and gave the rest to his two sisters. How many did each sister get when they split them evenly?\nA: <INS>\nGround truth answer: Greg kept 1 granola bar for each of the 7 days of the week, so there were 20 - 7 = <<20-7=13>>13 bars left.\nHe traded 3 to his friend Pete, so there were 13 - 3 = 10 bars left.\nHis 2 sisters split the rest evenly, so each got 10 / 2 = <<10/2=5>>5 granola bars.\n#### 5\n\nProblem:\nQ: When Nathan is cold, he adds an extra blanket to his bed. Each blanket warms him up by 3 degrees. One night, he was cold enough that he added half of the 14 blankets in his closet on his bed. How many degrees did the blankets warm Nathan up?\nA: <INS>\nGround truth answer: Nathan added 14 / 2 = <<14/2=7>>7 blankets to his bed.\nThe blankets warmed Nathan up 7 * 3 = <<7*3=21>>21 degrees.\n#### 21\n\nProblem:\nQ: Patrick has 4 hours less than twice the amount of time that Greg has left to finish his homework. Greg has six hours less than Jacob left to finish his homework. If Jacob has 18 hours left to finish his homework, calculate the total number of hours they all have left to finish their homework?\nA: <INS>\nGround truth answer: If Jacob has 18 hours left to finish his homework, Greg has 18-6 = <<18-6=12>>12 hours left to finish his homework.\nThe total number of hours Jacob and Greg have left to finish their homework is 12+18 = <<12+18=30>>30 hours.\nPatrick has 4 hours less than twice Greg has left to finish his homework, meaning Patrick has 4 hours less than 12*2 = 24 hours left to finish his homework.\nPatrick has 24-4 = <<24-4=20>>20 hours left to finish his homework.\nAltogether, the three have 30+20 = <<30+20=50>>50 hours left to finish their homework.\n#### 50\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into smaller steps, analyze key information, and solve systematically to efficiently find the solution.",
+          "Systematically break down the problem into smaller components and methodically solve each step to efficiently find the solution.",
+          "Break down the problem into manageable steps, analyze key information, and methodically solve each component to efficiently find the solution.",
+          "Break down the problem into its core components and systematically solve each part to efficiently reach the solution.",
+          "Approach the problem with a systematic strategy to efficiently find the solution.",
+          "Break the problem down into its basic components, analyze essential information, and methodically solve each step to efficiently find the solution.",
+          "Break down the problem into its core components and solve strategically to efficiently reach the solution.",
+          "Utilize problem-solving strategies to efficiently reach the solution"
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down the problem into smaller steps, analyze key information, and solve systematically to efficiently find the solution.</INS>",
+          "<INS>Systematically break down the problem into smaller components and methodically solve each step to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into manageable steps, analyze key information, and methodically solve each component to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components and systematically solve each part to efficiently reach the solution.</INS>",
+          "<INS>Approach the problem with a systematic strategy to efficiently find the solution.</INS>",
+          "<INS>Break the problem down into its basic components, analyze essential information, and methodically solve each step to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components and solve strategically to efficiently reach the solution.</INS>",
+          "<INS>Utilize problem-solving strategies to efficiently reach the solution</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into smaller steps, analyze key information, and solve systematically to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 7,
+      "prompt": "Systematically break down the problem into smaller components and methodically solve each step to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 7,
+      "prompt": "Break down the problem into manageable steps, analyze key information, and methodically solve each component to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 7,
+      "prompt": "Break down the problem into its core components and systematically solve each part to efficiently reach the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 7,
+      "prompt": "Approach the problem with a systematic strategy to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 7,
+      "prompt": "Break the problem down into its basic components, analyze essential information, and methodically solve each step to efficiently find the solution.",
+      "score": 0.6
+    },
+    {
+      "iteration": 7,
+      "prompt": "Break down the problem into its core components and solve strategically to efficiently reach the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 7,
+      "prompt": "Utilize problem-solving strategies to efficiently reach the solution",
+      "score": 0.8
+    },
+    {
+      "iteration": 8,
+      "prompt": "Break down the problem into key components, analyze diligently, and solve systematically to efficiently find the solution.",
+      "score": 0.7,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.\nscore: 75\ntext: Approach the problem with a methodical strategy to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its basic components and solve each step methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its essential components, analyze the information provided, and systematically solve each step to efficiently reach the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Approach the problem with a strategic plan to efficiently find the solution.\nscore: 80\ntext: Utilize problem-solving strategies to efficiently reach the solution\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Betty and Dora started making some cupcakes at the same time. Betty makes 10 cupcakes every hour and Dora makes 8 every hour. If Betty took a two-hour break, what is the difference between the number of cupcakes they made after 5 hours?\nA: <INS>\nGround truth answer: Dora made 8 cupcakes per hour for 5 hours for a total of 8*5 = <<8*5=40>>40 cupcakes\nBetty took a 2-hour break so she spent 5-2 = <<5-2=3>>3 hours making cupcakes\nBetty made 10 cupcakes per hour for 3 hours for a total of 10*3 = <<10*3=30>>30 cupcakes\nThe difference between the number of cupcakes they made is 40-30 = <<40-30=10>>10 cupcakes\n#### 10\n\nProblem:\nQ: Laura wants to bake a cake for her mother. She checks the recipe and the pantry and sees that she needs to buy 2 cups of flour, 2 cups of sugar, a cup of butter, and two eggs. The flour costs $4. The sugar costs $2. The eggs cost $.5, and the butter costs $2.5. When she is done baking it, she cuts the cake into 6 slices. Her mother enjoys a piece the first two days. But on the third day, they discover that Kevin, her dog, ate the rest of the cake. How much did the amount the dog ate cost?\nA: <INS>\nGround truth answer: The cake cost $9 in total because 4 + 2 + .5 + 2.5 = <<4+2+.5+2.5=9>>9\nEach slice costs $1.5 because 9 / 6 = <<9/6=1.5>>1.5\nThe dog ate 4 slices because 6 - 2 = <<6-2=4>>4\nThe amount the dog ate cost $6 because 4 x 1.5 = <<4*1.5=6>>6\n#### 6\n\nProblem:\nQ: June's mom promises to pay her 1 cent for every cloverleaf she picks from the lawn. June picks 200 clovers in total. 75% have 3 petals. 24% have two petals and 1% have four petals. How many cents does June earn?\nA: <INS>\nGround truth answer: There are 150 clovers with 3 leaves because 200 times .75 equals <<200*.75=150>>150.\nThere are 48 clovers with 2 leaves because 200 times .24 equals <<200*.24=48>>48.\nThere are 2 clovers with 4 leaves because 200 times .01 equals <<200*.01=2>>2.\nThe four-leaf clovers are worth 450 cents because 150 times 3 equals <<150*3=450>>450\nThe two leafed clovers are worth 96 cents because 48 times two equals <<48*2=96>>96\nThe four-leaf clovers are worth 8 cents because 4 times 2 equals <<4*2=8>>8.\nThe clovers are worth 554 cents because 450 plus 96 plus 8 equals <<450+96+8=554>>554\n#### 554\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down the problem into key components, analyze diligently, and solve systematically to efficiently find the solution.",
+          "Approach each problem systematically by breaking it down into smaller steps, analyzing key information, and methodically solving to efficiently find the solution.",
+          "Approach each problem systematically, analyze the given information, break it down into smaller steps, and methodically solve to efficiently find the solution.",
+          "Break down the problem into essential components, analyze key information, and strategically solve step by step to efficiently find the solution.",
+          "Simplify the problem by breaking it down into key components and methodically solving each step to efficiently find the solution.",
+          "Break down the problem into essential components and approach each step methodically to efficiently find the solution.",
+          "Break down the problem into its core components, analyze each part carefully, and proceed systematically to efficiently find the solution.",
+          "Break down the problem into simple steps and approach each task systematically to efficiently find the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS> Break down the problem into key components, analyze diligently, and solve systematically to efficiently find the solution. </INS>",
+          "<INS>Approach each problem systematically by breaking it down into smaller steps, analyzing key information, and methodically solving to efficiently find the solution.</INS>",
+          "<INS>Approach each problem systematically, analyze the given information, break it down into smaller steps, and methodically solve to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into essential components, analyze key information, and strategically solve step by step to efficiently find the solution.</INS>",
+          "<INS>Simplify the problem by breaking it down into key components and methodically solving each step to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into essential components and approach each step methodically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into its core components, analyze each part carefully, and proceed systematically to efficiently find the solution.</INS>",
+          "<INS>Break down the problem into simple steps and approach each task systematically to efficiently find the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down the problem into key components, analyze diligently, and solve systematically to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 8,
+      "prompt": "Approach each problem systematically by breaking it down into smaller steps, analyzing key information, and methodically solving to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 8,
+      "prompt": "Approach each problem systematically, analyze the given information, break it down into smaller steps, and methodically solve to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 8,
+      "prompt": "Break down the problem into essential components, analyze key information, and strategically solve step by step to efficiently find the solution.",
+      "score": 0.8
+    },
+    {
+      "iteration": 8,
+      "prompt": "Simplify the problem by breaking it down into key components and methodically solving each step to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 8,
+      "prompt": "Break down the problem into essential components and approach each step methodically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 8,
+      "prompt": "Break down the problem into its core components, analyze each part carefully, and proceed systematically to efficiently find the solution.",
+      "score": 0.75
+    },
+    {
+      "iteration": 8,
+      "prompt": "Break down the problem into simple steps and approach each task systematically to efficiently find the solution.",
+      "score": 0.8
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down each problem into smaller, manageable steps and solve methodically to efficiently find the solution.",
+      "score": 0.75,
+      "debug": {
+        "meta_prompt": "Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.\n\ntext: Solve the following problem.\nscore: 75\ntext: Calculate the total cost or percentage by multiplying the given values.\nscore: 75\ntext: Break down the problem into smaller components, taking into account all given information, and solve step by step to find the final answer.\nscore: 75\ntext: Break down the problem into smaller, manageable steps to efficiently find the solution.\nscore: 75\ntext: Break down the problem into smaller steps, analyze key information, and tackle each component methodically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into its fundamental elements, analyze each component carefully, and methodically solve each part to efficiently reach the solution.\nscore: 75\ntext: Break down the problem into smaller, manageable steps and approach each task systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve systematically to efficiently find the solution.\nscore: 75\ntext: Break down the problem into manageable steps, analyze key information, and solve methodically to efficiently find the solution.\nscore: 75\ntext: Approach the problem with a methodical strategy to efficiently find the solution.\nscore: 75\ntext: Calculate the difference between the given quantities.\nscore: 80\ntext: Calculate the total expected outcome based on given parameters.\nscore: 80\ntext: Break down the problem into smaller steps to simplify the solution process.\nscore: 80\ntext: Divide the problem into smaller, manageable tasks and tackle each step systematically to find the solution efficiently.\nscore: 80\ntext: Approach the problem with a strategic plan to efficiently find the solution.\nscore: 80\ntext: Utilize problem-solving strategies to efficiently reach the solution\nscore: 80\ntext: Break down the problem into essential components, analyze key information, and strategically solve step by step to efficiently find the solution.\nscore: 80\ntext: Break down the problem into simple steps and approach each task systematically to efficiently find the solution.\nscore: 80\ntext: Let's solve the problem.\nscore: 85\ntext: Calculate the final distance or result.\nscore: 85\n\nBelow are some problems.\n\nProblem:\nQ: Darnell has 1000 square feet of fabric that he's using to make mini flags. He makes square flags that are 4 feet by 4 feet, wide rectangular flags that are 5 feet by 3 feet, and tall rectangular flags that are 3 feet by 5 feet. He has already made 16 square flags, 20 wide flags, and 10 tall flags. How many square feet of fabric does he have left?\nA: <INS>\nGround truth answer: The square flags use 16 square feet of fabric per flag because four times four equals <<4*4=16>>16\nThe wide flags each use 15 feet of fabric per flag because five times three equals <<5*3=15>>15\nThe tall flags each use 15 feet of fabric per flag because five times three equals <<5*3=15>>15\nHe has used 256 square feet for the square flags because 16 times 16 equals <<16*16=256>>256\nHe has used 300 square feet for the wide flags because 20 times 15 equals <<20*15=300>>300\nHe has used 150 square feet for the tall flags because ten times 15 equals 150.\nHe has used 706 square feet because 256 plus 300 plus 150 equals <<256+300+150=706>>706.\nHe has 294 square feet left because 1,000 minus 706 equals <<1000-706=294>>294\n#### 294\n\nProblem:\nQ: Roberto is out for a hike. He travels uphill at 2 MPH and downhill at 3MPH. The trail is 5 miles long. 60% is uphill and the rest is downhill. How long does it take him to complete it in minutes?\nA: <INS>\nGround truth answer: There is 3 miles uphill because 5 x .6 = <<5*.6=3>>3\nThis takes him 1.5 hours because 3 / 2 = <<3/2=1.5>>1.5\nThis takes him 90 minutes because 1.5 x 60 = <<1.5*60=90>>90\n40% of the trail is downhill because 100 - 60 = <<100-60=40>>40\nThere are 2 miles of downhill because 5 x .4 = <<5*.4=2>>2\nThis takes him 2/3 of an hour because 2 / 3 = (2/3)\nThis takes him 40 minutes because 60 x (2/3) = <<60*(2/3)=40>>40\nIt takes him 130 minutes in total because 90 + 40 = <<90+40=130>>130\n#### 130\n\nProblem:\nQ: During 5 hours, a spider can catch 9 flies. How many flies would this spider catch in 30 hours if he would keep his efficiency?\nA: <INS>\nGround truth answer: 30 hours is 30 / 5 = <<30/5=6>>6 times more time.\nSo the spider would be able to catch 6 * 9 = <<6*9=54>>54 flies.\n#### 54\n\nGenerate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.\n",
+        "generated_candidates": [
+          "Break down each problem into smaller, manageable steps and solve methodically to efficiently find the solution.",
+          "Break down the problem into simple steps, analyze key information, and solve strategically to efficiently find the solution.",
+          "Break down the problem into manageable steps, apply problem-solving strategies, and analyze key information systematically to efficiently find the solution.",
+          "Analyze the problem thoroughly, strategize your approach, and methodically work through each step to efficiently find the solution.",
+          "Approach the problem systematically, analyze key components, and methodically solve each step to efficiently reach the solution.",
+          "Break down the problem into clear, sequential steps and approach each task strategically to efficiently find the solution.",
+          "Break down the problem into its core components, analyze each detail carefully, and methodically solve each step to efficiently reach the solution.",
+          "Break down the problem into its core components, identify key information, and strategically approach each step to efficiently find the solution."
+        ],
+        "raw_meta_responses": [
+          "<INS>Break down each problem into smaller, manageable steps and solve methodically to efficiently find the solution.</INS>",
+          "<INS> Break down the problem into simple steps, analyze key information, and solve strategically to efficiently find the solution. </INS>",
+          "<INS>Break down the problem into manageable steps, apply problem-solving strategies, and analyze key information systematically to efficiently find the solution.</INS>",
+          "<INS> Analyze the problem thoroughly, strategize your approach, and methodically work through each step to efficiently find the solution. </INS>",
+          "<INS>Approach the problem systematically, analyze key components, and methodically solve each step to efficiently reach the solution.</INS>",
+          "<INS>Break down the problem into clear, sequential steps and approach each task strategically to efficiently find the solution.</INS>",
+          "<INS> Break down the problem into its core components, analyze each detail carefully, and methodically solve each step to efficiently reach the solution. </INS>",
+          "<INS>Break down the problem into its core components, identify key information, and strategically approach each step to efficiently find the solution.</INS>"
+        ],
+        "example_formatted_task_prompt": "Question: Bob picked 450 apples for his entire family to eat. There are 33 children in his family, and each of them ate 10 apples. If every adult ate 3 apples apiece, how many adults are in his family?\n\nBreak down each problem into smaller, manageable steps and solve methodically to efficiently find the solution.\n\nAnswer:"
+      }
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down the problem into simple steps, analyze key information, and solve strategically to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down the problem into manageable steps, apply problem-solving strategies, and analyze key information systematically to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 9,
+      "prompt": "Analyze the problem thoroughly, strategize your approach, and methodically work through each step to efficiently find the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 9,
+      "prompt": "Approach the problem systematically, analyze key components, and methodically solve each step to efficiently reach the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down the problem into clear, sequential steps and approach each task strategically to efficiently find the solution.",
+      "score": 0.7
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down the problem into its core components, analyze each detail carefully, and methodically solve each step to efficiently reach the solution.",
+      "score": 0.65
+    },
+    {
+      "iteration": 9,
+      "prompt": "Break down the problem into its core components, identify key information, and strategically approach each step to efficiently find the solution.",
+      "score": 0.6
+    }
+  ],
+  "validation": {
+    "split": "test",
+    "accuracy": 0.6967399545109931,
+    "correct": 919,
+    "total": 1319
+  }
+}

@@ -1,0 +1,19 @@
+# OPRO Optimized Prompt
+# Model: gpt-3.5-turbo
+# Timestamp: 20251111_215825
+# Initial prompts (OPRO seeds):
+#   1. (empty prompt)
+#   2. Solve the following problem.
+#   3. Let's solve the problem.
+
+================================================================================
+OPTIMIZED PROMPT:
+================================================================================
+
+Let's solve the problem.
+
+================================================================================
+VALIDATION (test split, 1319 examples):
+Accuracy: 69.7%
+Correct: 919/1319
+================================================================================
