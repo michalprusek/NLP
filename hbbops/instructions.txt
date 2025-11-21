@@ -1,0 +1,13 @@
+# HbBoPs Instructions for GSM8K
+# Generated using APE forward mode with Claude 3 Sonnet
+# These are task-specific instructions for math word problems
+
+1. Solve the following math problem step by step, showing your work clearly, and provide the final numerical answer.
+
+2. Break down this mathematical word problem into steps, perform the calculations, and state your final answer as a number.
+
+3. Analyze the given math problem, identify the key information, solve it systematically, and present the final answer.
+
+4. Read the math word problem carefully, solve it step-by-step with clear reasoning, and give the final numerical result.
+
+5. Work through this grade school math problem methodically, explaining each step, and conclude with the final answer.
