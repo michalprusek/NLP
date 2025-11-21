@@ -196,24 +196,17 @@ class HbBoPs:
         self.llm_evaluator = llm_evaluator
 
         # Generate all candidate prompts
-        self.prompts = []
-        for i_idx, instruction in enumerate(instructions):
-            for e_idx, exemplar in enumerate(exemplars):
-                self.prompts.append(Prompt(instruction, exemplar, i_idx, e_idx))
+        self.prompts = [
+            Prompt(instruction, exemplar, i_idx, e_idx)
+            for i_idx, instruction in enumerate(instructions)
+            for e_idx, exemplar in enumerate(exemplars)
+        ]
 
         print(f"Generated {len(self.prompts)} candidate prompts")
         print(f"  {len(instructions)} instructions x {len(exemplars)} exemplars")
 
         # Setup device
-        if device == "auto":
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            elif torch.backends.mps.is_available():
-                self.device = torch.device("mps")
-            else:
-                self.device = torch.device("cpu")
-        else:
-            self.device = torch.device(device)
+        self.device = self._get_device(device)
 
         print(f"Using device: {self.device}")
 
@@ -251,11 +244,93 @@ class HbBoPs:
         self.best_validation_error = float('inf')
         self.best_fidelity = 0
 
+    def _get_device(self, device: str) -> torch.device:
+        """Get appropriate torch device"""
+        if device != "auto":
+            return torch.device(device)
+
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+
+    def _find_largest_cached_fidelity(self, prompt_idx: int, max_fidelity: int) -> Optional[int]:
+        """Find largest cached fidelity for prompt that's less than max_fidelity"""
+        cached_fidelities = [
+            f for (p_idx, f), _ in self.evaluation_cache.items()
+            if p_idx == prompt_idx and f < max_fidelity
+        ]
+        return max(cached_fidelities) if cached_fidelities else None
+
+    def _extend_evaluation(
+        self, prompt: Prompt, prompt_idx: int, prev_fidelity: int, fidelity: int
+    ) -> float:
+        """Extend previous evaluation to higher fidelity"""
+        prev_error_sum = self.evaluation_cache[(prompt_idx, prev_fidelity)] * prev_fidelity
+        remaining_instances = self.validation_data[prev_fidelity:fidelity]
+        new_error_rate = self.llm_evaluator(prompt, remaining_instances)
+        new_error_sum = new_error_rate * (fidelity - prev_fidelity)
+        return (prev_error_sum + new_error_sum) / fidelity
+
+    def _prepare_training_data(
+        self, fidelity_data: List[Tuple[np.ndarray, np.ndarray, float]]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Prepare training tensors from fidelity data"""
+        X_inst = torch.tensor(
+            [inst_emb for inst_emb, _, _ in fidelity_data],
+            dtype=torch.float32, device=self.device
+        )
+        X_ex = torch.tensor(
+            [ex_emb for _, ex_emb, _ in fidelity_data],
+            dtype=torch.float32, device=self.device
+        )
+        X = torch.cat([X_inst, X_ex], dim=1)
+        y = torch.tensor(
+            [val_err for _, _, val_err in fidelity_data],
+            dtype=torch.float32, device=self.device
+        )
+        return X, y
+
+    def _compute_expected_improvement(self, improvement: float, std: float) -> float:
+        """Compute expected improvement given improvement and standard deviation"""
+        if std <= 0:
+            return max(improvement, 0)
+
+        z = improvement / std
+        from scipy.stats import norm
+        return improvement * norm.cdf(z) + std * norm.pdf(z)
+
+    def _get_highest_trainable_fidelity(self, min_observations: int = 4) -> Optional[int]:
+        """Get highest fidelity level with enough observations for training"""
+        fidelity_counts = {}
+        for _, _, _, _, f in self.design_data:
+            fidelity_counts[f] = fidelity_counts.get(f, 0) + 1
+
+        trainable_fidelities = [
+            f for f, count in fidelity_counts.items()
+            if count >= min_observations
+        ]
+        return max(trainable_fidelities) if trainable_fidelities else None
+
+    def _get_best_validation_error(self, fidelity: Optional[int]) -> float:
+        """Get best validation error at given fidelity level"""
+        if not fidelity or not self.gp_model:
+            return float('inf')
+
+        return min(
+            val_err for _, _, _, val_err, f in self.design_data
+            if f == fidelity
+        )
+
+    def _select_top_prompts(self, prompt_indices: List[int], errors: List[float], n: int) -> List[int]:
+        """Select top n prompts with lowest errors"""
+        sorted_indices = np.argsort(errors)
+        return [prompt_indices[idx] for idx in sorted_indices[:n]]
+
     def embed_prompt(self, prompt: Prompt) -> Tuple[np.ndarray, np.ndarray]:
         """Embed instruction and exemplar separately"""
-        instruction_emb = self.encoder.encode(prompt.instruction)
-        exemplar_emb = self.encoder.encode(prompt.exemplar)
-        return instruction_emb, exemplar_emb
+        return self.encoder.encode(prompt.instruction), self.encoder.encode(prompt.exemplar)
 
     def evaluate_prompt(
         self,
@@ -276,25 +351,13 @@ class HbBoPs:
         if cache_key in self.evaluation_cache:
             return self.evaluation_cache[cache_key]
 
-        # Check if we can extend previous evaluation
-        # Find largest cached fidelity <= current fidelity
-        cached_fidelities = [f for (p_idx, f), _ in self.evaluation_cache.items()
-                             if p_idx == prompt_idx and f < fidelity]
+        # Try to extend previous evaluation if possible
+        prev_fidelity = self._find_largest_cached_fidelity(prompt_idx, fidelity)
 
-        if cached_fidelities:
-            # Extend from largest cached fidelity
-            prev_fidelity = max(cached_fidelities)
-            prev_error_sum = self.evaluation_cache[(prompt_idx, prev_fidelity)] * prev_fidelity
-
-            # Evaluate on remaining instances
-            remaining_instances = self.validation_data[prev_fidelity:fidelity]
-            new_error_sum = self.llm_evaluator(prompt, remaining_instances)
-
-            total_error = (prev_error_sum + new_error_sum) / fidelity
+        if prev_fidelity:
+            total_error = self._extend_evaluation(prompt, prompt_idx, prev_fidelity, fidelity)
         else:
-            # Evaluate from scratch
-            instances = self.validation_data[:fidelity]
-            total_error = self.llm_evaluator(prompt, instances)
+            total_error = self.llm_evaluator(prompt, self.validation_data[:fidelity])
 
         # Cache result
         self.evaluation_cache[cache_key] = total_error
@@ -309,29 +372,25 @@ class HbBoPs:
             min_observations: Minimum number of observations required
         """
         # Filter design data for this fidelity
-        fidelity_data = [(inst_emb, ex_emb, val_err)
-                         for _, inst_emb, ex_emb, val_err, f in self.design_data
-                         if f == fidelity]
+        fidelity_data = [
+            (inst_emb, ex_emb, val_err)
+            for _, inst_emb, ex_emb, val_err, f in self.design_data
+            if f == fidelity
+        ]
 
         if len(fidelity_data) < min_observations:
             return False
 
         # Prepare training data
-        X_inst = torch.tensor([inst_emb for inst_emb, _, _ in fidelity_data],
-                              dtype=torch.float32, device=self.device)
-        X_ex = torch.tensor([ex_emb for _, ex_emb, _ in fidelity_data],
-                            dtype=torch.float32, device=self.device)
-        X = torch.cat([X_inst, X_ex], dim=1)  # (n, 1536)
-        y = torch.tensor([val_err for _, _, val_err in fidelity_data],
-                        dtype=torch.float32, device=self.device)
+        X, y = self._prepare_training_data(fidelity_data)
 
         # Normalize inputs to unit cube and standardize outputs
         X_mean = X.mean(dim=0)
-        X_std = X.std(dim=0) + 1e-6
+        X_std = X.std(dim=0) + 1e-4  # Increased for numerical stability
         X_normalized = (X - X_mean) / X_std
 
         y_mean = y.mean()
-        y_std = y.std() + 1e-6
+        y_std = y.std() + 1e-4  # Increased for numerical stability
         y_standardized = (y - y_mean) / y_std
 
         # Initialize models if needed
@@ -424,13 +483,7 @@ class HbBoPs:
 
         # Expected Improvement (we minimize, so improvement = vmin_b - mean)
         improvement = vmin_b - mean
-
-        if std > 0:
-            z = improvement / std
-            from scipy.stats import norm
-            ei = improvement * norm.cdf(z) + std * norm.pdf(z)
-        else:
-            ei = max(improvement, 0)
+        ei = self._compute_expected_improvement(improvement, std)
 
         return ei
 
@@ -452,16 +505,13 @@ class HbBoPs:
 
         # BO proposal: maximize Expected Improvement
         unevaluated = [i for i in range(len(self.prompts)) if i not in evaluated_prompts]
-        best_ei = -float('inf')
-        best_idx = None
 
-        for idx in unevaluated:
-            ei = self.expected_improvement(self.prompts[idx], vmin_b)
-            if ei > best_ei:
-                best_ei = ei
-                best_idx = idx
-
-        return best_idx if best_idx is not None else np.random.choice(unevaluated)
+        # Find prompt with maximum expected improvement
+        best_idx = max(
+            unevaluated,
+            key=lambda idx: self.expected_improvement(self.prompts[idx], vmin_b)
+        )
+        return best_idx
 
     def run_hyperband(self, verbose: bool = True) -> Tuple[Prompt, float]:
         """
@@ -492,30 +542,20 @@ class HbBoPs:
             V = []  # Validation errors
 
             # Use same random validation instances for all prompts in this stage
+            # Set consistent seed for this bracket to ensure superset structure across stages
             np.random.seed(s)  # Reproducible instance selection per bracket
             stage_instances = np.random.choice(self.nvalid, size=b, replace=False)
             stage_val_data = [self.validation_data[i] for i in sorted(stage_instances)]
 
             # Propose and evaluate prompts
             for j in range(n):
-                # Determine highest fidelity with >= 4 observations for GP training
-                highest_fidelity = None
-                for fid in sorted(set(f for _, _, _, _, f in self.design_data), reverse=True):
-                    fid_count = sum(1 for _, _, _, _, f in self.design_data if f == fid)
-                    if fid_count >= 4:
-                        highest_fidelity = fid
-                        break
-
                 # Train GP if we have enough data
-                if highest_fidelity is not None:
+                highest_fidelity = self._get_highest_trainable_fidelity()
+                if highest_fidelity:
                     self.train_gp(highest_fidelity, min_observations=4)
 
                 # Get vmin_b for acquisition function
-                if highest_fidelity is not None and self.gp_model is not None:
-                    vmin_b = min(val_err for _, _, _, val_err, f in self.design_data
-                                if f == highest_fidelity)
-                else:
-                    vmin_b = float('inf')
+                vmin_b = self._get_best_validation_error(highest_fidelity)
 
                 # Propose prompt
                 p_idx = self.get_prompt_proposal(P, vmin_b)
@@ -544,12 +584,11 @@ class HbBoPs:
                     print(f"  Stage i={i + 1}: n={ni} prompts, b={bi} instances")
 
                 # Select top prompts
-                sorted_indices = np.argsort(V)
-                P = [P[idx] for idx in sorted_indices[:ni]]
+                P = self._select_top_prompts(P, V, ni)
 
                 # Extend evaluations for remaining prompts
-                # Use same instances for all prompts (superset of previous)
-                np.random.seed(s * 100 + i)
+                # Use superset of previous stage instances (same seed ensures superset property)
+                np.random.seed(s)  # Use same seed as initial stage to ensure superset structure
                 stage_instances = np.random.choice(self.nvalid, size=bi, replace=False)
                 stage_val_data = [self.validation_data[idx] for idx in sorted(stage_instances)]
 

@@ -76,18 +76,15 @@ Prompt = Instruction + Few-shot Exemplar
 ## 📁 Struktura Souborů
 
 ```
-.
-├── hbbops_instructions.txt          # 5 instrukcí pro GSM8K (APE forward mode)
-├── hbbops_examples.txt              # 50 exemplářů (25 setů × 2 permutace)
-├── datasets/
-│   └── gsm8k_hbbops/
-│       ├── train.json               # 6154 examples (original 7473 - 1319 val)
-│       ├── validation.json          # 1319 examples (randomly sampled z train)
-│       └── test.json                # 1319 examples (original test set)
-├── src/
-│   ├── hbbops_setup.py              # Setup script pro vytvoření splits a exemplářů
-│   └── hbbops.py                    # Hlavní implementace HbBoPs
-└── run_hbbops.py                    # Main script pro spuštění
+hbbops/
+├── instructions.txt                 # 5 instrukcí pro GSM8K (APE forward mode)
+├── examples.txt                     # 50 exemplářů (25 setů × 2 permutace)
+├── data/
+│   ├── validation.json              # 1319 examples (randomly sampled z train)
+│   └── test.json                    # 1319 examples (original test set)
+├── hbbops.py                        # Hlavní implementace HbBoPs
+├── run_hbbops.py                    # Main script pro spuštění
+└── README.md                        # Dokumentace
 ```
 
 ## 🚀 Instalace
@@ -107,28 +104,18 @@ uv sync
 
 ## 💻 Použití
 
-### 1. Setup (vytvoření splits a exemplářů)
-
-```bash
-uv run python src/hbbops_setup.py
-```
-
-Vytvoří:
-- `datasets/gsm8k_hbbops/train.json` (6154 examples)
-- `datasets/gsm8k_hbbops/validation.json` (1319 examples)
-- `datasets/gsm8k_hbbops/test.json` (1319 examples)
-- `hbbops_instructions.txt` (5 instrukcí)
-- `hbbops_examples.txt` (50 exemplářů)
-
-### 2. Spuštění HbBoPs
+### Spuštění HbBoPs
 
 **Základní použití:**
 ```bash
+cd hbbops
 uv run python run_hbbops.py --model Qwen/Qwen2.5-7B-Instruct --backend vllm
 ```
 
 **S různými parametry:**
 ```bash
+cd hbbops
+
 # Menší model na CPU
 uv run python run_hbbops.py \
     --model Qwen/Qwen2.5-3B-Instruct \
