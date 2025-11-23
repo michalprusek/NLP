@@ -11,7 +11,7 @@ TASK_MODEL=${TASK_MODEL:-"gpt-3.5-turbo"}  # gpt-3.5-turbo, claude-3-haiku-20240
 META_MODEL=${META_MODEL:-""}  # haiku, sonnet, or leave empty to use same as task model
 METHOD=${METHOD:-"opro"}
 TASK=${TASK:-"gsm8k"}
-SAVE_INTERMEDIATE=${SAVE_INTERMEDIATE:-"true"}  # Set to "true" to save intermediate prompts for debugging
+
 
 echo "=========================================="
 echo "Prompt Optimization"
@@ -38,9 +38,11 @@ CMD="$CMD --mode optimize"
 CMD="$CMD --task $TASK"
 CMD="$CMD --method $METHOD"
 CMD="$CMD --model $TASK_MODEL"
-CMD="$CMD --backend auto"
-CMD="$CMD --iterations 10" # 6 ProTeGi, 200 OPRO
-CMD="$CMD --minibatch-size 20" # 64 ProTeGi, 260 OPRO
+CMD="$CMD --backend vllm"
+CMD="$CMD --tensor-parallel-size 2"
+CMD="$CMD --gpu-ids 0,1"
+CMD="$CMD --iterations 200" # 6 ProTeGi, 200 OPRO
+CMD="$CMD --minibatch-size 261" # 64 ProTeGi, 260 OPRO
 CMD="$CMD --beam-size 4"
 CMD="$CMD --num-candidates 8"
 

@@ -80,30 +80,33 @@ class GSM8KEvaluator:
         errors = 0
         total = len(validation_data)
 
+        # Prepare all prompts
+        full_prompts = []
         for example in validation_data:
             question = example['question']
-            gold_answer_str = example['answer']
+            full_prompts.append(f"Question: {question}\n\n{str(prompt)}\n\nAnswer:")
 
-            # Extract gold answer
+        # Batch generation
+        try:
+            responses = self.llm_client.generate_batch(full_prompts, max_tokens=1024)
+        except Exception as e:
+            if self.debug:
+                print(f"Warning: LLM batch generation failed: {e}")
+            return 1.0  # Return 100% error on failure
+
+        # Evaluate responses
+        for i, example in enumerate(validation_data):
+            gold_answer_str = example['answer']
             gold_answer = self._extract_gold_answer(gold_answer_str)
+            
             if gold_answer is None:
                 if self.debug:
                     print(f"Warning: Could not extract gold answer from: {gold_answer_str}")
                 errors += 1
                 continue
 
-            # Format prompt with question
-            full_prompt = f"Question: {question}\n\n{str(prompt)}\n\nAnswer:"
-
-            # Get LLM response with error handling
-            try:
-                response = self.llm_client.generate([full_prompt], max_tokens=1024)[0]
-            except Exception as e:
-                if self.debug:
-                    print(f"Warning: LLM generation failed for question: {e}")
-                errors += 1
-                continue
-
+            response = responses[i]
+            
             # Extract predicted answer
             try:
                 pred_answer = extract_answer(response)
@@ -118,7 +121,7 @@ class GSM8KEvaluator:
                 errors += 1
 
             if self.debug:
-                print(f"\nQuestion: {question}")
+                print(f"\nQuestion: {example['question']}")
                 print(f"Gold: {gold_answer}")
                 print(f"Predicted: {pred_answer}")
                 print(f"Correct: {exact_match_with_tolerance(pred_answer, gold_answer)}")
@@ -321,7 +324,7 @@ def main():
     print(f"\nInitializing LLM client ({args.backend})...")
     try:
         llm_client = create_llm_client(
-            model=args.model,
+            model_name=args.model,
             backend=args.backend,
             device=args.device
         )

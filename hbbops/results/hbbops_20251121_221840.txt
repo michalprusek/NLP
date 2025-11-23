@@ -1,0 +1,27 @@
+HbBoPs Results
+================================================================================
+
+Model: Qwen/Qwen2.5-7B-Instruct
+Backend: vllm
+
+Validation error: 0.1622 (16.22%)
+Test error: 0.2244 (22.44%)
+
+Best Prompt:
+--------------------------------------------------------------------------------
+Analyze the given math problem, identify the key information, solve it systematically, and present the final answer.
+
+Q: Mrs. Lacson harvested 80 sweet potatoes. She sold 20 of them to Mrs.  Adams and 15 of them to Mr. Lenon. How many sweet potatoes are not yet sold?
+A: Mrs. Lacson sold a total of 20 + 15 = <<20+15=35>>35 sweet potatoes.
+
+Q: Gary has 6 pounds of flour. He will use 4 pounds of flour to make cakes which require 0.5 pounds of flour each. The remaining 2 pounds of flour will be used to bake cupcakes, which require 1/5 pounds of flour. He plans to sell the cakes for $2.5 each and the cupcakes for $1 each in the school's bake sale. How much will Gary earn?
+A: Gary can bake 4/0.5 = <<4/0.5=8>>8 cakes from the 4 pounds of flour.
+
+Q: In a basketball game, Jon scored 3 points. Jack scored 5 points more than Jon, and Tom scored 4 less than the points of Jon and Jack together. How many points did they score altogether?
+A: Jack scored 3 + 5 = <<3+5=8>>8 points.
+
+Q: Miss Davis gave 15 popsicle sticks to each of the 10 groups in her class. How many sticks does she have left if she had 170 popsicle sticks?
+A: Miss Davis gave a total of 15 x 10 = <<15*10=150>>150 popsicle sticks to the 10 groups in her class.
+
+Q: There are 180 days in a school year.  A senior can skip their final exams if they miss 5% or less of the school year.  Hazel has missed 6 days of school due to illness.  How many more days can she miss and still not have to take her exams?
+A: There are 180 days in the school year and she can miss up to 5% so that’s 180*.05 = <<180*.05=9>>9 days

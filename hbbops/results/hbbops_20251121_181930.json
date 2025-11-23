@@ -1,0 +1,23 @@
+{
+  "method": "HbBoPs",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "backend": "vllm",
+  "config": {
+    "bmin": 10,
+    "eta": 2.0,
+    "encoder": "bert-base-uncased",
+    "num_instructions": 5,
+    "num_exemplars": 50,
+    "num_prompts": 250
+  },
+  "best_prompt": {
+    "instruction_id": 0,
+    "exemplar_id": 27,
+    "instruction": "Solve the following math problem step by step, showing your work clearly, and provide the final numerical answer.",
+    "exemplar": "Q: In a shopping mall, one T-shirt costs $20 each; a pair of pants costs $80; a pair of shoes costs $150. All items will get a 10% discount. How much does Eugene have to pay if he buys four T-shirts, three pairs of pants, and two pairs of shoes?\nA: The total cost of the four T-shirts is 4 x $20 = $<<4*20=80>>80.\n\nQ: Nicholas bought six times as much fabric as Kenneth. If Kenneth paid $40 for an oz of fabric and bought 700oz, calculate the amount of money that Nicholas paid more than Kenneth for the fabric he bought.\nA: If Kenneth bought 700oz of fabric at $40 per oz, he spent a total of 700*40 = $<<700*40=28000>>28000\n\nQ: Mark constructed a deck that was 30 feet by 40 feet.  It cost $3 per square foot.  He then paid an extra $1 per square foot for sealant.  How much did he pay?\nA: The deck is 30*40=<<30*40=1200>>1200 square feet\n\nQ: In 3 years, Jayden will be half of Ernesto's age. If Ernesto is 11 years old, how many years old is Jayden now?\nA: Ernesto = 11 + 3 = <<11+3=14>>14\n\nQ: Bob is tilling a plot of his garden. The plot is 110 feet wide by 120 feet long. His tiller digs a swath two feet wide, and he can till 1 foot of ground in about 2 seconds. How long will it take him to till this plot of land, in minutes?\nA: If Bob goes along the side that's 120 feet long, he will till 110 / 2 = 55 rows."
+  },
+  "validation_error": 1.0,
+  "test_error": 1.0,
+  "design_data_size": 599,
+  "num_evaluations": 495
+}

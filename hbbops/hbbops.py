@@ -401,6 +401,9 @@ class HbBoPs:
                 X_normalized, y_standardized, self.likelihood,
                 self.feature_extractor, input_dim=768
             ).to(self.device)
+        else:
+            # Update training data for existing model
+            self.gp_model.set_train_data(inputs=X_normalized, targets=y_standardized, strict=False)
 
         # Set to training mode
         self.gp_model.train()
@@ -603,12 +606,15 @@ class HbBoPs:
                     self.design_data.append((p_idx, inst_emb, ex_emb, v, bi))
 
             # Update best prompt (only from those evaluated on full validation set)
-            if bi == self.nvalid:
+            # Note: bi is defined in the loop above, or equals b if s=0
+            current_fidelity = bi if s > 0 else b
+            
+            if current_fidelity >= self.nvalid:
                 for p_idx, v in zip(P, V):
                     if v < self.best_validation_error:
                         self.best_validation_error = v
                         self.best_prompt = self.prompts[p_idx]
-                        self.best_fidelity = bi
+                        self.best_fidelity = current_fidelity
                         if verbose:
                             print(f"  New best validation error: {v:.4f}")
 

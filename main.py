@@ -330,6 +330,8 @@ def main():
         "backend": args.backend,
         "device": args.device,
         "torch_dtype": args.torch_dtype,
+        "max_new_tokens": 512,
+        "temperature": 0.0,
     }
 
     # Add tensor parallelism for vLLM
@@ -343,11 +345,13 @@ def main():
         print(f"\nInitializing META-OPTIMIZER model ({args.meta_backend}):")
         print(f"  Model: {args.meta_model}")
 
-        # Prepare Meta LLM client kwargs
-        meta_llm_kwargs = {
-            "model_name": args.meta_model,
-            "backend": args.meta_backend,
-        }
+    # Prepare Meta LLM client kwargs
+    meta_llm_kwargs = {
+        "model_name": args.meta_model,
+        "backend": args.meta_backend,
+        "max_new_tokens": 4000,  # Higher for meta-prompts
+        "temperature": 1.0,
+    }
 
         # Only add device/dtype for non-API backends (Claude and OpenAI use API)
         if args.meta_backend not in ["claude", "openai", "auto"] or ("claude" not in args.meta_model.lower() and "gpt" not in args.meta_model.lower()):
