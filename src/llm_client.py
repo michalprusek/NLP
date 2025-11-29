@@ -255,6 +255,7 @@ class VLLMClient(LLMClient):
         max_new_tokens: int = 512,
         temperature: float = 0.0,
         tensor_parallel_size: int = 1,
+        gpu_memory_utilization: float = 0.90,
     ):
         """
         Initialize vLLM client.
@@ -264,6 +265,7 @@ class VLLMClient(LLMClient):
             max_new_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             tensor_parallel_size: Number of GPUs for tensor parallelism
+            gpu_memory_utilization: Fraction of GPU memory to use (0.0-1.0)
         """
         from vllm import LLM, SamplingParams
         from transformers import AutoTokenizer
@@ -273,6 +275,8 @@ class VLLMClient(LLMClient):
         self.temperature = temperature
 
         print(f"Loading model with vLLM: {model_name}")
+        print(f"  Tensor parallel size: {tensor_parallel_size}")
+        print(f"  GPU memory utilization: {gpu_memory_utilization:.0%}")
 
         # Disable v1 engine for compatibility (use stable v0 engine)
         # v1 engine is experimental and has issues with some models
@@ -290,10 +294,14 @@ class VLLMClient(LLMClient):
             model=model_name,
             tensor_parallel_size=tensor_parallel_size,
             dtype="auto",
-            gpu_memory_utilization=0.85,  # Reduce from default 0.9 to leave more headroom
+            gpu_memory_utilization=gpu_memory_utilization,
             max_model_len=4096,  # Limit context length to reduce KV cache size
             enforce_eager=enforce_eager,  # Use eager mode for tensor parallelism
+            enable_prefix_caching=True,  # CRITICAL: Cache KV for shared prefixes (instructions/exemplars)
         )
+
+        # Warmup run to compile CUDA graphs and allocate KV cache
+        self._warmup_done = False
 
         # Load tokenizer to check for chat template support
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -311,6 +319,46 @@ class VLLMClient(LLMClient):
             max_tokens=max_new_tokens,
             temperature=temperature,
         )
+
+    def warmup(self, sample_prompts: list[str] = None) -> None:
+        """
+        Explicitly warm up the model by running a few inference passes.
+
+        This compiles CUDA graphs and allocates KV cache, eliminating the
+        "slow first 200 samples" problem. Call this ONCE after initialization
+        with representative prompts (same length as actual prompts).
+
+        Args:
+            sample_prompts: Optional list of sample prompts to warm up with.
+                           If None, uses a default warmup prompt.
+        """
+        if self._warmup_done:
+            return
+
+        print("Warming up vLLM engine (compiling CUDA graphs)...")
+
+        if sample_prompts is None:
+            # Default warmup with varying sequence lengths to cover common cases
+            sample_prompts = [
+                "Solve: 2 + 2 = ?" * 10,  # Short
+                "Solve step by step: If Alice has 5 apples and gives 2 to Bob, how many does she have? " * 5,  # Medium
+                "Detailed math problem: " + "x " * 500,  # Long (to warm up longer contexts)
+            ]
+
+        from vllm import SamplingParams
+        warmup_params = SamplingParams(max_tokens=10, temperature=0.0)
+
+        # Format prompts
+        formatted = [self._format_prompt(p) for p in sample_prompts]
+
+        # Run warmup - this compiles CUDA graphs
+        import time
+        start = time.time()
+        _ = self.llm.generate(formatted, warmup_params, use_tqdm=False)
+        elapsed = time.time() - start
+
+        print(f"Warmup complete in {elapsed:.2f}s - subsequent inference will be faster")
+        self._warmup_done = True
 
     def _format_prompt(self, prompt: str) -> str:
         """
@@ -351,6 +399,10 @@ class VLLMClient(LLMClient):
             List of generated texts
         """
         from vllm import SamplingParams
+
+        # Auto-warmup on first call if not done yet
+        if not self._warmup_done:
+            self.warmup(prompts[:3] if len(prompts) >= 3 else prompts)
 
         # Override defaults with kwargs
         max_new_tokens = kwargs.get('max_new_tokens', self.max_new_tokens)
@@ -580,7 +632,7 @@ def create_llm_client(
         # Filter out parameters not supported by VLLMClient
         vllm_kwargs = {
             k: v for k, v in kwargs.items()
-            if k in ['max_new_tokens', 'temperature', 'tensor_parallel_size']
+            if k in ['max_new_tokens', 'temperature', 'tensor_parallel_size', 'gpu_memory_utilization']
         }
         return VLLMClient(model_name, **vllm_kwargs)
     elif backend == "claude":
