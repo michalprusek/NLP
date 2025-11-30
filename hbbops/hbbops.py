@@ -393,17 +393,19 @@ class HbBoPs:
         y_std = y.std() + 1e-4  # Increased for numerical stability
         y_standardized = (y - y_mean) / y_std
 
-        # Initialize models if needed
-        if self.feature_extractor is None:
-            self.feature_extractor = FeatureExtractor(input_dim=768).to(self.device)
-            self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
-            self.gp_model = StructuralAwareDeepKernelGP(
-                X_normalized, y_standardized, self.likelihood,
-                self.feature_extractor, input_dim=768
-            ).to(self.device)
-        else:
-            # Update training data for existing model
-            self.gp_model.set_train_data(inputs=X_normalized, targets=y_standardized, strict=False)
+        # Check for sufficient variance in y (avoid degenerate cases)
+        if y.std() < 1e-6:
+            # All validation errors are essentially the same - no need for GP
+            return False
+
+        # Always create fresh GP model to avoid numerical issues from cached matrices
+        # and mismatched normalization between training sessions
+        self.feature_extractor = FeatureExtractor(input_dim=768).to(self.device)
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+        self.gp_model = StructuralAwareDeepKernelGP(
+            X_normalized, y_standardized, self.likelihood,
+            self.feature_extractor, input_dim=768
+        ).to(self.device)
 
         # Set to training mode
         self.gp_model.train()
@@ -570,10 +572,10 @@ class HbBoPs:
 
             # Propose and evaluate prompts
             for j in range(n):
-                # Train GP if we have enough data
-                highest_fidelity = self._get_highest_trainable_fidelity()
+                # Train GP if we have enough data (use min_observations=8 for stability)
+                highest_fidelity = self._get_highest_trainable_fidelity(min_observations=8)
                 if highest_fidelity:
-                    self.train_gp(highest_fidelity, min_observations=4)
+                    self.train_gp(highest_fidelity, min_observations=8)
 
                 # Get vmin_b for acquisition function
                 vmin_b = self._get_best_validation_error(highest_fidelity)
