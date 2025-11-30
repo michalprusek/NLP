@@ -492,10 +492,15 @@ class HbBoPs:
         self.gp_model.eval()
         self.likelihood.eval()
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            prediction = self.likelihood(self.gp_model(X_normalized))
-            mean = prediction.mean.item() * self.y_std.item() + self.y_mean.item()
-            std = prediction.stddev.item() * self.y_std.item()
+        try:
+            # Use higher jitter for numerical stability during prediction
+            with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-3):
+                prediction = self.likelihood(self.gp_model(X_normalized))
+                mean = prediction.mean.item() * self.y_std.item() + self.y_mean.item()
+                std = prediction.stddev.item() * self.y_std.item()
+        except Exception:
+            # If prediction fails (e.g., NotPSDError), return 0 to fall back to random
+            return 0.0
 
         # Expected Improvement (we minimize, so improvement = vmin_b - mean)
         improvement = vmin_b - mean
