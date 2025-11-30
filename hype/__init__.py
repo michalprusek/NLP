@@ -3,7 +3,7 @@ HYPE - Hyperband Prompt Evolution
 
 Evolutionary extension to HbBoPs that adds:
 1. Component Scoring (S_I, S_E)
-2. Three generation methods (Semantic Gradient, Recombination, Bootstrap)
+2. Generation methods (Semantic Gradient, Bootstrap)
 3. Evolutionary loop for iterative prompt improvement
 """
 

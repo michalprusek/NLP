@@ -20,13 +20,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hbbops.hbbops import HbBoPs, Prompt
 from hype.data_types import (
-    Instruction, Exemplar, EvaluationRecord,
-    ComponentScore, ComponentSource
+    Instruction, Exemplar, EvaluationRecord, ComponentSource
 )
 from hype.scoring import ComponentScorer
 from hype.generators.semantic_gradient import SemanticGradientGenerator
 from hype.generators.bootstrap import BootstrapGenerator
-from hype.generators.recombination import RecombinationGenerator
 
 
 @dataclass
@@ -38,7 +36,6 @@ class HYPEConfig:
     # Generation settings (Method A + C every iteration)
     num_new_instructions: int = 8  # Method A: semantic gradient
     num_new_exemplars: int = 8     # Method C: bootstrap
-    use_recombination: bool = True # Method B: optional, zero cost
 
     # HbBoPs settings (passed through)
     bmin: int = 10
@@ -48,7 +45,6 @@ class HYPEConfig:
     # Pool management
     max_instructions: int = 100
     max_exemplars: int = 100
-    retire_threshold: float = 0.1  # Bottom 10% retired each generation
 
     # Output
     output_dir: str = "results"
@@ -66,8 +62,6 @@ class GenerationHistory:
     best_exemplar_id: int
     new_instructions_added: int = 0
     new_exemplars_added: int = 0
-    instructions_retired: int = 0
-    exemplars_retired: int = 0
     hyperband_evaluations: int = 0
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -140,10 +134,6 @@ class HYPE:
             llm_client=self.meta_llm,
             training_data=self.training_data,
             num_exemplars_to_generate=self.config.num_new_exemplars
-        )
-
-        self.recombination_gen = RecombinationGenerator(
-            max_new_instructions=self.config.num_new_instructions
         )
 
         # Track evolution
@@ -298,28 +288,6 @@ class HYPE:
         except Exception as e:
             print(f"  Warning: Bootstrap generation failed: {e}")
 
-        # Method B: Recombination (optional, zero cost)
-        if self.config.use_recombination and len(new_instructions) < self.config.num_new_instructions:
-            if self.verbose:
-                print("  Generating additional instructions (Method B: Recombination)...")
-
-            try:
-                result_b = self.recombination_gen.generate(
-                    instructions=self.instructions,
-                    exemplars=self.exemplars,
-                    instruction_scores=inst_scores,
-                    exemplar_scores=ex_scores,
-                    evaluation_records=self.scorer.records,
-                    generation=generation
-                )
-                # Only add if we need more
-                needed = self.config.num_new_instructions - len(new_instructions)
-                new_instructions.extend(result_b.new_instructions[:needed])
-                if self.verbose:
-                    print(f"    Generated {min(len(result_b.new_instructions), needed)} additional instructions")
-            except Exception as e:
-                print(f"  Warning: Recombination generation failed: {e}")
-
         return new_instructions, new_exemplars
 
     def _add_new_components(
@@ -360,53 +328,6 @@ class HYPE:
             added_ex += 1
 
         return added_inst, added_ex
-
-    def _retire_poor_performers(self) -> Tuple[int, int]:
-        """Remove bottom performers from pools"""
-        retired_inst = 0
-        retired_ex = 0
-
-        if len(self.instructions) <= 5 or len(self.exemplars) <= 5:
-            return 0, 0  # Keep minimum pool size
-
-        inst_scores = self.scorer.get_all_instruction_scores()
-        ex_scores = self.scorer.get_all_exemplar_scores()
-
-        # Calculate retirement threshold
-        num_to_retire = int(len(self.instructions) * self.config.retire_threshold)
-
-        if num_to_retire > 0 and inst_scores:
-            # Sort by score, get bottom N
-            sorted_inst = sorted(
-                [(i, inst_scores.get(i.id, ComponentScore(i.id, 0)).score)
-                 for i in self.instructions],
-                key=lambda x: x[1]
-            )
-            to_retire = [i for i, s in sorted_inst[:num_to_retire]]
-
-            # Don't retire initial instructions in first few generations
-            to_retire = [i for i in to_retire if i.generation > 0]
-
-            for inst in to_retire:
-                self.instructions.remove(inst)
-                retired_inst += 1
-
-        num_to_retire = int(len(self.exemplars) * self.config.retire_threshold)
-
-        if num_to_retire > 0 and ex_scores:
-            sorted_ex = sorted(
-                [(e, ex_scores.get(e.id, ComponentScore(e.id, 0)).score)
-                 for e in self.exemplars],
-                key=lambda x: x[1]
-            )
-            to_retire = [e for e, s in sorted_ex[:num_to_retire]]
-            to_retire = [e for e in to_retire if e.generation > 0]
-
-            for ex in to_retire:
-                self.exemplars.remove(ex)
-                retired_ex += 1
-
-        return retired_inst, retired_ex
 
     def evolve(self, evaluator) -> Tuple[Prompt, float]:
         """
@@ -464,7 +385,6 @@ class HYPE:
                 print("\nPhase 3: Generating new components...")
                 new_instructions, new_exemplars = self._generate_new_components(gen)
                 new_inst_added, new_ex_added = self._add_new_components(new_instructions, new_exemplars)
-                # Note: No retirement - weak prompts are naturally eliminated by successive halving
 
             # Record history
             history_entry = GenerationHistory(
@@ -476,8 +396,6 @@ class HYPE:
                 best_exemplar_id=self.best_prompt.exemplar_id if self.best_prompt else -1,
                 new_instructions_added=new_inst_added,
                 new_exemplars_added=new_ex_added,
-                instructions_retired=0,  # No retirement
-                exemplars_retired=0,
                 hyperband_evaluations=len(hbbops.design_data)
             )
             self.history.append(history_entry)

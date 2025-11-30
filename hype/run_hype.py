@@ -202,8 +202,6 @@ Examples:
                         help='New instructions per generation (Method A)')
     parser.add_argument('--new-exemplars', type=int, default=8,
                         help='New exemplars per generation (Method C)')
-    parser.add_argument('--no-recombination', action='store_true',
-                        help='Disable Method B (recombination)')
 
     # HbBoPs arguments
     parser.add_argument('--bmin', type=int, default=10,
@@ -342,7 +340,6 @@ Examples:
         num_generations=args.generations,
         num_new_instructions=args.new_instructions,
         num_new_exemplars=args.new_exemplars,
-        use_recombination=not args.no_recombination,
         bmin=args.bmin,
         eta=args.eta,
         encoder_name=args.encoder,

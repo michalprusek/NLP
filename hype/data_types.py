@@ -14,7 +14,6 @@ class ComponentSource(Enum):
     """Origin of a component"""
     INITIAL = "initial"              # From original pool
     SEMANTIC_GRADIENT = "semantic_gradient"  # Method A: LLM-improved
-    RECOMBINATION = "recombination"  # Method B: Genetic crossover
     BOOTSTRAP = "bootstrap"          # Method C: Synthetic
 
 
