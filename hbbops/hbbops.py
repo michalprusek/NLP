@@ -177,7 +177,8 @@ class HbBoPs:
         eta: float = 2.0,
         random_interleaving_prob: float = 0.1,
         device: str = "auto",
-        full_initial_bracket: bool = False
+        full_initial_bracket: bool = False,
+        evaluation_cache: Dict = None
     ):
         """
         Args:
@@ -191,6 +192,7 @@ class HbBoPs:
             random_interleaving_prob: Probability of random prompt proposal
             device: Device for computation ('auto', 'cuda', 'cpu', 'mps')
             full_initial_bracket: If True, evaluate ALL prompts in first bracket
+            evaluation_cache: Pre-populated cache from previous runs (optional)
         """
         self.instructions = instructions
         self.exemplars = exemplars
@@ -241,7 +243,10 @@ class HbBoPs:
         self.design_data = []
 
         # Cache for prompt evaluations (prompt_idx, fidelity) -> validation_error
-        self.evaluation_cache = {}
+        # Can be pre-populated from previous runs
+        self.evaluation_cache = evaluation_cache.copy() if evaluation_cache else {}
+        if self.evaluation_cache:
+            print(f"  Loaded {len(self.evaluation_cache)} cached evaluations")
 
         # GP model (initialized when we have enough data)
         self.gp_model = None
@@ -264,19 +269,21 @@ class HbBoPs:
             return torch.device("mps")
         return torch.device("cpu")
 
-    def _find_largest_cached_fidelity(self, prompt_idx: int, max_fidelity: int) -> Optional[int]:
+    def _find_largest_cached_fidelity(self, prompt: Prompt, max_fidelity: int) -> Optional[int]:
         """Find largest cached fidelity for prompt that's less than max_fidelity"""
+        # Cache key is (instruction_id, exemplar_id, fidelity) for cross-run stability
         cached_fidelities = [
-            f for (p_idx, f), _ in self.evaluation_cache.items()
-            if p_idx == prompt_idx and f < max_fidelity
+            f for (inst_id, ex_id, f), _ in self.evaluation_cache.items()
+            if inst_id == prompt.instruction_id and ex_id == prompt.exemplar_id and f < max_fidelity
         ]
         return max(cached_fidelities) if cached_fidelities else None
 
     def _extend_evaluation(
-        self, prompt: Prompt, prompt_idx: int, prev_fidelity: int, fidelity: int
+        self, prompt: Prompt, prev_fidelity: int, fidelity: int
     ) -> float:
         """Extend previous evaluation to higher fidelity"""
-        prev_error_sum = self.evaluation_cache[(prompt_idx, prev_fidelity)] * prev_fidelity
+        cache_key = (prompt.instruction_id, prompt.exemplar_id, prev_fidelity)
+        prev_error_sum = self.evaluation_cache[cache_key] * prev_fidelity
         remaining_instances = self.validation_data[prev_fidelity:fidelity]
         new_error_rate = self.llm_evaluator(prompt, remaining_instances)
         new_error_sum = new_error_rate * (fidelity - prev_fidelity)
@@ -355,20 +362,20 @@ class HbBoPs:
         if prompt_idx is None:
             prompt_idx = self.prompts.index(prompt)
 
-        # Check cache for exact fidelity
-        cache_key = (prompt_idx, fidelity)
+        # Check cache for exact fidelity - use (instruction_idx, exemplar_idx) for cross-run stability
+        cache_key = (prompt.instruction_id, prompt.exemplar_id, fidelity)
         if cache_key in self.evaluation_cache:
             return self.evaluation_cache[cache_key]
 
         # Try to extend previous evaluation if possible
-        prev_fidelity = self._find_largest_cached_fidelity(prompt_idx, fidelity)
+        prev_fidelity = self._find_largest_cached_fidelity(prompt, fidelity)
 
         if prev_fidelity:
-            total_error = self._extend_evaluation(prompt, prompt_idx, prev_fidelity, fidelity)
+            total_error = self._extend_evaluation(prompt, prev_fidelity, fidelity)
         else:
             total_error = self.llm_evaluator(prompt, self.validation_data[:fidelity])
 
-        # Cache result
+        # Cache result with stable key (instruction_id, exemplar_id, fidelity)
         self.evaluation_cache[cache_key] = total_error
         return total_error
 

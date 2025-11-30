@@ -158,6 +158,9 @@ class HYPE:
         # Track hard examples for bootstrap
         self.hard_example_indices: List[int] = []
 
+        # Shared evaluation cache across generations (key: instruction_id, exemplar_id, fidelity)
+        self.evaluation_cache: Dict = {}
+
         if self.verbose:
             print(f"HYPE initialized:")
             print(f"  Instructions: {len(self.instructions)}")
@@ -166,7 +169,7 @@ class HYPE:
             print(f"  Generations: {self.config.num_generations}")
 
     def _create_hbbops(self, evaluator) -> HbBoPs:
-        """Create a fresh HbBoPs instance for this generation"""
+        """Create a fresh HbBoPs instance for this generation with shared cache"""
         # Convert to plain text lists
         instruction_texts = [i.text for i in self.instructions]
         exemplar_texts = [e.text for e in self.exemplars]
@@ -179,7 +182,8 @@ class HYPE:
             encoder_name=self.config.encoder_name,
             bmin=self.config.bmin,
             eta=self.config.eta,
-            device=self.device
+            device=self.device,
+            evaluation_cache=self.evaluation_cache  # Share cache across generations
         )
 
     def _extract_evaluation_records(self, hbbops: HbBoPs, generation: int) -> List[EvaluationRecord]:
@@ -425,9 +429,13 @@ class HYPE:
             print(f"Pool size: {len(self.instructions)} instructions, {len(self.exemplars)} exemplars")
 
             # Phase 1: Run Hyperband
-            print("\nPhase 1: Running Hyperband...")
+            print(f"\nPhase 1: Running Hyperband... (cache: {len(self.evaluation_cache)} entries)")
             hbbops = self._create_hbbops(evaluator)
             gen_best_prompt, gen_best_error = hbbops.run_hyperband(verbose=self.verbose)
+
+            # Update shared cache from HbBoPs
+            self.evaluation_cache.update(hbbops.evaluation_cache)
+            print(f"  Cache updated: {len(self.evaluation_cache)} total entries")
 
             # Update global best
             if gen_best_error < self.best_error:
@@ -451,18 +459,12 @@ class HYPE:
             # Phase 3: Generation (skip on last iteration)
             new_inst_added = 0
             new_ex_added = 0
-            retired_inst = 0
-            retired_ex = 0
 
             if gen < self.config.num_generations:
                 print("\nPhase 3: Generating new components...")
                 new_instructions, new_exemplars = self._generate_new_components(gen)
                 new_inst_added, new_ex_added = self._add_new_components(new_instructions, new_exemplars)
-
-                # Phase 4: Retire poor performers
-                print("\nPhase 4: Retiring poor performers...")
-                retired_inst, retired_ex = self._retire_poor_performers()
-                print(f"  Retired: {retired_inst} instructions, {retired_ex} exemplars")
+                # Note: No retirement - weak prompts are naturally eliminated by successive halving
 
             # Record history
             history_entry = GenerationHistory(
@@ -474,16 +476,16 @@ class HYPE:
                 best_exemplar_id=self.best_prompt.exemplar_id if self.best_prompt else -1,
                 new_instructions_added=new_inst_added,
                 new_exemplars_added=new_ex_added,
-                instructions_retired=retired_inst,
-                exemplars_retired=retired_ex,
+                instructions_retired=0,  # No retirement
+                exemplars_retired=0,
                 hyperband_evaluations=len(hbbops.design_data)
             )
             self.history.append(history_entry)
 
             print(f"\nGeneration {gen} complete:")
             print(f"  Best error so far: {self.best_error:.4f} (gen {self.best_generation})")
-            print(f"  Pool: {len(self.instructions)} inst (+{new_inst_added}/-{retired_inst}), "
-                  f"{len(self.exemplars)} ex (+{new_ex_added}/-{retired_ex})")
+            print(f"  Pool: {len(self.instructions)} inst (+{new_inst_added}), "
+                  f"{len(self.exemplars)} ex (+{new_ex_added})")
 
             # Save checkpoint after each generation to prevent data loss
             checkpoint_path = self.save_checkpoint(
