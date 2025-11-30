@@ -426,23 +426,36 @@ class HbBoPs:
         max_epochs = 3000
         patience = 10
 
-        for epoch in range(max_epochs):
-            optimizer.zero_grad()
-            output = self.gp_model(X_normalized)
-            loss = -mll(output, y_standardized)
-            loss.backward()
-            optimizer.step()
+        # Use higher jitter for numerical stability
+        with gpytorch.settings.cholesky_jitter(1e-3):
+            for epoch in range(max_epochs):
+                try:
+                    optimizer.zero_grad()
+                    output = self.gp_model(X_normalized)
+                    loss = -mll(output, y_standardized)
+                    loss.backward()
+                    optimizer.step()
 
-            # Early stopping
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                patience_counter = 0
-            else:
-                patience_counter += 1
+                    # Early stopping
+                    if loss.item() < best_loss:
+                        best_loss = loss.item()
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
 
-            if patience_counter >= patience:
-                print(f"  GP training converged at epoch {epoch + 1}")
-                break
+                    if patience_counter >= patience:
+                        print(f"  GP training converged at epoch {epoch + 1}")
+                        break
+                except Exception as e:
+                    # Handle numerical instability (NotPSDError, etc.)
+                    if epoch == 0:
+                        print(f"  Warning: GP training failed at epoch {epoch + 1}: {type(e).__name__}")
+                        print(f"  Continuing without GP model for this iteration")
+                        return False
+                    else:
+                        # If we trained for some epochs, keep current state
+                        print(f"  Warning: GP training stopped at epoch {epoch + 1}: {type(e).__name__}")
+                        break
 
         # Store normalization parameters
         self.X_mean = X_mean
