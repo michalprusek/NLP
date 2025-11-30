@@ -231,6 +231,12 @@ def main():
                         help='Enable debug mode')
     parser.add_argument('--full-initial-bracket', action='store_true',
                         help='Evaluate ALL prompts in first Hyperband bracket')
+    parser.add_argument('--num-instructions', type=int, default=None,
+                        help='Number of instructions to sample (default: use all)')
+    parser.add_argument('--num-exemplars', type=int, default=None,
+                        help='Number of exemplars to sample from train set (default: use all from examples.txt)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for sampling')
 
     args = parser.parse_args()
 
@@ -242,6 +248,11 @@ def main():
 
     gt_path = script_dir / "results" / "full_grid_combined.jsonl"
 
+    # Set random seed
+    import random
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+
     # Load data
     print("Loading data...")
 
@@ -249,17 +260,45 @@ def main():
         validation_data = json.load(f)
     print(f"  Validation examples: {len(validation_data)}")
 
+    # Load training data for exemplar generation
+    with open(data_dir / "train.json", 'r') as f:
+        train_data = json.load(f)
+    print(f"  Training examples: {len(train_data)}")
+
     instructions = load_instructions(str(script_dir / "instructions.txt"))
-    exemplars = load_exemplars(str(script_dir / "examples.txt"))
+
+    # Sample instructions if requested
+    if args.num_instructions and args.num_instructions < len(instructions):
+        instructions = random.sample(instructions, args.num_instructions)
+        print(f"  Sampled {len(instructions)} instructions")
+
+    # Generate exemplars from train set if num_exemplars specified
+    if args.num_exemplars:
+        # Sample random examples from training set
+        sampled_train = random.sample(train_data, min(args.num_exemplars, len(train_data)))
+        exemplars = []
+        for ex in sampled_train:
+            # Format as Q&A exemplar
+            exemplar = f"Q: {ex['question']}\nA: {ex['answer']}"
+            exemplars.append(exemplar)
+        print(f"  Generated {len(exemplars)} exemplars from train set")
+    else:
+        exemplars = load_exemplars(str(script_dir / "examples.txt"))
+
     print(f"  Instructions: {len(instructions)}")
     print(f"  Exemplars: {len(exemplars)}")
     print(f"  Total prompts: {len(instructions) * len(exemplars)}")
 
-    # Load ground truth
-    print(f"\nLoading ground truth from {gt_path}...")
-    gt_df = load_ground_truth(gt_path)
-    print(f"  GT records: {len(gt_df)}")
-    print(f"  GT accuracy range: [{gt_df['gt_accuracy'].min():.3f}, {gt_df['gt_accuracy'].max():.3f}]")
+    # Load ground truth (only if not sampling - GT is for original 25x25 grid)
+    use_sampling = args.num_instructions or args.num_exemplars
+    gt_df = None
+    if not use_sampling and gt_path.exists():
+        print(f"\nLoading ground truth from {gt_path}...")
+        gt_df = load_ground_truth(gt_path)
+        print(f"  GT records: {len(gt_df)}")
+        print(f"  GT accuracy range: [{gt_df['gt_accuracy'].min():.3f}, {gt_df['gt_accuracy'].max():.3f}]")
+    elif use_sampling:
+        print("\nSkipping ground truth (sampling mode - GT not available for sampled prompts)")
 
     # Initialize LLM client
     print(f"\nInitializing LLM client ({args.backend})...")
@@ -303,80 +342,109 @@ def main():
     print(f"  Best validation error: {best_val_error:.4f}")
     print(f"  Design data size: {len(hbbops.design_data)}")
 
-    # Get GP predictions for all 625 pairs
+    # Get GP predictions for all pairs
     print("\n" + "="*60)
-    print("Querying GP for all 625 pairs...")
+    print(f"Querying GP for all {len(hbbops.prompts)} pairs...")
     print("="*60)
     pred_df = get_gp_predictions(hbbops)
     print(f"  Predictions obtained: {len(pred_df)}")
     print(f"  Predicted accuracy range: [{pred_df['predicted_accuracy'].min():.3f}, {pred_df['predicted_accuracy'].max():.3f}]")
 
-    # Merge with ground truth
-    print("\nMerging predictions with ground truth...")
-    results = pd.merge(pred_df, gt_df, on=['instruction_id', 'exemplar_id'])
-    print(f"  Merged records: {len(results)}")
+    # Compare with ground truth (if available)
+    if gt_df is not None:
+        # Merge with ground truth
+        print("\nMerging predictions with ground truth...")
+        results = pd.merge(pred_df, gt_df, on=['instruction_id', 'exemplar_id'])
+        print(f"  Merged records: {len(results)}")
 
-    # Compute metrics
-    print("\nComputing metrics...")
-    metrics = compute_metrics(results)
+        # Compute metrics
+        print("\nComputing metrics...")
+        metrics = compute_metrics(results)
 
-    # Print results
-    print("\n" + "="*60)
-    print("RESULTS")
-    print("="*60)
-    print(f"\nCorrelation Metrics:")
-    print(f"  Kendall τ:  {metrics['kendall_tau']:.4f} (p={metrics['kendall_p']:.2e})")
-    print(f"  Spearman r: {metrics['spearman_r']:.4f} (p={metrics['spearman_p']:.2e})")
-    print(f"\nPrediction Accuracy:")
-    print(f"  MAE: {metrics['mae']:.4f}")
-    print(f"\nRanking Agreement:")
-    print(f"  Top-10% overlap: {metrics['top_10_overlap']:.1%}")
-    print(f"  Top-20% overlap: {metrics['top_20_overlap']:.1%}")
-    print(f"  Mean rank difference: {metrics['mean_rank_diff']:.1f}")
-    print(f"  Median rank difference: {metrics['median_rank_diff']:.1f}")
-    print(f"\nBest Prompt:")
-    print(f"  GT best: Instruction {metrics['gt_best']['instruction_id']}, Exemplar {metrics['gt_best']['exemplar_id']}")
-    print(f"  Pred best: Instruction {metrics['pred_best']['instruction_id']}, Exemplar {metrics['pred_best']['exemplar_id']}")
-    print(f"  Match: {'Yes' if metrics['best_match'] else 'No'}")
-    print(f"  GT best → predicted rank: {metrics['gt_best_pred_rank']}")
+        # Print results
+        print("\n" + "="*60)
+        print("RESULTS")
+        print("="*60)
+        print(f"\nCorrelation Metrics:")
+        print(f"  Kendall τ:  {metrics['kendall_tau']:.4f} (p={metrics['kendall_p']:.2e})")
+        print(f"  Spearman r: {metrics['spearman_r']:.4f} (p={metrics['spearman_p']:.2e})")
+        print(f"\nPrediction Accuracy:")
+        print(f"  MAE: {metrics['mae']:.4f}")
+        print(f"\nRanking Agreement:")
+        print(f"  Top-10% overlap: {metrics['top_10_overlap']:.1%}")
+        print(f"  Top-20% overlap: {metrics['top_20_overlap']:.1%}")
+        print(f"  Mean rank difference: {metrics['mean_rank_diff']:.1f}")
+        print(f"  Median rank difference: {metrics['median_rank_diff']:.1f}")
+        print(f"\nBest Prompt:")
+        print(f"  GT best: Instruction {metrics['gt_best']['instruction_id']}, Exemplar {metrics['gt_best']['exemplar_id']}")
+        print(f"  Pred best: Instruction {metrics['pred_best']['instruction_id']}, Exemplar {metrics['pred_best']['exemplar_id']}")
+        print(f"  Match: {'Yes' if metrics['best_match'] else 'No'}")
+        print(f"  GT best → predicted rank: {metrics['gt_best_pred_rank']}")
 
-    # Save outputs
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Save outputs
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # CSV
-    csv_path = output_dir / f"prediction_comparison_{timestamp}.csv"
-    results.to_csv(csv_path, index=False)
-    print(f"\nCSV saved: {csv_path}")
+        # CSV
+        csv_path = output_dir / f"prediction_comparison_{timestamp}.csv"
+        results.to_csv(csv_path, index=False)
+        print(f"\nCSV saved: {csv_path}")
 
-    # Metrics JSON
-    metrics_path = output_dir / f"prediction_metrics_{timestamp}.json"
-    with open(metrics_path, 'w') as f:
-        json.dump({
-            **metrics,
-            'model': args.model,
-            'bmin': args.bmin,
-            'eta': args.eta,
-            'design_data_size': len(hbbops.design_data),
-            'timestamp': timestamp
-        }, f, indent=2, default=str)
-    print(f"Metrics saved: {metrics_path}")
+        # Metrics JSON
+        metrics_path = output_dir / f"prediction_metrics_{timestamp}.json"
+        with open(metrics_path, 'w') as f:
+            json.dump({
+                **metrics,
+                'model': args.model,
+                'bmin': args.bmin,
+                'eta': args.eta,
+                'design_data_size': len(hbbops.design_data),
+                'timestamp': timestamp
+            }, f, indent=2, default=str)
+        print(f"Metrics saved: {metrics_path}")
 
-    # Scatter plot
-    plot_path = output_dir / f"prediction_scatter_{timestamp}.png"
-    create_scatter_plot(results, metrics, plot_path)
+        # Scatter plot
+        plot_path = output_dir / f"prediction_scatter_{timestamp}.png"
+        create_scatter_plot(results, metrics, plot_path)
 
-    # Print top-10 comparison
-    print("\n" + "="*60)
-    print("TOP 10 COMPARISON")
-    print("="*60)
-    print("\nGround Truth Top 10:")
-    gt_top10 = results.nlargest(10, 'gt_accuracy')[['instruction_id', 'exemplar_id', 'gt_accuracy', 'predicted_accuracy', 'pred_rank']]
-    print(gt_top10.to_string(index=False))
+        # Print top-10 comparison
+        print("\n" + "="*60)
+        print("TOP 10 COMPARISON")
+        print("="*60)
+        print("\nGround Truth Top 10:")
+        gt_top10 = results.nlargest(10, 'gt_accuracy')[['instruction_id', 'exemplar_id', 'gt_accuracy', 'predicted_accuracy', 'pred_rank']]
+        print(gt_top10.to_string(index=False))
 
-    print("\nPredicted Top 10:")
-    pred_top10 = results.nlargest(10, 'predicted_accuracy')[['instruction_id', 'exemplar_id', 'gt_accuracy', 'predicted_accuracy', 'gt_rank']]
-    pred_top10 = pred_top10.rename(columns={'gt_rank': 'gt_rank'})
-    print(pred_top10.to_string(index=False))
+        print("\nPredicted Top 10:")
+        pred_top10 = results.nlargest(10, 'predicted_accuracy')[['instruction_id', 'exemplar_id', 'gt_accuracy', 'predicted_accuracy', 'gt_rank']]
+        pred_top10 = pred_top10.rename(columns={'gt_rank': 'gt_rank'})
+        print(pred_top10.to_string(index=False))
+
+    else:
+        # Sampling mode - just show predictions and best prompt
+        print("\n" + "="*60)
+        print("RESULTS (Sampling Mode)")
+        print("="*60)
+
+        # Sort by predicted accuracy
+        pred_df_sorted = pred_df.sort_values('predicted_accuracy', ascending=False)
+        print(f"\nTop 5 predicted prompts:")
+        for idx, row in pred_df_sorted.head(5).iterrows():
+            print(f"  Inst {row['instruction_id']:2d}, Ex {row['exemplar_id']:2d}: "
+                  f"acc={row['predicted_accuracy']:.3f} ± {row['predicted_std']:.3f}")
+
+        print(f"\nBest prompt from Hyperband:")
+        print(f"  Instruction {best_prompt.instruction_id}:")
+        print(f"    {hbbops.instructions[best_prompt.instruction_id][:100]}...")
+        print(f"  Exemplar {best_prompt.exemplar_id}:")
+        print(f"    {hbbops.exemplars[best_prompt.exemplar_id][:100]}...")
+        print(f"  Validation error: {best_val_error:.4f}")
+        print(f"  Accuracy: {1 - best_val_error:.2%}")
+
+        # Save predictions CSV
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_path = output_dir / f"predictions_sampled_{timestamp}.csv"
+        pred_df.to_csv(csv_path, index=False)
+        print(f"\nPredictions saved: {csv_path}")
 
 
 if __name__ == "__main__":

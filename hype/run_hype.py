@@ -23,6 +23,7 @@ Usage:
 
 import argparse
 import json
+import random
 import sys
 import re
 from pathlib import Path
@@ -197,9 +198,9 @@ Examples:
     # Evolution arguments
     parser.add_argument('--generations', type=int, default=5,
                         help='Number of evolution generations')
-    parser.add_argument('--new-instructions', type=int, default=3,
+    parser.add_argument('--new-instructions', type=int, default=8,
                         help='New instructions per generation (Method A)')
-    parser.add_argument('--new-exemplars', type=int, default=3,
+    parser.add_argument('--new-exemplars', type=int, default=8,
                         help='New exemplars per generation (Method C)')
     parser.add_argument('--no-recombination', action='store_true',
                         help='Disable Method B (recombination)')
@@ -213,9 +214,9 @@ Examples:
                         help='BERT encoder for embeddings')
 
     # Pool management
-    parser.add_argument('--max-instructions', type=int, default=50,
+    parser.add_argument('--max-instructions', type=int, default=100,
                         help='Maximum instruction pool size')
-    parser.add_argument('--max-exemplars', type=int, default=50,
+    parser.add_argument('--max-exemplars', type=int, default=100,
                         help='Maximum exemplar pool size')
 
     # Data arguments
@@ -225,6 +226,14 @@ Examples:
                         help='Path to exemplars file (default: hbbops/examples.txt)')
     parser.add_argument('--data-dir', type=str, default=None,
                         help='Path to data directory (default: hbbops/data)')
+
+    # Sampling arguments
+    parser.add_argument('--num-instructions', type=int, default=None,
+                        help='Number of instructions to sample (default: use all)')
+    parser.add_argument('--num-exemplars', type=int, default=None,
+                        help='Number of exemplars to sample from train set (default: use examples.txt)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for sampling')
 
     # Output arguments
     parser.add_argument('--output-dir', type=str, default='hype/results',
@@ -254,26 +263,47 @@ Examples:
     instructions_file = args.instructions_file or str(hbbops_dir / 'instructions.txt')
     exemplars_file = args.exemplars_file or str(hbbops_dir / 'examples.txt')
 
+    # Set random seed
+    random.seed(args.seed)
+
     # Load data
     print("Loading data...")
-    instructions = load_instructions(instructions_file)
-    exemplars = load_exemplars(exemplars_file)
-
-    print(f"  Instructions: {len(instructions)}")
-    print(f"  Exemplars: {len(exemplars)}")
 
     # Load validation data
     with open(data_dir / 'validation.json', 'r') as f:
         validation_data = json.load(f)
     print(f"  Validation samples: {len(validation_data)}")
 
-    # Load training data (for bootstrap)
+    # Load training data (for bootstrap and exemplar generation)
     training_data = validation_data  # Fallback
     train_path = data_dir / 'train.json'
     if train_path.exists():
         with open(train_path, 'r') as f:
             training_data = json.load(f)
         print(f"  Training samples: {len(training_data)}")
+
+    # Load instructions (optionally sample)
+    instructions = load_instructions(instructions_file)
+    if args.num_instructions:
+        instructions = random.sample(instructions, min(args.num_instructions, len(instructions)))
+        print(f"  Sampled {len(instructions)} instructions")
+    else:
+        print(f"  Instructions: {len(instructions)}")
+
+    # Load or generate exemplars
+    if args.num_exemplars:
+        # Generate exemplars from training data
+        sampled_train = random.sample(training_data, min(args.num_exemplars, len(training_data)))
+        exemplars = []
+        for ex in sampled_train:
+            exemplar = f"Q: {ex['question']}\nA: {ex['answer']}"
+            exemplars.append(exemplar)
+        print(f"  Generated {len(exemplars)} exemplars from train set")
+    else:
+        exemplars = load_exemplars(exemplars_file)
+        print(f"  Exemplars: {len(exemplars)}")
+
+    print(f"  Total prompts: {len(instructions) * len(exemplars)}")
 
     # Set GPU if specified
     if args.gpu_ids:

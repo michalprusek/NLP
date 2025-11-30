@@ -36,8 +36,8 @@ class HYPEConfig:
     num_generations: int = 5
 
     # Generation settings (Method A + C every iteration)
-    num_new_instructions: int = 3  # Method A: semantic gradient
-    num_new_exemplars: int = 3     # Method C: bootstrap
+    num_new_instructions: int = 8  # Method A: semantic gradient
+    num_new_exemplars: int = 8     # Method C: bootstrap
     use_recombination: bool = True # Method B: optional, zero cost
 
     # HbBoPs settings (passed through)
@@ -46,8 +46,8 @@ class HYPEConfig:
     encoder_name: str = "bert-base-uncased"
 
     # Pool management
-    max_instructions: int = 50
-    max_exemplars: int = 50
+    max_instructions: int = 100
+    max_exemplars: int = 100
     retire_threshold: float = 0.1  # Bottom 10% retired each generation
 
     # Output

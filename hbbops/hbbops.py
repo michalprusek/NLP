@@ -222,14 +222,20 @@ class HbBoPs:
         self.random_interleaving_prob = random_interleaving_prob
         self.full_initial_bracket = full_initial_bracket
 
-        # Compute Hyperband schedule
-        r = self.nvalid / self.bmin
-        self.smax = int(np.floor(np.log(r) / np.log(eta)))
+        # Compute Hyperband schedule based on NUMBER OF PROMPTS (not validation set)
+        # smax = max stages we can halve before reaching 1 prompt
+        n_prompts = len(self.prompts)
+        self.smax = int(np.floor(np.log(n_prompts) / np.log(eta)))
         self.B = (self.smax + 1) * self.nvalid
 
-        print(f"\nHyperband schedule:")
+        print(f"\nHyperband schedule (based on {n_prompts} prompts):")
         print(f"  smax = {self.smax}, B = {self.B}, eta = {eta}")
         print(f"  Validation instances: {self.nvalid}, min budget: {bmin}")
+        print(f"  Stages: {n_prompts}", end="")
+        for i in range(self.smax):
+            n_prompts = int(np.floor(n_prompts / eta))
+            print(f" → {n_prompts}", end="")
+        print()
 
         # Design data: (prompt, instruction_emb, exemplar_emb, validation_error, fidelity)
         self.design_data = []
@@ -560,6 +566,9 @@ class HbBoPs:
             n = int(np.ceil((self.B / self.nvalid) * (self.eta ** s) / (s + 1)))
             b = int(self.nvalid * (self.eta ** (-s)))
 
+            # Cap n at actual number of prompts
+            n = min(n, len(self.prompts))
+
             # For first bracket, optionally use ALL prompts
             if s == self.smax and self.full_initial_bracket:
                 n = len(self.prompts)
@@ -579,10 +588,10 @@ class HbBoPs:
 
             # Propose and evaluate prompts
             for j in range(n):
-                # Train GP if we have enough data (use min_observations=8 for stability)
-                highest_fidelity = self._get_highest_trainable_fidelity(min_observations=8)
+                # Train GP if we have enough data (paper uses min_observations=4)
+                highest_fidelity = self._get_highest_trainable_fidelity(min_observations=4)
                 if highest_fidelity:
-                    self.train_gp(highest_fidelity, min_observations=8)
+                    self.train_gp(highest_fidelity, min_observations=4)
 
                 # Get vmin_b for acquisition function
                 vmin_b = self._get_best_validation_error(highest_fidelity)
