@@ -7,8 +7,10 @@ https://arxiv.org/abs/2309.03409
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
 import random
 import json
+import os
 
 
 def load_prompt_template(task_type: str, template_name: str) -> str:
@@ -244,11 +246,19 @@ class OPRO:
                 # Handle both 'question' (GSM8K) and 'text' (Claudette) fields
                 question = ex.get('question', ex.get('text', ''))
                 answer = ex.get('answer', ex.get('label', ''))
-                examples.append(f"Problem:\nQ: {question}\nA: <INS>\nGround truth answer: {answer}")
+                examples.append(f"input:\nQ: {question}\nA: <INS>\noutput:\n {answer}")
 
         return "\n\n".join(examples)
 
-    def evaluate_prompt(self, prompt: str, return_details: bool = False) -> Tuple[float, Any]:
+    def evaluate_prompt(
+        self,
+        prompt: str,
+        return_details: bool = False,
+        save_eval_json: bool = False,
+        eval_output_dir: str = None,
+        iteration: int = None,
+        candidate_idx: int = None
+    ) -> Tuple[float, Any]:
         """
         Evaluate a prompt on the fixed evaluation set.
 
@@ -258,6 +268,10 @@ class OPRO:
         Args:
             prompt: Prompt to evaluate
             return_details: If True, return (score, results) tuple; if False, return just score
+            save_eval_json: If True, save detailed evaluation to JSON file
+            eval_output_dir: Directory to save evaluation JSONs
+            iteration: Current iteration number (for filename)
+            candidate_idx: Candidate index within iteration (for filename)
 
         Returns:
             If return_details=False: Optimization score (micro_f1 for claudette, f1 for claudette_binary, accuracy for others)
@@ -268,8 +282,8 @@ class OPRO:
 
         # Generate answers (handle both 'question' and 'text' fields)
         questions = [example.get('question', example.get('text', '')) for example in batch]
-        prompts = [f"Question: {q}\n\n{prompt}\n\nAnswer:" for q in questions]
-        outputs = self.task_llm.generate_batch(prompts, temperature=0.0)
+        formatted_prompts = [f"Question: {q}\n\n{prompt}\n\nAnswer:" for q in questions]
+        outputs = self.task_llm.generate_batch(formatted_prompts, temperature=0.0)
 
         # Evaluate
         indices = [example['idx'] for example in batch]
@@ -277,11 +291,60 @@ class OPRO:
 
         score = self._get_score(results)
 
+        # Save detailed evaluation JSON if requested
+        if save_eval_json and eval_output_dir:
+            os.makedirs(eval_output_dir, exist_ok=True)
+
+            # Create filename based on iteration and candidate
+            if iteration is not None and candidate_idx is not None:
+                filename = f"eval_iter{iteration:02d}_cand{candidate_idx:02d}.json"
+            elif iteration is not None:
+                filename = f"eval_iter{iteration:02d}.json"
+            else:
+                filename = f"eval_{datetime.now().strftime('%H%M%S')}.json"
+
+            eval_data = {
+                "prompt": prompt,
+                "score": score,
+                "iteration": iteration,
+                "candidate_idx": candidate_idx,
+                "timestamp": datetime.now().isoformat(),
+                "num_examples": len(batch),
+                "examples": []
+            }
+
+            # Add detailed per-example data
+            for i, (q, formatted_p, output, detail) in enumerate(zip(
+                questions, formatted_prompts, outputs, results.get('details', [])
+            )):
+                eval_data["examples"].append({
+                    "idx": detail.get('idx', i),
+                    "question": q,
+                    "formatted_prompt": formatted_p,
+                    "raw_response": output,
+                    "extracted_answer": detail.get('predicted'),
+                    "ground_truth": detail.get('ground_truth'),
+                    "correct": detail.get('correct', False)
+                })
+
+            filepath = os.path.join(eval_output_dir, filename)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(eval_data, f, indent=2, ensure_ascii=False)
+
+            print(f"  📄 Saved evaluation JSON: {filepath}")
+
         if return_details:
             return score, results
         return score
 
-    def generate_candidates(self, save_debug_info: bool = False) -> Tuple[List[str], Any]:
+    def generate_candidates(
+        self,
+        save_debug_info: bool = False,
+        verbose_meta: bool = False,
+        save_meta_json: bool = False,
+        meta_output_dir: str = None,
+        iteration: int = None
+    ) -> Tuple[List[str], Any]:
         """
         Generate new prompt candidates using LLM as meta-optimizer.
 
@@ -290,6 +353,10 @@ class OPRO:
 
         Args:
             save_debug_info: If True, return debug info (meta_prompt, raw responses)
+            verbose_meta: If True, print formatted meta-prompt, response, and extracted prompt
+            save_meta_json: If True, save meta-prompt and all raw responses to JSON file
+            meta_output_dir: Directory to save meta JSON files
+            iteration: Current iteration number (for filename)
 
         Returns:
             Tuple of (candidates, debug_info) where debug_info is None if save_debug_info=False
@@ -317,6 +384,17 @@ class OPRO:
                 'raw_responses': [],
             }
 
+        # For JSON saving: collect all meta prompts and responses
+        meta_json_data = None
+        if save_meta_json and meta_output_dir:
+            meta_json_data = {
+                'iteration': iteration,
+                'timestamp': datetime.now().isoformat(),
+                'num_candidates': self.num_candidates_per_iter,
+                'scored_prompts_context': scored_prompts_text,
+                'calls': []
+            }
+
         for i in range(self.num_candidates_per_iter):
             # Get 3 random examples for this generation (paper uses 3 random exemplars)
             example_problems = self._get_random_examples(num_examples=3)
@@ -333,6 +411,15 @@ class OPRO:
             if save_debug_info and i == 0:
                 debug_info['meta_prompt'] = meta_prompt
 
+            # Print verbose meta-model info if requested
+            if verbose_meta:
+                print(f"\n{'='*80}")
+                print(f"META-MODEL CALL {i+1}/{self.num_candidates_per_iter}")
+                print(f"{'='*80}")
+                print(f"\n📝 FORMATTED META-PROMPT:\n")
+                print(meta_prompt)
+                print(f"\n{'-'*80}")
+
             # Generate candidate (temperature=1.0 as in paper for diversity)
             response = self.meta_llm.generate(meta_prompt, temperature=1.0, max_new_tokens=500)
 
@@ -340,11 +427,33 @@ class OPRO:
             if save_debug_info:
                 debug_info['raw_responses'].append(response)
 
-            # Extract the prompt from <INS>...</INS> tags
+            # Print verbose meta-model response
+            if verbose_meta:
+                print(f"\n🤖 META-MODEL RESPONSE:\n")
+                print(response)
+                print(f"\n{'-'*80}")
+
+            # Collect for JSON saving (will add extracted_prompt after extraction)
+            if meta_json_data is not None:
+                meta_json_data['calls'].append({
+                    'call_idx': i,
+                    'formatted_meta_prompt': meta_prompt,
+                    'raw_response': response,
+                    'extracted_prompt': None  # Will be updated after extraction
+                })
+
+            # Extract the prompt from response
             candidate = response.strip()
 
-            # Look for <INS>...</INS> tags
-            if '<INS>' in candidate and '</INS>' in candidate:
+            # Priority 1: Look for square brackets [...] (as requested in meta-prompt)
+            if '[' in candidate and ']' in candidate:
+                # Find the FIRST complete bracket pair
+                start_idx = candidate.find('[')
+                end_idx = candidate.find(']', start_idx)
+                if end_idx > start_idx:
+                    candidate = candidate[start_idx + 1:end_idx].strip()
+            # Priority 2: Look for <INS>...</INS> tags (legacy format)
+            elif '<INS>' in candidate and '</INS>' in candidate:
                 start_idx = candidate.find('<INS>') + 5
                 end_idx = candidate.find('</INS>')
                 candidate = candidate[start_idx:end_idx].strip()
@@ -356,10 +465,35 @@ class OPRO:
                 # Remove trailing quotes
                 candidate = candidate.strip().strip('"').strip()
 
+            # Print extracted prompt
+            if verbose_meta:
+                print(f"\n✅ EXTRACTED PROMPT:\n")
+                print(candidate if candidate else "(empty - will be skipped)")
+                print(f"\n{'='*80}\n")
+
+            # Update extracted prompt in JSON data
+            if meta_json_data is not None:
+                meta_json_data['calls'][i]['extracted_prompt'] = candidate if candidate else None
+
             # Skip if empty or duplicate
             if candidate and candidate not in seen:
                 candidates.append(candidate)
                 seen.add(candidate)
+
+        # Save meta JSON file if requested
+        if meta_json_data is not None and meta_output_dir:
+            os.makedirs(meta_output_dir, exist_ok=True)
+            filename = f"meta_iter{iteration:02d}.json" if iteration is not None else f"meta_{datetime.now().strftime('%H%M%S')}.json"
+            filepath = os.path.join(meta_output_dir, filename)
+
+            # Add summary of extracted prompts
+            meta_json_data['extracted_prompts'] = candidates
+            meta_json_data['num_unique_candidates'] = len(candidates)
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(meta_json_data, f, indent=2, ensure_ascii=False)
+
+            print(f"  📄 Saved meta JSON: {filepath}")
 
         return candidates, debug_info
 
@@ -367,7 +501,10 @@ class OPRO:
         self,
         initial_prompts: List[str] = None,
         verbose: bool = True,
-        save_intermediate_prompts: bool = False
+        save_intermediate_prompts: bool = False,
+        save_eval_json: bool = False,
+        eval_output_dir: str = None,
+        verbose_meta: bool = False
     ) -> Tuple[str, List[Dict]]:
         """
         Run OPRO optimization.
@@ -377,6 +514,9 @@ class OPRO:
             verbose: Whether to print progress
             save_intermediate_prompts: If True, save meta-prompts, generated candidates,
                                       and formatted task prompts to history for debugging
+            save_eval_json: If True, save detailed evaluation JSONs for each prompt
+            eval_output_dir: Directory to save evaluation JSONs (required if save_eval_json=True)
+            verbose_meta: If True, print formatted meta-prompt, response, and extracted prompt
 
         Returns:
             Tuple of (best_prompt, optimization_history)
@@ -393,13 +533,25 @@ class OPRO:
             print("OPRO Optimization")
             print(f"{'='*80}\n")
 
+        # Create eval output directory if saving JSONs
+        if save_eval_json and eval_output_dir:
+            os.makedirs(eval_output_dir, exist_ok=True)
+            print(f"📁 Evaluation JSONs will be saved to: {eval_output_dir}\n")
+
         # Evaluate initial prompts
         if verbose:
             print("Evaluating initial prompts...\n")
 
-        for prompt in initial_prompts:
+        for idx, prompt in enumerate(initial_prompts):
             # All prompts evaluated on same fixed set (no data_idx needed)
-            score, results = self.evaluate_prompt(prompt, return_details=True)
+            score, results = self.evaluate_prompt(
+                prompt,
+                return_details=True,
+                save_eval_json=save_eval_json,
+                eval_output_dir=eval_output_dir,
+                iteration=-1,  # -1 indicates initial/seed prompt
+                candidate_idx=idx
+            )
 
             self.scored_prompts.append(ScoredPrompt(prompt=prompt, score=score))
 
@@ -426,7 +578,13 @@ class OPRO:
             if verbose:
                 print("Generating new candidates...\n")
 
-            candidates, debug_info = self.generate_candidates(save_debug_info=save_intermediate_prompts)
+            candidates, debug_info = self.generate_candidates(
+                save_debug_info=save_intermediate_prompts,
+                verbose_meta=verbose_meta,
+                save_meta_json=save_eval_json,  # Save meta JSON when saving eval JSONs
+                meta_output_dir=eval_output_dir,
+                iteration=iteration
+            )
 
             if not candidates:
                 if verbose:
@@ -439,7 +597,14 @@ class OPRO:
                     print(f"Evaluating: {candidate[:]}...")
 
                 # All prompts evaluated on same fixed set (no data_idx needed)
-                score, results = self.evaluate_prompt(candidate, return_details=True)
+                score, results = self.evaluate_prompt(
+                    candidate,
+                    return_details=True,
+                    save_eval_json=save_eval_json,
+                    eval_output_dir=eval_output_dir,
+                    iteration=iteration,
+                    candidate_idx=i
+                )
 
                 self.scored_prompts.append(ScoredPrompt(prompt=candidate, score=score))
 

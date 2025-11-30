@@ -170,6 +170,13 @@ def main():
     )
 
     parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=2048,
+        help="Maximum new tokens for task model generation (default: 2048)",
+    )
+
+    parser.add_argument(
         "--initial-prompt",
         type=str,
         default=None,
@@ -225,6 +232,25 @@ def main():
         "--save-intermediate-prompts",
         action="store_true",
         help="Save intermediate prompts (meta-prompts, gradients, formatted examples) to results JSON for debugging",
+    )
+
+    parser.add_argument(
+        "--save-eval-json",
+        action="store_true",
+        help="Save detailed evaluation JSONs for each prompt (questions, raw responses, extracted answers, ground truth)",
+    )
+
+    parser.add_argument(
+        "--eval-output-dir",
+        type=str,
+        default=None,
+        help="Directory for evaluation JSONs (default: results/eval_<timestamp>)",
+    )
+
+    parser.add_argument(
+        "--verbose-meta",
+        action="store_true",
+        help="Print formatted meta-model prompts, responses, and extracted prompts",
     )
 
     parser.add_argument(
@@ -330,7 +356,7 @@ def main():
         "backend": args.backend,
         "device": args.device,
         "torch_dtype": args.torch_dtype,
-        "max_new_tokens": 512,
+        "max_new_tokens": args.max_new_tokens,
         "temperature": 0.0,
     }
 
@@ -353,16 +379,17 @@ def main():
         "temperature": 1.0,
     }
 
-        # Only add device/dtype for non-API backends (Claude and OpenAI use API)
-        if args.meta_backend not in ["claude", "openai", "auto"] or ("claude" not in args.meta_model.lower() and "gpt" not in args.meta_model.lower()):
-            meta_llm_kwargs["device"] = args.device
-            meta_llm_kwargs["torch_dtype"] = args.torch_dtype
+    # Only add device/dtype for non-API backends (Claude and OpenAI use API)
+    if args.meta_backend not in ["claude", "openai", "auto"] or ("claude" not in args.meta_model.lower() and "gpt" not in args.meta_model.lower()):
+        meta_llm_kwargs["device"] = args.device
+        meta_llm_kwargs["torch_dtype"] = args.torch_dtype
 
-        # Add tensor parallelism for vLLM (not for Claude or OpenAI)
-        if args.meta_backend == "vllm":
-            meta_llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
+    # Add tensor parallelism for vLLM (not for Claude or OpenAI)
+    if args.meta_backend == "vllm":
+        meta_llm_kwargs["tensor_parallel_size"] = args.tensor_parallel_size
 
-        # Create meta-optimizer client (can be same as task client if same model)
+    # Create meta-optimizer client (can be same as task client if same model)
+    if args.mode == "optimize":
         if args.meta_model == args.model and args.meta_backend == args.backend:
             meta_llm_client = task_llm_client
             print("  (Using same client as task model)")
@@ -458,12 +485,21 @@ def main():
                 minibatch_size=args.minibatch_size,
                 task_description=task_description,
             )
+
+            # Set up evaluation JSON directory
+            eval_output_dir = args.eval_output_dir
+            if args.save_eval_json and eval_output_dir is None:
+                eval_output_dir = str(output_dir / f"eval_{timestamp}")
+
             # Pass initial prompts if provided, otherwise None (optimizer uses defaults)
             initial_prompts_arg = [args.initial_prompt] if args.initial_prompt is not None else None
             best_prompt, history = optimizer.optimize(
                 initial_prompts=initial_prompts_arg,
                 verbose=not args.quiet,
                 save_intermediate_prompts=args.save_intermediate_prompts,
+                save_eval_json=args.save_eval_json,
+                eval_output_dir=eval_output_dir,
+                verbose_meta=args.verbose_meta,
             )
 
             # Save results

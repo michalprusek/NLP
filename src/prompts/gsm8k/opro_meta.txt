@@ -1,9 +1,13 @@
-Your task is to generate the instruction <INS>. Below are some previous instructions with their scores. The score ranges from 0 to 100.
+I have some texts along with their corresponding scores. The texts are arranged in ascending order
+based on their scores, where higher scores indicate better quality.
 
 {scored_prompts}
 
-Below are some problems.
+The following exemplars show how to apply your text: you replace <INS> in each input with your
+text, then read the input and give an output. We say your output is wrong if your output is different
+from the given output, and we say your output is correct if they are the same.
 
 {example_problems}
 
-Generate an instruction that is different from all the instructions <INS> above, and has a higher score than all the instructions <INS> above. The instruction should begin with <INS> and end with </INS>. The instruction should be concise, effective, and generally applicable to all problems above.
+Write your new text that is different from the old ones and has a score as high as possible. Write the
+text in square brackets.
