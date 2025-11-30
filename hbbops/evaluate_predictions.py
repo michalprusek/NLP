@@ -229,6 +229,8 @@ def main():
                         help='Output directory')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug mode')
+    parser.add_argument('--full-initial-bracket', action='store_true',
+                        help='Evaluate ALL prompts in first Hyperband bracket')
 
     args = parser.parse_args()
 
@@ -286,7 +288,8 @@ def main():
         encoder_name=args.encoder,
         bmin=args.bmin,
         eta=args.eta,
-        device=args.device
+        device=args.device,
+        full_initial_bracket=args.full_initial_bracket
     )
 
     # Run Hyperband

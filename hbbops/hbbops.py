@@ -176,7 +176,8 @@ class HbBoPs:
         bmin: int = 10,
         eta: float = 2.0,
         random_interleaving_prob: float = 0.1,
-        device: str = "auto"
+        device: str = "auto",
+        full_initial_bracket: bool = False
     ):
         """
         Args:
@@ -189,6 +190,7 @@ class HbBoPs:
             eta: Halving parameter for Hyperband
             random_interleaving_prob: Probability of random prompt proposal
             device: Device for computation ('auto', 'cuda', 'cpu', 'mps')
+            full_initial_bracket: If True, evaluate ALL prompts in first bracket
         """
         self.instructions = instructions
         self.exemplars = exemplars
@@ -218,6 +220,7 @@ class HbBoPs:
         self.eta = eta
         self.nvalid = len(validation_data)
         self.random_interleaving_prob = random_interleaving_prob
+        self.full_initial_bracket = full_initial_bracket
 
         # Compute Hyperband schedule
         r = self.nvalid / self.bmin
@@ -556,6 +559,10 @@ class HbBoPs:
             # Initial number of prompts and budget
             n = int(np.ceil((self.B / self.nvalid) * (self.eta ** s) / (s + 1)))
             b = int(self.nvalid * (self.eta ** (-s)))
+
+            # For first bracket, optionally use ALL prompts
+            if s == self.smax and self.full_initial_bracket:
+                n = len(self.prompts)
 
             if verbose:
                 print(f"  Initial: n={n} prompts, b={b} instances")
