@@ -1,13 +1,37 @@
 """LLM client abstraction supporting multiple backends"""
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
+import time
+import signal
+from contextlib import contextmanager
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+
+class TimeoutError(Exception):
+    """Raised when an operation times out"""
+    pass
+
+
+@contextmanager
+def timeout_context(seconds: int, error_message: str = "Operation timed out"):
+    """Context manager for timing out operations using SIGALRM (Unix only)"""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(error_message)
+
+    # Store old handler
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 class LLMClient(ABC):
@@ -387,12 +411,20 @@ class VLLMClient(LLMClient):
         """Generate text from a single prompt"""
         return self.generate_batch([prompt], **kwargs)[0]
 
-    def generate_batch(self, prompts: List[str], **kwargs) -> List[str]:
+    def generate_batch(
+        self,
+        prompts: List[str],
+        timeout_seconds: int = 300,
+        max_retries: int = 2,
+        **kwargs
+    ) -> List[str]:
         """
-        Generate text for multiple prompts.
+        Generate text for multiple prompts with timeout and retry.
 
         Args:
             prompts: List of prompts
+            timeout_seconds: Timeout per batch in seconds (default: 5 min)
+            max_retries: Number of retries on timeout (default: 2)
             **kwargs: Override default generation parameters
 
         Returns:
@@ -417,9 +449,32 @@ class VLLMClient(LLMClient):
             repetition_penalty=1.1,  # Penalize repetition
         )
 
-        # Disable progress bar to avoid ZeroDivisionError in vLLM for fast generations
-        outputs = self.llm.generate(formatted_prompts, sampling_params, use_tqdm=True)
-        return [output.outputs[0].text for output in outputs]
+        # Retry loop with timeout
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                # Use timeout context to prevent infinite hangs
+                with timeout_context(
+                    timeout_seconds,
+                    f"vLLM generate timed out after {timeout_seconds}s (batch size: {len(prompts)})"
+                ):
+                    outputs = self.llm.generate(formatted_prompts, sampling_params, use_tqdm=True)
+                    return [output.outputs[0].text for output in outputs]
+            except TimeoutError as e:
+                last_error = e
+                if attempt < max_retries:
+                    print(f"Warning: vLLM timeout on attempt {attempt + 1}/{max_retries + 1}, retrying...")
+                    # Small delay before retry
+                    time.sleep(2)
+                else:
+                    print(f"Error: vLLM timed out after {max_retries + 1} attempts")
+                    raise
+            except Exception as e:
+                # Non-timeout errors are not retried
+                raise
+
+        # Should not reach here, but just in case
+        raise last_error if last_error else RuntimeError("Unknown error in generate_batch")
 
 
 class ClaudeClient(LLMClient):
@@ -586,6 +641,107 @@ class OpenAIClient(LLMClient):
         return results
 
 
+class DeepInfraClient(LLMClient):
+    """LLM client using DeepInfra's OpenAI-compatible API"""
+
+    # DeepInfra model aliases
+    MODEL_ALIASES = {
+        "gemma-3-4b": "google/gemma-3-4b-it",
+        "gemma-3-27b": "google/gemma-3-27b-it",
+        "llama-3.3-70b": "meta-llama/Llama-3.3-70B-Instruct",
+        "llama-3.1-8b": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "qwen-2.5-72b": "Qwen/Qwen2.5-72B-Instruct",
+    }
+
+    def __init__(
+        self,
+        model_name: str,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+    ):
+        """
+        Initialize DeepInfra client.
+
+        Args:
+            model_name: DeepInfra model identifier (e.g., 'google/gemma-3-4b-it')
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+
+        Environment variables required:
+            DEEPINFRA_API_KEY: Your DeepInfra API key
+        """
+        try:
+            from openai import OpenAI
+        except ImportError:
+            raise ImportError(
+                "openai package not installed. Install with: pip install openai"
+            )
+
+        # Resolve alias if present
+        if model_name.lower() in self.MODEL_ALIASES:
+            resolved = self.MODEL_ALIASES[model_name.lower()]
+            print(f"Resolved DeepInfra alias '{model_name}' -> '{resolved}'")
+            model_name = resolved
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+
+        # Get API key from environment
+        api_key = os.getenv("DEEPINFRA_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "DEEPINFRA_API_KEY not found in environment variables. "
+                "Please add it to your .env file or set it as an environment variable."
+            )
+
+        # Use OpenAI client with DeepInfra base URL
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepinfra.com/v1/openai"
+        )
+        print(f"Initialized DeepInfra client with model: {model_name}")
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        """Generate text from a single prompt"""
+        return self.generate_batch([prompt], **kwargs)[0]
+
+    def generate_batch(self, prompts: List[str], **kwargs) -> List[str]:
+        """
+        Generate text for multiple prompts.
+
+        Args:
+            prompts: List of prompts
+            **kwargs: Override default generation parameters
+
+        Returns:
+            List of generated texts
+        """
+        # Override defaults with kwargs
+        max_new_tokens = kwargs.get('max_new_tokens', self.max_new_tokens)
+        temperature = kwargs.get('temperature', self.temperature)
+
+        results = []
+        for prompt in prompts:
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+                # Extract text from response
+                text = response.choices[0].message.content
+                results.append(text)
+            except Exception as e:
+                print(f"Error generating with DeepInfra: {e}")
+                results.append("")
+
+        return results
+
+
 def create_llm_client(
     model_name: str,
     backend: str = "auto",
@@ -595,9 +751,13 @@ def create_llm_client(
     Factory function to create LLM client.
 
     Args:
-        model_name: Model identifier (supports aliases: 'haiku' -> latest Haiku, 'sonnet' -> latest Sonnet, 'gpt-3.5-turbo')
-        backend: Backend to use ('transformers', 'vllm', 'claude', 'openai', or 'auto')
-                 'auto' will detect Claude and OpenAI models automatically
+        model_name: Model identifier. Supports aliases:
+                    - 'haiku' -> Claude Haiku 4.5
+                    - 'sonnet' -> Claude Sonnet 4.5
+                    - 'gemma-3-4b' -> google/gemma-3-4b-it (DeepInfra)
+                    - 'gemma-3-27b' -> google/gemma-3-27b-it (DeepInfra)
+        backend: Backend to use ('transformers', 'vllm', 'claude', 'openai', 'deepinfra', or 'auto')
+                 'auto' will detect Claude, OpenAI, and DeepInfra models automatically
         **kwargs: Additional arguments for the client
 
     Returns:
@@ -609,6 +769,9 @@ def create_llm_client(
         "sonnet": "claude-sonnet-4-5-20251022",    # Latest Sonnet (4.5)
         "gpt-3.5": "gpt-3.5-turbo",                # OpenAI GPT-3.5
         "gpt-4": "gpt-4-turbo",                    # OpenAI GPT-4 Turbo
+        # DeepInfra models
+        "gemma-3-4b": "google/gemma-3-4b-it",      # Gemma 3 4B via DeepInfra
+        "gemma-3-27b": "google/gemma-3-27b-it",    # Gemma 3 27B via DeepInfra
     }
 
     # Resolve alias if present
@@ -623,6 +786,9 @@ def create_llm_client(
             backend = "claude"
         elif "gpt" in model_name.lower():
             backend = "openai"
+        elif model_name.startswith("google/") or model_name.startswith("meta-llama/Meta"):
+            # DeepInfra hosted models (Gemma, Llama via API)
+            backend = "deepinfra"
         else:
             backend = "transformers"
 
@@ -649,5 +815,12 @@ def create_llm_client(
             if k in ['max_new_tokens', 'temperature']
         }
         return OpenAIClient(model_name, **openai_kwargs)
+    elif backend == "deepinfra":
+        # Filter out parameters not supported by DeepInfraClient
+        deepinfra_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in ['max_new_tokens', 'temperature']
+        }
+        return DeepInfraClient(model_name, **deepinfra_kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend}. Choose from: transformers, vllm, claude, openai, auto")
+        raise ValueError(f"Unknown backend: {backend}. Choose from: transformers, vllm, claude, openai, deepinfra, auto")

@@ -1,0 +1,41 @@
+You are a CRITIC for Prompt Optimization.
+Analyze the current instruction's performance and provide SHORT, ACTIONABLE feedback.
+
+INSTRUCTION BEING EVALUATED:
+<<<
+{instruction}
+>>>
+
+PERFORMANCE SUMMARY:
+- Accuracy: {accuracy:.2%}
+- Budget (samples): {budget}
+- Survival depth: {survival_depth} (higher = survived more Hyperband rounds)
+
+FAILURE EXAMPLES (where this instruction led to wrong answers):
+{error_examples}
+
+EVALUATION METHOD:
+The system extracts the LAST NUMBER from the model's output and compares to ground truth.
+Numbers are normalized (removes commas, handles decimals).
+
+YOUR TASK:
+Analyze why this instruction causes these failures. Consider:
+1. Is the instruction too vague or too specific?
+2. Does it guide the model to show clear reasoning steps?
+3. Does it ensure the final answer is clearly formatted?
+
+Provide 2-3 key issues with specific, testable improvements.
+
+FORMAT YOUR RESPONSE AS JSON:
+{{
+  "issues": [
+    {{
+      "title": "[Brief description]",
+      "root_cause": "[Why this causes failures]",
+      "actions": ["[Specific improvement 1]", "[Specific improvement 2]"]
+    }}
+  ],
+  "summary": "[One-sentence summary of main problem]"
+}}
+
+Keep response under 500 tokens.
