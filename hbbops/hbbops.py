@@ -1,7 +1,8 @@
 """
 HbBoPs: Hyperband-based Bayesian Optimization for Black-box Prompt Selection
 
-Simplified implementation based on Schneider et al. (2025)
+Implementation based on Schneider et al. (2025)
+Paper: "Hyperband-based Bayesian Optimization for Black-box Prompt Selection"
 """
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from transformers import AutoTokenizer, AutoModel
 from typing import List, Tuple, Dict, Optional
 import numpy as np
 from dataclasses import dataclass
+import random
 
 
 @dataclass
@@ -67,7 +69,7 @@ class FeatureExtractor(nn.Module):
         )
         # Joint encoder to 10-dim latent space
         self.joint_encoder = nn.Sequential(
-            nn.Linear(64, 32), nn.ReLU(),
+            nn.Linear(2 * 32, 32), nn.ReLU(),
             nn.Linear(32, 10)
         )
 
@@ -114,7 +116,7 @@ class HbBoPs:
     """
     Hyperband-based Bayesian Optimization for black-box Prompt Selection
 
-    Algorithm 1 from the paper - simplified implementation
+    Algorithm 1 from the paper
     """
 
     def __init__(
@@ -127,12 +129,18 @@ class HbBoPs:
         bmin: int = 10,
         eta: float = 2.0,
         random_interleaving_prob: float = 0.1,
-        device: str = "auto"
+        device: str = "auto",
+        seed: int = 42
     ):
         self.instructions = instructions
         self.exemplars = exemplars
-        self.validation_data = validation_data
         self.llm_evaluator = llm_evaluator
+
+        # Shuffle validation data once for unbiased subsets (Appendix C)
+        # This ensures "first k" instances are random but fixed for paired comparisons
+        random.seed(seed)
+        self.validation_data = validation_data.copy()
+        random.shuffle(self.validation_data)
         self.nvalid = len(validation_data)
 
         # Generate all candidate prompts (P = I × E)
@@ -148,20 +156,27 @@ class HbBoPs:
         self.device = self._get_device(device)
         print(f"Using device: {self.device}")
 
-        # Initialize encoder
+        # Initialize encoder and pre-compute all embeddings (for efficiency)
+        print("Pre-computing embeddings for all instructions and exemplars...")
         self.encoder = PromptEncoder(encoder_name)
+        self._precompute_embeddings()
 
+        ################################################################################################################################
         # Hyperband parameters (Algorithm 1)
+        ################################################################################################################################
         self.bmin = bmin
         self.eta = eta
         self.random_interleaving_prob = random_interleaving_prob
 
-        # Correct Hyperband schedule from paper:
-        # r = nvalid / bmin
-        # smax = floor(log_η(r))
+        # Hyperband schedule from paper:
         r = self.nvalid / self.bmin
+
+        # log_η(r) = log(r) / log(η)
         self.smax = int(np.floor(np.log(r) / np.log(eta)))
         self.B = (self.smax + 1) * self.nvalid
+        ################################################################################################################################
+        # END
+        ################################################################################################################################
 
         print(f"\nHyperband schedule (from paper):")
         print(f"  nvalid={self.nvalid}, bmin={bmin}, η={eta}")
@@ -176,6 +191,12 @@ class HbBoPs:
         self.likelihood = None
         self.feature_extractor = None
 
+        # Normalization parameters for unit cube scaling
+        self.X_min = None
+        self.X_max = None
+        self.y_mean = None
+        self.y_std = None
+
         # Best prompt tracking
         self.best_prompt = None
         self.best_validation_error = float('inf')
@@ -189,9 +210,36 @@ class HbBoPs:
             return torch.device("mps")
         return torch.device("cpu")
 
+    def _precompute_embeddings(self) -> None:
+        """
+        Pre-compute BERT embeddings for all instructions and exemplars.
+
+        Since P = I × E is fixed (static setting), embeddings don't change.
+        This dramatically speeds up GP training and acquisition computation.
+        """
+        # Embed all unique instructions
+        self.instruction_embeddings = {}
+        for i_idx, inst in enumerate(self.instructions):
+            self.instruction_embeddings[i_idx] = self.encoder.encode(inst)
+
+        # Embed all unique exemplars
+        self.exemplar_embeddings = {}
+        for e_idx, ex in enumerate(self.exemplars):
+            self.exemplar_embeddings[e_idx] = self.encoder.encode(ex)
+
+        print(f"  Cached {len(self.instruction_embeddings)} instruction embeddings")
+        print(f"  Cached {len(self.exemplar_embeddings)} exemplar embeddings")
+
     def embed_prompt(self, prompt: Prompt) -> Tuple[np.ndarray, np.ndarray]:
-        """Embed instruction and exemplar separately"""
-        return self.encoder.encode(prompt.instruction), self.encoder.encode(prompt.exemplar)
+        """
+        Get embeddings for instruction and exemplar (from cache).
+
+        Returns separate embeddings to leverage structural-aware deep kernel.
+        """
+        return (
+            self.instruction_embeddings[prompt.instruction_id],
+            self.exemplar_embeddings[prompt.exemplar_id]
+        )
 
     def evaluate_prompt(self, prompt: Prompt, fidelity: int) -> float:
         """Evaluate prompt on 'fidelity' validation instances with caching"""
@@ -221,7 +269,13 @@ class HbBoPs:
         return error
 
     def train_gp(self, fidelity: int, min_observations: int = 4) -> bool:
-        """Train GP on design data at given fidelity level"""
+        """
+        Train GP on design data at given fidelity level.
+
+        Paper Section 4.2: "normalizes inputs to the unit cube and standardizes outputs"
+        - Inputs (X): Unit cube normalization (min-max to [0, 1])
+        - Outputs (y): Standardization (zero mean, unit variance)
+        """
         # Filter data for this fidelity
         fidelity_data = [(ie, ee, ve) for _, ie, ee, ve, f in self.design_data if f == fidelity]
 
@@ -238,10 +292,15 @@ class HbBoPs:
         X = torch.cat([X_inst, X_ex], dim=1)
         y = torch.tensor(errors, dtype=torch.float32, device=self.device)
 
-        # Normalize
-        self.X_mean, self.X_std = X.mean(0), X.std(0) + 1e-4
-        self.y_mean, self.y_std = y.mean(), y.std() + 1e-4
-        X_norm = (X - self.X_mean) / self.X_std
+        # Unit cube normalization for inputs: X_norm = (X - X_min) / (X_max - X_min)
+        self.X_min = X.min(dim=0)[0]
+        self.X_max = X.max(dim=0)[0]
+        denominator = self.X_max - self.X_min
+        denominator[denominator == 0] = 1.0  # Avoid division by zero for constant columns
+        X_norm = (X - self.X_min) / denominator
+
+        # Standardization for outputs: y_norm = (y - mean) / std
+        self.y_mean, self.y_std = y.mean(), y.std() + 1e-6
         y_norm = (y - self.y_mean) / self.y_std
 
         # Create fresh GP model
@@ -249,7 +308,7 @@ class HbBoPs:
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
         self.gp_model = DeepKernelGP(X_norm, y_norm, self.likelihood, self.feature_extractor).to(self.device)
 
-        # Training
+        # Training with AdamW (Section 4.2: lr=0.01, max_epochs=3000, patience=10)
         self.gp_model.train()
         self.likelihood.train()
         optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=0.01)
@@ -278,13 +337,24 @@ class HbBoPs:
         return True
 
     def expected_improvement(self, prompt: Prompt, vmin_b: float) -> float:
-        """Compute Expected Improvement acquisition function (Equation 7)"""
+        """
+        Compute Expected Improvement acquisition function (Equation 7).
+
+        EI(p) = E[max{v_min,b - f(z_p), 0}]
+
+        For minimization: EI = (v_min - μ) × Φ(z) + σ × φ(z)
+        where z = (v_min - μ) / σ
+        """
         if self.gp_model is None:
             return 0.0
 
         inst_emb, ex_emb = self.embed_prompt(prompt)
         X = torch.tensor(np.concatenate([inst_emb, ex_emb]), dtype=torch.float32, device=self.device).unsqueeze(0)
-        X_norm = (X - self.X_mean) / self.X_std
+
+        # Apply same unit cube normalization as in training
+        denominator = self.X_max - self.X_min
+        denominator[denominator == 0] = 1.0
+        X_norm = (X - self.X_min) / denominator
 
         self.gp_model.eval()
         self.likelihood.eval()
@@ -292,6 +362,7 @@ class HbBoPs:
         try:
             with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-4):
                 pred = self.likelihood(self.gp_model(X_norm))
+                # De-standardize predictions
                 mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
                 std = pred.stddev.item() * self.y_std.item()
         except Exception:
@@ -324,6 +395,10 @@ class HbBoPs:
             print("Starting HbBoPs optimization")
             print("=" * 60)
 
+        ################################################################################################################################
+        # ALGORITHM 1: Hyperband with Bayesian Optimization (HbBoPs)
+        ################################################################################################################################
+
         # Run brackets from smax down to 0
         for s in range(self.smax, -1, -1):
             if verbose:
@@ -332,7 +407,9 @@ class HbBoPs:
             # Initial prompts and budget for this bracket
             n = int(np.ceil((self.B / self.nvalid) * (self.eta ** s) / (s + 1)))
             b = int(self.nvalid * (self.eta ** (-s)))
-            n = min(n, len(self.prompts))  # Cap at available prompts
+
+            # cap n at available prompts
+            n = min(n, len(self.prompts))
 
             if verbose:
                 print(f"  Initial: n={n} prompts, b={b} instances")
