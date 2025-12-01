@@ -1,7 +1,7 @@
 """
 HbBoPs: Hyperband-based Bayesian Optimization for Black-box Prompt Selection
 
-Implementation based on the paper by Schneider et al. (2025)
+Simplified implementation based on Schneider et al. (2025)
 """
 import torch
 import torch.nn as nn
@@ -38,132 +38,83 @@ class PromptEncoder:
         """Encode text to [CLS] token embedding (768 dim)"""
         with torch.no_grad():
             inputs = self.tokenizer(
-                text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=512,
-                padding=True
+                text, return_tensors="pt", truncation=True, max_length=512, padding=True
             ).to(self.device)
             outputs = self.model(**inputs)
-            # Extract [CLS] token embedding
             cls_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
         return cls_embedding.squeeze()
 
 
 class FeatureExtractor(nn.Module):
     """
-    Structural-aware feature extractor for deep kernel GP
+    Structural-aware feature extractor for deep kernel GP (Section 3.2)
 
-    Processes instruction and exemplar embeddings separately, then combines them
-    to learn a low-dimensional (10-dim) latent representation
+    Architecture from paper:
+    - Separate encoders: Lin(768, 64) → ReLU → Lin(64, 32) → ReLU
+    - Joint encoder: Lin(64, 32) → ReLU → Lin(32, 10)
     """
 
     def __init__(self, input_dim: int = 768):
         super().__init__()
-
         # Separate encoders for instruction and exemplar
         self.instruction_encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU()
+            nn.Linear(input_dim, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU()
         )
-
         self.exemplar_encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU()
+            nn.Linear(input_dim, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU()
         )
-
-        # Joint encoder
+        # Joint encoder to 10-dim latent space
         self.joint_encoder = nn.Sequential(
-            nn.Linear(32 * 2, 32),
-            nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
             nn.Linear(32, 10)
         )
 
     def forward(self, instruction_emb: torch.Tensor, exemplar_emb: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            instruction_emb: (batch_size, 768) - BERT embeddings of instructions
-            exemplar_emb: (batch_size, 768) - BERT embeddings of exemplars
-
-        Returns:
-            (batch_size, 10) - low-dimensional latent representation
-        """
         inst_features = self.instruction_encoder(instruction_emb)
         ex_features = self.exemplar_encoder(exemplar_emb)
-
-        # Concatenate and pass through joint encoder
         combined = torch.cat([inst_features, ex_features], dim=1)
-        latent = self.joint_encoder(combined)
-
-        return latent
+        return self.joint_encoder(combined)
 
 
-class StructuralAwareDeepKernelGP(gpytorch.models.ExactGP):
+class DeepKernelGP(gpytorch.models.ExactGP):
     """
-    Gaussian Process with structural-aware deep kernel
+    Gaussian Process with structural-aware deep kernel (Section 3.2)
 
-    Uses separate embeddings of instructions and few-shot exemplars
-    to learn a latent representation aligned with prompt performance
+    Uses ARD Matérn 5/2 kernel on 10-dim latent features
     """
 
-    def __init__(
-        self,
-        train_x: torch.Tensor,
-        train_y: torch.Tensor,
-        likelihood: gpytorch.likelihoods.Likelihood,
-        feature_extractor: FeatureExtractor,
-        input_dim: int = 768
-    ):
+    def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor,
+                 likelihood: gpytorch.likelihoods.Likelihood,
+                 feature_extractor: FeatureExtractor, input_dim: int = 768):
         super().__init__(train_x, train_y, likelihood)
-
         self.mean_module = gpytorch.means.ZeroMean()
-
-        # ARD Matérn 5/2 kernel on latent features
         self.covar_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(
-                nu=2.5,
-                ard_num_dims=10,  # 10-dimensional latent space
+                nu=2.5, ard_num_dims=10,
                 lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0)
             ),
             outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15)
         )
-
         self.feature_extractor = feature_extractor
         self.input_dim = input_dim
 
     def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultivariateNormal:
-        """
-        Args:
-            x: (batch_size, 768 * 2) - concatenated [instruction_emb, exemplar_emb]
-
-        Returns:
-            MultivariateNormal distribution
-        """
-        # Split into instruction and exemplar embeddings
+        # Split concatenated embeddings
         instruction_emb = x[:, :self.input_dim]
         exemplar_emb = x[:, self.input_dim:]
-
-        # Extract features
-        latent_features = self.feature_extractor(instruction_emb, exemplar_emb)
-
-        mean_x = self.mean_module(latent_features)
-        covar_x = self.covar_module(latent_features)
-
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        latent = self.feature_extractor(instruction_emb, exemplar_emb)
+        return gpytorch.distributions.MultivariateNormal(
+            self.mean_module(latent), self.covar_module(latent)
+        )
 
 
 class HbBoPs:
     """
     Hyperband-based Bayesian Optimization for black-box Prompt Selection
 
-    Combines:
-    1. Structural-aware deep kernel GP for sample efficiency
-    2. Hyperband for query efficiency (multi-fidelity over validation instances)
-    3. Bayesian Optimization proposal for prompt selection
+    Algorithm 1 from the paper - simplified implementation
     """
 
     def __init__(
@@ -176,79 +127,51 @@ class HbBoPs:
         bmin: int = 10,
         eta: float = 2.0,
         random_interleaving_prob: float = 0.1,
-        device: str = "auto",
-        full_initial_bracket: bool = False,
-        evaluation_cache: Dict = None
+        device: str = "auto"
     ):
-        """
-        Args:
-            instructions: List of instruction strings
-            exemplars: List of exemplar strings
-            validation_data: List of validation examples (dict with 'question' and 'answer')
-            llm_evaluator: Function that evaluates prompts on data
-            encoder_name: Name of HuggingFace model for embeddings
-            bmin: Minimum budget (validation instances) for Hyperband
-            eta: Halving parameter for Hyperband
-            random_interleaving_prob: Probability of random prompt proposal
-            device: Device for computation ('auto', 'cuda', 'cpu', 'mps')
-            full_initial_bracket: If True, evaluate ALL prompts in first bracket
-            evaluation_cache: Pre-populated cache from previous runs (optional)
-        """
         self.instructions = instructions
         self.exemplars = exemplars
         self.validation_data = validation_data
         self.llm_evaluator = llm_evaluator
+        self.nvalid = len(validation_data)
 
-        # Generate all candidate prompts
+        # Generate all candidate prompts (P = I × E)
         self.prompts = [
-            Prompt(instruction, exemplar, i_idx, e_idx)
-            for i_idx, instruction in enumerate(instructions)
-            for e_idx, exemplar in enumerate(exemplars)
+            Prompt(inst, ex, i_idx, e_idx)
+            for i_idx, inst in enumerate(instructions)
+            for e_idx, ex in enumerate(exemplars)
         ]
-
         print(f"Generated {len(self.prompts)} candidate prompts")
-        print(f"  {len(instructions)} instructions x {len(exemplars)} exemplars")
+        print(f"  {len(instructions)} instructions × {len(exemplars)} exemplars")
 
-        # Setup device
+        # Device setup
         self.device = self._get_device(device)
-
         print(f"Using device: {self.device}")
 
         # Initialize encoder
         self.encoder = PromptEncoder(encoder_name)
 
-        # Hyperband parameters
+        # Hyperband parameters (Algorithm 1)
         self.bmin = bmin
         self.eta = eta
-        self.nvalid = len(validation_data)
         self.random_interleaving_prob = random_interleaving_prob
-        self.full_initial_bracket = full_initial_bracket
 
-        # Compute Hyperband schedule based on NUMBER OF PROMPTS (not validation set)
-        # smax = max stages we can halve before reaching 1 prompt
-        n_prompts = len(self.prompts)
-        self.smax = int(np.floor(np.log(n_prompts) / np.log(eta)))
+        # Correct Hyperband schedule from paper:
+        # r = nvalid / bmin
+        # smax = floor(log_η(r))
+        r = self.nvalid / self.bmin
+        self.smax = int(np.floor(np.log(r) / np.log(eta)))
         self.B = (self.smax + 1) * self.nvalid
 
-        print(f"\nHyperband schedule (based on {n_prompts} prompts):")
-        print(f"  smax = {self.smax}, B = {self.B}, eta = {eta}")
-        print(f"  Validation instances: {self.nvalid}, min budget: {bmin}")
-        print(f"  Stages: {n_prompts}", end="")
-        for i in range(self.smax):
-            n_prompts = int(np.floor(n_prompts / eta))
-            print(f" → {n_prompts}", end="")
-        print()
+        print(f"\nHyperband schedule (from paper):")
+        print(f"  nvalid={self.nvalid}, bmin={bmin}, η={eta}")
+        print(f"  r={r:.1f}, smax={self.smax}, B={self.B}")
 
-        # Design data: (prompt, instruction_emb, exemplar_emb, validation_error, fidelity)
+        # Design data: (prompt_idx, inst_emb, ex_emb, val_error, fidelity)
         self.design_data = []
+        self.evaluation_cache = {}
 
-        # Cache for prompt evaluations (prompt_idx, fidelity) -> validation_error
-        # Can be pre-populated from previous runs
-        self.evaluation_cache = evaluation_cache.copy() if evaluation_cache else {}
-        if self.evaluation_cache:
-            print(f"  Loaded {len(self.evaluation_cache)} cached evaluations")
-
-        # GP model (initialized when we have enough data)
+        # GP model (initialized when enough data)
         self.gp_model = None
         self.likelihood = None
         self.feature_extractor = None
@@ -256,415 +179,235 @@ class HbBoPs:
         # Best prompt tracking
         self.best_prompt = None
         self.best_validation_error = float('inf')
-        self.best_fidelity = 0
 
     def _get_device(self, device: str) -> torch.device:
-        """Get appropriate torch device"""
         if device != "auto":
             return torch.device(device)
-
         if torch.cuda.is_available():
             return torch.device("cuda")
         if torch.backends.mps.is_available():
             return torch.device("mps")
         return torch.device("cpu")
 
-    def _find_largest_cached_fidelity(self, prompt: Prompt, max_fidelity: int) -> Optional[int]:
-        """Find largest cached fidelity for prompt that's less than max_fidelity"""
-        # Cache key is (instruction_id, exemplar_id, fidelity) for cross-run stability
-        cached_fidelities = [
-            f for (inst_id, ex_id, f), _ in self.evaluation_cache.items()
-            if inst_id == prompt.instruction_id and ex_id == prompt.exemplar_id and f < max_fidelity
-        ]
-        return max(cached_fidelities) if cached_fidelities else None
-
-    def _extend_evaluation(
-        self, prompt: Prompt, prev_fidelity: int, fidelity: int
-    ) -> float:
-        """Extend previous evaluation to higher fidelity"""
-        cache_key = (prompt.instruction_id, prompt.exemplar_id, prev_fidelity)
-        prev_error_sum = self.evaluation_cache[cache_key] * prev_fidelity
-        remaining_instances = self.validation_data[prev_fidelity:fidelity]
-        new_error_rate = self.llm_evaluator(prompt, remaining_instances)
-        new_error_sum = new_error_rate * (fidelity - prev_fidelity)
-        return (prev_error_sum + new_error_sum) / fidelity
-
-    def _prepare_training_data(
-        self, fidelity_data: List[Tuple[np.ndarray, np.ndarray, float]]
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Prepare training tensors from fidelity data"""
-        X_inst = torch.tensor(
-            [inst_emb for inst_emb, _, _ in fidelity_data],
-            dtype=torch.float32, device=self.device
-        )
-        X_ex = torch.tensor(
-            [ex_emb for _, ex_emb, _ in fidelity_data],
-            dtype=torch.float32, device=self.device
-        )
-        X = torch.cat([X_inst, X_ex], dim=1)
-        y = torch.tensor(
-            [val_err for _, _, val_err in fidelity_data],
-            dtype=torch.float32, device=self.device
-        )
-        return X, y
-
-    def _compute_expected_improvement(self, improvement: float, std: float) -> float:
-        """Compute expected improvement given improvement and standard deviation"""
-        if std <= 0:
-            return max(improvement, 0)
-
-        z = improvement / std
-        from scipy.stats import norm
-        return improvement * norm.cdf(z) + std * norm.pdf(z)
-
-    def _get_highest_trainable_fidelity(self, min_observations: int = 4) -> Optional[int]:
-        """Get highest fidelity level with enough observations for training"""
-        fidelity_counts = {}
-        for _, _, _, _, f in self.design_data:
-            fidelity_counts[f] = fidelity_counts.get(f, 0) + 1
-
-        trainable_fidelities = [
-            f for f, count in fidelity_counts.items()
-            if count >= min_observations
-        ]
-        return max(trainable_fidelities) if trainable_fidelities else None
-
-    def _get_best_validation_error(self, fidelity: Optional[int]) -> float:
-        """Get best validation error at given fidelity level"""
-        if not fidelity or not self.gp_model:
-            return float('inf')
-
-        return min(
-            val_err for _, _, _, val_err, f in self.design_data
-            if f == fidelity
-        )
-
-    def _select_top_prompts(self, prompt_indices: List[int], errors: List[float], n: int) -> List[int]:
-        """Select top n prompts with lowest errors"""
-        sorted_indices = np.argsort(errors)
-        return [prompt_indices[idx] for idx in sorted_indices[:n]]
-
     def embed_prompt(self, prompt: Prompt) -> Tuple[np.ndarray, np.ndarray]:
         """Embed instruction and exemplar separately"""
         return self.encoder.encode(prompt.instruction), self.encoder.encode(prompt.exemplar)
 
-    def evaluate_prompt(
-        self,
-        prompt: Prompt,
-        fidelity: int,
-        prompt_idx: Optional[int] = None
-    ) -> float:
-        """
-        Evaluate a prompt on 'fidelity' validation instances
-
-        Uses caching and extends previous evaluations if available
-        """
-        if prompt_idx is None:
-            prompt_idx = self.prompts.index(prompt)
-
-        # Check cache for exact fidelity - use (instruction_idx, exemplar_idx) for cross-run stability
+    def evaluate_prompt(self, prompt: Prompt, fidelity: int) -> float:
+        """Evaluate prompt on 'fidelity' validation instances with caching"""
         cache_key = (prompt.instruction_id, prompt.exemplar_id, fidelity)
         if cache_key in self.evaluation_cache:
             return self.evaluation_cache[cache_key]
 
-        # Try to extend previous evaluation if possible
-        prev_fidelity = self._find_largest_cached_fidelity(prompt, fidelity)
+        # Try to extend from lower fidelity
+        for prev_f in sorted([f for (i, e, f) in self.evaluation_cache.keys()
+                              if i == prompt.instruction_id and e == prompt.exemplar_id and f < fidelity],
+                             reverse=True):
+            prev_key = (prompt.instruction_id, prompt.exemplar_id, prev_f)
+            prev_error = self.evaluation_cache[prev_key]
+            # Extend evaluation
+            remaining = self.validation_data[prev_f:fidelity]
+            if remaining:
+                new_error = self.llm_evaluator(prompt, remaining)
+                total_error = (prev_error * prev_f + new_error * len(remaining)) / fidelity
+            else:
+                total_error = prev_error
+            self.evaluation_cache[cache_key] = total_error
+            return total_error
 
-        if prev_fidelity:
-            total_error = self._extend_evaluation(prompt, prev_fidelity, fidelity)
-        else:
-            total_error = self.llm_evaluator(prompt, self.validation_data[:fidelity])
+        # Full evaluation
+        error = self.llm_evaluator(prompt, self.validation_data[:fidelity])
+        self.evaluation_cache[cache_key] = error
+        return error
 
-        # Cache result with stable key (instruction_id, exemplar_id, fidelity)
-        self.evaluation_cache[cache_key] = total_error
-        return total_error
-
-    def train_gp(self, fidelity: int, min_observations: int = 4):
-        """
-        Train GP on design data at given fidelity level
-
-        Args:
-            fidelity: Use design data at this fidelity level
-            min_observations: Minimum number of observations required
-        """
-        # Filter design data for this fidelity
-        fidelity_data = [
-            (inst_emb, ex_emb, val_err)
-            for _, inst_emb, ex_emb, val_err, f in self.design_data
-            if f == fidelity
-        ]
+    def train_gp(self, fidelity: int, min_observations: int = 4) -> bool:
+        """Train GP on design data at given fidelity level"""
+        # Filter data for this fidelity
+        fidelity_data = [(ie, ee, ve) for _, ie, ee, ve, f in self.design_data if f == fidelity]
 
         if len(fidelity_data) < min_observations:
             return False
 
-        # Prepare training data
-        X, y = self._prepare_training_data(fidelity_data)
-
-        # Normalize inputs to unit cube and standardize outputs
-        X_mean = X.mean(dim=0)
-        X_std = X.std(dim=0) + 1e-4  # Increased for numerical stability
-        X_normalized = (X - X_mean) / X_std
-
-        y_mean = y.mean()
-        y_std = y.std() + 1e-4  # Increased for numerical stability
-        y_standardized = (y - y_mean) / y_std
-
-        # Check for sufficient variance in y (avoid degenerate cases)
-        if y.std() < 1e-6:
-            # All validation errors are essentially the same - no need for GP
+        errors = [ve for _, _, ve in fidelity_data]
+        if np.std(errors) < 1e-6:  # No variance - GP not needed
             return False
 
-        # Always create fresh GP model to avoid numerical issues from cached matrices
-        # and mismatched normalization between training sessions
+        # Prepare training tensors
+        X_inst = torch.tensor([ie for ie, _, _ in fidelity_data], dtype=torch.float32, device=self.device)
+        X_ex = torch.tensor([ee for _, ee, _ in fidelity_data], dtype=torch.float32, device=self.device)
+        X = torch.cat([X_inst, X_ex], dim=1)
+        y = torch.tensor(errors, dtype=torch.float32, device=self.device)
+
+        # Normalize
+        self.X_mean, self.X_std = X.mean(0), X.std(0) + 1e-4
+        self.y_mean, self.y_std = y.mean(), y.std() + 1e-4
+        X_norm = (X - self.X_mean) / self.X_std
+        y_norm = (y - self.y_mean) / self.y_std
+
+        # Create fresh GP model
         self.feature_extractor = FeatureExtractor(input_dim=768).to(self.device)
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
-        self.gp_model = StructuralAwareDeepKernelGP(
-            X_normalized, y_standardized, self.likelihood,
-            self.feature_extractor, input_dim=768
-        ).to(self.device)
+        self.gp_model = DeepKernelGP(X_norm, y_norm, self.likelihood, self.feature_extractor).to(self.device)
 
-        # Set to training mode
+        # Training
         self.gp_model.train()
         self.likelihood.train()
-
-        # Optimizer
-        optimizer = torch.optim.AdamW([
-            {'params': self.gp_model.feature_extractor.parameters()},
-            {'params': self.gp_model.covar_module.parameters()},
-            {'params': self.gp_model.mean_module.parameters()},
-            {'params': self.likelihood.parameters()},
-        ], lr=0.01)
-
-        # Loss function (negative log marginal likelihood)
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=0.01)
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
 
-        # Training loop with early stopping
-        best_loss = float('inf')
-        patience_counter = 0
-        max_epochs = 3000
-        patience = 10
-
-        # Use higher jitter for numerical stability
-        with gpytorch.settings.cholesky_jitter(1e-3):
-            for epoch in range(max_epochs):
+        best_loss, patience = float('inf'), 0
+        with gpytorch.settings.cholesky_jitter(1e-4):
+            for epoch in range(3000):
                 try:
                     optimizer.zero_grad()
-                    output = self.gp_model(X_normalized)
-                    loss = -mll(output, y_standardized)
+                    loss = -mll(self.gp_model(X_norm), y_norm)
                     loss.backward()
                     optimizer.step()
 
-                    # Early stopping
                     if loss.item() < best_loss:
-                        best_loss = loss.item()
-                        patience_counter = 0
+                        best_loss, patience = loss.item(), 0
                     else:
-                        patience_counter += 1
-
-                    if patience_counter >= patience:
-                        print(f"  GP training converged at epoch {epoch + 1}")
+                        patience += 1
+                    if patience >= 10:
                         break
-                except Exception as e:
-                    # Handle numerical instability (NotPSDError, etc.)
+                except Exception:
                     if epoch == 0:
-                        print(f"  Warning: GP training failed at epoch {epoch + 1}: {type(e).__name__}")
-                        print(f"  Continuing without GP model for this iteration")
                         return False
-                    else:
-                        # If we trained for some epochs, keep current state
-                        print(f"  Warning: GP training stopped at epoch {epoch + 1}: {type(e).__name__}")
-                        break
-
-        # Store normalization parameters
-        self.X_mean = X_mean
-        self.X_std = X_std
-        self.y_mean = y_mean
-        self.y_std = y_std
+                    break
 
         return True
 
     def expected_improvement(self, prompt: Prompt, vmin_b: float) -> float:
-        """
-        Compute Expected Improvement acquisition function
-
-        Args:
-            prompt: Candidate prompt
-            vmin_b: Best validation error observed at current fidelity
-
-        Returns:
-            Expected improvement value
-        """
+        """Compute Expected Improvement acquisition function (Equation 7)"""
         if self.gp_model is None:
             return 0.0
 
-        # Embed prompt
         inst_emb, ex_emb = self.embed_prompt(prompt)
-        X_inst = torch.tensor(inst_emb, dtype=torch.float32, device=self.device).unsqueeze(0)
-        X_ex = torch.tensor(ex_emb, dtype=torch.float32, device=self.device).unsqueeze(0)
-        X = torch.cat([X_inst, X_ex], dim=1)
+        X = torch.tensor(np.concatenate([inst_emb, ex_emb]), dtype=torch.float32, device=self.device).unsqueeze(0)
+        X_norm = (X - self.X_mean) / self.X_std
 
-        # Normalize
-        X_normalized = (X - self.X_mean) / self.X_std
-
-        # Predict
         self.gp_model.eval()
         self.likelihood.eval()
 
         try:
-            # Use higher jitter for numerical stability during prediction
-            with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-3):
-                prediction = self.likelihood(self.gp_model(X_normalized))
-                mean = prediction.mean.item() * self.y_std.item() + self.y_mean.item()
-                std = prediction.stddev.item() * self.y_std.item()
+            with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-4):
+                pred = self.likelihood(self.gp_model(X_norm))
+                mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
+                std = pred.stddev.item() * self.y_std.item()
         except Exception:
-            # If prediction fails (e.g., NotPSDError), return 0 to fall back to random
             return 0.0
 
-        # Expected Improvement (we minimize, so improvement = vmin_b - mean)
-        improvement = vmin_b - mean
-        ei = self._compute_expected_improvement(improvement, std)
+        # EI formula (we minimize, so improvement = vmin - mean)
+        if std <= 0:
+            return max(vmin_b - mean, 0)
+        from scipy.stats import norm
+        z = (vmin_b - mean) / std
+        return (vmin_b - mean) * norm.cdf(z) + std * norm.pdf(z)
 
-        return ei
+    def get_prompt_proposal(self, evaluated: List[int], vmin_b: float) -> int:
+        """Propose next prompt using BO or random interleaving"""
+        unevaluated = [i for i in range(len(self.prompts)) if i not in evaluated]
 
-    def get_prompt_proposal(self, evaluated_prompts: List[int], vmin_b: float) -> int:
-        """
-        Propose next prompt to evaluate using BO or random interleaving
-
-        Args:
-            evaluated_prompts: List of prompt indices already evaluated
-            vmin_b: Best validation error at current fidelity
-
-        Returns:
-            Index of prompt to evaluate next
-        """
-        # Random interleaving
+        # Random interleaving (Section 3.4)
         if np.random.rand() < self.random_interleaving_prob or self.gp_model is None:
-            unevaluated = [i for i in range(len(self.prompts)) if i not in evaluated_prompts]
             return np.random.choice(unevaluated)
 
         # BO proposal: maximize Expected Improvement
-        unevaluated = [i for i in range(len(self.prompts)) if i not in evaluated_prompts]
-
-        # Find prompt with maximum expected improvement
-        best_idx = max(
-            unevaluated,
-            key=lambda idx: self.expected_improvement(self.prompts[idx], vmin_b)
-        )
-        return best_idx
+        return max(unevaluated, key=lambda i: self.expected_improvement(self.prompts[i], vmin_b))
 
     def run_hyperband(self, verbose: bool = True) -> Tuple[Prompt, float]:
         """
-        Run Hyperband with BO proposals
-
-        Returns:
-            (best_prompt, best_validation_error)
+        Run Hyperband with BO proposals (Algorithm 1)
         """
         if verbose:
-            print("\n" + "=" * 80)
+            print("\n" + "=" * 60)
             print("Starting HbBoPs optimization")
-            print("=" * 80)
+            print("=" * 60)
 
-        # Run brackets
+        # Run brackets from smax down to 0
         for s in range(self.smax, -1, -1):
             if verbose:
                 print(f"\nBracket s={s}")
 
-            # Initial number of prompts and budget
+            # Initial prompts and budget for this bracket
             n = int(np.ceil((self.B / self.nvalid) * (self.eta ** s) / (s + 1)))
             b = int(self.nvalid * (self.eta ** (-s)))
-
-            # Cap n at actual number of prompts
-            n = min(n, len(self.prompts))
-
-            # For first bracket, optionally use ALL prompts
-            if s == self.smax and self.full_initial_bracket:
-                n = len(self.prompts)
+            n = min(n, len(self.prompts))  # Cap at available prompts
 
             if verbose:
                 print(f"  Initial: n={n} prompts, b={b} instances")
 
-            # Sample prompts
-            P = []  # Prompt indices
-            V = []  # Validation errors
+            # Sample initial prompts
+            P, V = [], []
 
-            # Use same random validation instances for all prompts in this stage
-            # Set consistent seed for this bracket to ensure superset structure across stages
-            np.random.seed(s)  # Reproducible instance selection per bracket
-            stage_instances = np.random.choice(self.nvalid, size=b, replace=False)
-            stage_val_data = [self.validation_data[i] for i in sorted(stage_instances)]
-
-            # Propose and evaluate prompts
             for j in range(n):
-                # Train GP if we have enough data (paper uses min_observations=4)
-                highest_fidelity = self._get_highest_trainable_fidelity(min_observations=4)
-                if highest_fidelity:
-                    self.train_gp(highest_fidelity, min_observations=4)
+                # Train GP if enough data
+                fidelities = {}
+                for _, _, _, _, f in self.design_data:
+                    fidelities[f] = fidelities.get(f, 0) + 1
+                trainable = [f for f, c in fidelities.items() if c >= 4]
+                if trainable:
+                    self.train_gp(max(trainable))
 
-                # Get vmin_b for acquisition function
-                vmin_b = self._get_best_validation_error(highest_fidelity)
+                # Get vmin_b for acquisition
+                vmin_b = float('inf')
+                if trainable and self.gp_model:
+                    vmin_b = min(ve for _, _, _, ve, f in self.design_data if f == max(trainable))
 
-                # Propose prompt
+                # Propose and evaluate prompt
                 p_idx = self.get_prompt_proposal(P, vmin_b)
-                p = self.prompts[p_idx]
-
-                # Evaluate
-                v = self.evaluate_prompt(p, b, p_idx)
+                prompt = self.prompts[p_idx]
+                v = self.evaluate_prompt(prompt, b)
 
                 P.append(p_idx)
                 V.append(v)
 
-                # Update design data
-                inst_emb, ex_emb = self.embed_prompt(p)
+                # Add to design data
+                inst_emb, ex_emb = self.embed_prompt(prompt)
                 self.design_data.append((p_idx, inst_emb, ex_emb, v, b))
 
                 if verbose and (j + 1) % 10 == 0:
                     print(f"    Evaluated {j + 1}/{n} prompts")
 
             # Successive Halving stages
-            for i in range(s):
-                # Keep top ni prompts
-                ni = int(np.floor(n * (self.eta ** (-i - 1))))
-                bi = int(b * (self.eta ** (i + 1)))
+            for i in range(1, s + 1):
+                ni = int(np.floor(n * (self.eta ** (-i))))
+                bi = int(b * (self.eta ** i))
+
+                if ni == 0:
+                    break
 
                 if verbose:
-                    print(f"  Stage i={i + 1}: n={ni} prompts, b={bi} instances")
+                    print(f"  Stage i={i}: n={ni} prompts, b={bi} instances")
 
-                # Select top prompts
-                P = self._select_top_prompts(P, V, ni)
+                # Keep top prompts
+                sorted_idx = np.argsort(V)
+                P = [P[idx] for idx in sorted_idx[:ni]]
 
-                # Extend evaluations for remaining prompts
-                # Use superset of previous stage instances (same seed ensures superset property)
-                np.random.seed(s)  # Use same seed as initial stage to ensure superset structure
-                stage_instances = np.random.choice(self.nvalid, size=bi, replace=False)
-                stage_val_data = [self.validation_data[idx] for idx in sorted(stage_instances)]
-
+                # Extend evaluations
                 V = []
                 for p_idx in P:
-                    p = self.prompts[p_idx]
-                    v = self.evaluate_prompt(p, bi, p_idx)
+                    prompt = self.prompts[p_idx]
+                    v = self.evaluate_prompt(prompt, bi)
                     V.append(v)
 
                     # Update design data
-                    inst_emb, ex_emb = self.embed_prompt(p)
+                    inst_emb, ex_emb = self.embed_prompt(prompt)
                     self.design_data.append((p_idx, inst_emb, ex_emb, v, bi))
 
-            # Update best prompt (only from those evaluated on full validation set)
-            # Note: bi is defined in the loop above, or equals b if s=0
-            current_fidelity = bi if s > 0 else b
-            
-            if current_fidelity >= self.nvalid:
+            # Update best prompt (only from full-fidelity evaluations)
+            final_b = int(b * (self.eta ** s)) if s > 0 else b
+            if final_b >= self.nvalid:
                 for p_idx, v in zip(P, V):
                     if v < self.best_validation_error:
                         self.best_validation_error = v
                         self.best_prompt = self.prompts[p_idx]
-                        self.best_fidelity = current_fidelity
                         if verbose:
-                            print(f"  New best validation error: {v:.4f}")
+                            print(f"  New best: error={v:.4f}")
 
         if verbose:
-            print("\n" + "=" * 80)
-            print("HbBoPs optimization complete")
-            print(f"Best validation error: {self.best_validation_error:.4f}")
-            print("=" * 80)
+            print("\n" + "=" * 60)
+            print(f"HbBoPs complete. Best error: {self.best_validation_error:.4f}")
+            print("=" * 60)
 
         return self.best_prompt, self.best_validation_error
