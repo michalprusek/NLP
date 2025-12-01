@@ -3,7 +3,10 @@
 OPRO: Optimization by PROmpting for GSM8K
 
 Usage:
-    python run_opro.py --model Qwen/Qwen2.5-7B-Instruct --backend vllm --iterations 10
+    python run_opro.py                           # Uses default Qwen model
+    python run_opro.py --model qwen              # Alias for Qwen/Qwen2.5-7B-Instruct
+    python run_opro.py --model qwen-3b           # Smaller Qwen model
+    python run_opro.py --meta-model sonnet       # Use Claude Sonnet for meta-optimization
 """
 import argparse
 import json
@@ -16,6 +19,25 @@ from src.gsm8k_evaluator import GSM8KEvaluator
 from src.opro import OPRO
 
 
+# Model aliases for convenience
+MODEL_ALIASES = {
+    "qwen": "Qwen/Qwen2.5-7B-Instruct",
+    "qwen-3b": "Qwen/Qwen2.5-3B-Instruct",
+    "qwen-7b": "Qwen/Qwen2.5-7B-Instruct",
+    "llama": "meta-llama/Llama-3.1-8B-Instruct",
+    "saul": "Equall/Saul-7B-Instruct-v1",
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-5-20251022",
+}
+
+DEFAULT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+
+
+def resolve_model_alias(model: str) -> str:
+    """Resolve model alias to full HuggingFace/API model name."""
+    return MODEL_ALIASES.get(model.lower(), model)
+
+
 def main():
     parser = argparse.ArgumentParser(description="OPRO prompt optimization for GSM8K")
 
@@ -23,8 +45,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help="Task model (e.g., Qwen/Qwen2.5-7B-Instruct)",
+        default=DEFAULT_MODEL,
+        help=f"Task model (default: {DEFAULT_MODEL}). Aliases: {', '.join(MODEL_ALIASES.keys())}",
     )
 
     parser.add_argument(
@@ -127,9 +149,15 @@ def main():
 
     args = parser.parse_args()
 
+    # Resolve model aliases
+    args.model = resolve_model_alias(args.model)
+
     # Set defaults
     if args.meta_model is None:
         args.meta_model = args.model
+    else:
+        args.meta_model = resolve_model_alias(args.meta_model)
+
     if args.meta_backend is None:
         args.meta_backend = args.backend
 

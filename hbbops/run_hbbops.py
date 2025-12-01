@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 import re
 import sys
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -22,7 +23,7 @@ from src.llm_client import create_llm_client
 NUMBER_PATTERN = r'[-+]?\d+(?:[.,]\d+)?'
 
 
-def extract_answer(text: str) -> str | None:
+def extract_answer(text: str) -> Optional[str]:
     """Extract last number from model output."""
     if not text:
         return None
@@ -116,6 +117,8 @@ def main():
     parser.add_argument('--device', type=str, default='auto')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--output-dir', type=str, default='results')
+    parser.add_argument('--instructions', type=str, default='instructions.txt', help='Instructions file')
+    parser.add_argument('--exemplars', type=str, default='examples.txt', help='Exemplars file')
     args = parser.parse_args()
 
     script_dir = Path(__file__).parent
@@ -132,13 +135,13 @@ def main():
     print(f"Validation: {len(validation_data)}, Test: {len(test_data)}")
 
     # Load prompts
-    instructions = load_instructions(str(script_dir / "instructions.txt"))
-    exemplars = load_exemplars(str(script_dir / "examples.txt"))
+    instructions = load_instructions(str(script_dir / args.instructions))
+    exemplars = load_exemplars(str(script_dir / args.exemplars))
     print(f"Instructions: {len(instructions)}, Exemplars: {len(exemplars)}")
 
     # Initialize
     print(f"\nInitializing LLM ({args.backend})...")
-    llm_client = create_llm_client(args.model, args.backend, args.device)
+    llm_client = create_llm_client(args.model, args.backend)
     evaluator = GSM8KEvaluator(llm_client, args.debug)
 
     print("\nInitializing HbBoPs...")
