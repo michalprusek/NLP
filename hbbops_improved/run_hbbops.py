@@ -15,7 +15,44 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hbbops.hbbops import HbBoPs, Prompt
+
+class TeeLogger:
+    """Write to both console and file simultaneously."""
+
+    def __init__(self, filepath: Path):
+        self.terminal = sys.stdout
+        self.log = open(filepath, 'w', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def close(self):
+        self.log.close()
+
+# Import HbBoPs from the same directory as this script
+from pathlib import Path as _Path
+_script_dir = _Path(__file__).parent
+if _script_dir.name == 'hbbops':
+    from hbbops.hbbops import HbBoPs, Prompt
+elif _script_dir.name == 'hbbops_improved':
+    from hbbops_improved.hbbops import HbBoPs, Prompt
+elif _script_dir.name == 'hbbops_improved_2':
+    from hbbops_improved_2.hbbops import HbBoPs, Prompt
+else:
+    # Fallback: try to import from the script's directory
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("hbbops", _script_dir / "hbbops.py")
+    _hbbops_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_hbbops_module)
+    HbBoPs = _hbbops_module.HbBoPs
+    Prompt = _hbbops_module.Prompt
+
 from src.llm_client import create_llm_client
 
 
@@ -127,6 +164,28 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
+    # Setup logging - save complete output to file
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = output_dir / f"hbbops_{timestamp}.log"
+    tee_logger = TeeLogger(log_file)
+    sys.stdout = tee_logger
+    sys.stderr = tee_logger
+
+    print(f"=" * 70)
+    print(f"HbBoPs Run Started at {datetime.now().isoformat()}")
+    print(f"Log file: {log_file}")
+    print(f"=" * 70)
+    print(f"\nConfiguration:")
+    print(f"  Model: {args.model}")
+    print(f"  Backend: {args.backend}")
+    print(f"  bmin: {args.bmin}")
+    print(f"  eta: {args.eta}")
+    print(f"  Instructions: {args.instructions}")
+    print(f"  Exemplars: {args.exemplars}")
+    print(f"  Use test set: {args.use_test_set}")
+    print(f"  Ground truth: {args.ground_truth}")
+    print()
+
     # Load data
     print("Loading data...")
     with open(script_dir / "data/validation.json") as f:
@@ -179,8 +238,7 @@ def main():
     print(f"Test error: {test_error:.4f} ({test_error * 100:.2f}%)")
     print(f"Best prompt: instruction={best_prompt.instruction_id}, exemplar={best_prompt.exemplar_id}")
 
-    # Save
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Save (using same timestamp as log file)
     results = {
         "method": "HbBoPs",
         "model": args.model,
@@ -204,6 +262,17 @@ def main():
     if args.ground_truth:
         compare_with_ground_truth(hbbops, args.ground_truth, instructions, exemplars,
                                   output_dir, timestamp)
+
+    # Finish logging
+    print(f"\n{'=' * 70}")
+    print(f"HbBoPs Run Finished at {datetime.now().isoformat()}")
+    print(f"Full log saved to: {log_file}")
+    print(f"{'=' * 70}")
+
+    # Restore stdout and close logger
+    sys.stdout = tee_logger.terminal
+    sys.stderr = tee_logger.terminal
+    tee_logger.close()
 
 
 def compare_with_ground_truth(hbbops, ground_truth_path: str, instructions: list, exemplars: list,

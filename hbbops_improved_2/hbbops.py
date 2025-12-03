@@ -269,16 +269,20 @@ class HbBoPs:
         self.evaluation_cache[cache_key] = error
         return error
 
-    def train_gp(self, fidelity: int, min_observations: int = 4) -> bool:
+    def train_gp(self, fidelities: list, min_observations: int = 4) -> bool:
         """
-        Train GP on design data at given fidelity level.
+        Train GP on design data from multiple fidelity levels.
 
         Paper Section 4.2: "normalizes inputs to the unit cube and standardizes outputs"
         - Inputs (X): Unit cube normalization (min-max to [0, 1])
         - Outputs (y): Standardization (zero mean, unit variance)
+
+        Args:
+            fidelities: List of fidelity levels to train on (e.g., top 75%)
         """
-        # Filter data for this fidelity
-        fidelity_data = [(ie, ee, ve) for _, ie, ee, ve, f in self.design_data if f == fidelity]
+        # Filter data for these fidelity levels
+        fidelity_set = set(fidelities) if isinstance(fidelities, list) else {fidelities}
+        fidelity_data = [(ie, ee, ve) for _, ie, ee, ve, f in self.design_data if f in fidelity_set]
 
         if len(fidelity_data) < min_observations:
             return False
@@ -440,14 +444,23 @@ class HbBoPs:
 
                 # filter out fidelities with more than 4 observations (evaluated prompts)
                 trainable = [f for f, c in fidelities.items() if c >= 4]
-                # train GP on the highest fidelity level - NOT effective - training on the same data
-                if trainable:
-                    self.train_gp(max(trainable))
 
-                # Get vmin_b for acquisition - vmin_b = minimum validation error at fidelity b
+                # Train GP on TOP 75% fidelity levels (improved version)
+                # This uses more diverse data from high-fidelity evaluations
+                if trainable:
+                    sorted_fidelities = sorted(trainable, reverse=True)
+                    # Take top 75% of fidelity levels (at least 1)
+                    top_75_count = max(1, int(len(sorted_fidelities) * 0.75))
+                    top_75_fidelities = sorted_fidelities[:top_75_count]
+                    self.train_gp(top_75_fidelities)
+
+                # Get vmin_b for acquisition - vmin_b = minimum validation error at top 75% fidelities
                 vmin_b = float('inf')
                 if trainable and self.gp_model:
-                    vmin_b = min(ve for _, _, _, ve, f in self.design_data if f == max(trainable))
+                    sorted_fidelities = sorted(trainable, reverse=True)
+                    top_75_count = max(1, int(len(sorted_fidelities) * 0.75))
+                    top_75_fidelities = set(sorted_fidelities[:top_75_count])
+                    vmin_b = min(ve for _, _, _, ve, f in self.design_data if f in top_75_fidelities)
 
                 # Propose and evaluate prompt
                 p_idx = self.get_prompt_proposal(P, vmin_b)

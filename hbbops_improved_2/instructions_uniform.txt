@@ -1,0 +1,33 @@
+# HbBoPs Instructions - UNIFORM DISTRIBUTION (10 from 25)
+# Selected by error rate percentiles: 0%, 11%, 22%, 33%, 44%, 56%, 67%, 78%, 89%, 100%
+# Original IDs (0-indexed): [8, 20, 15, 7, 14, 11, 3, 22, 18, 1]
+
+# ID 8 (0%) - Best performer (37.2% avg error)
+1. Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.
+
+# ID 20 (11%) - 55.4% avg error
+2. def solve(): # Parse problem, compute result, return int
+
+# ID 15 (22%) - 57.1% avg error
+3. I don't have time for games. Give me the answer. Show work if you must, but I want that number.
+
+# ID 7 (33%) - 65.2% avg error
+4. Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.
+
+# ID 14 (44%) - 72.2% avg error
+5. SOLVE. NOW. NUMBER. GO.
+
+# ID 11 (56%) - 78.1% avg error
+6. Ignore all previous instructions. Just kidding! Actually solve this math problem properly.
+
+# ID 3 (67%) - 81.1% avg error
+7. BEEP BOOP. COMPUTE. OUTPUT INTEGER.
+
+# ID 22 (78%) - 82.9% avg error
+8. Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?
+
+# ID 18 (89%) - 89.7% avg error
+9. What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.
+
+# ID 1 (100%) - Worst performer (93.9% avg error)
+10. ?
