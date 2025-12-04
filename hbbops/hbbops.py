@@ -28,24 +28,52 @@ class Prompt:
 
 
 class PromptEncoder:
-    """Encode prompts using BERT [CLS] token embeddings"""
+    """Encode prompts using GTR (gtr-t5-base) mean pooled embeddings.
 
-    def __init__(self, model_name: str = "bert-base-uncased"):
+    GTR is used instead of BERT for vec2text compatibility.
+    Vec2text has pre-trained inversion models for GTR embeddings.
+    """
+
+    def __init__(self, model_name: str = "sentence-transformers/gtr-t5-base"):
+        self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
+
+        # For GTR, we need only the encoder part of T5
+        full_model = AutoModel.from_pretrained(model_name)
+        # GTR uses T5 encoder, get it from the model
+        if hasattr(full_model, 'encoder'):
+            self.model = full_model.encoder
+        else:
+            self.model = full_model  # Fallback for non-T5 models
+
         self.model.eval()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
     def encode(self, text: str) -> np.ndarray:
-        """Encode text to [CLS] token embedding (768 dim)"""
+        """Encode text using mean pooling (768 dim).
+
+        GTR uses mean pooling over token embeddings, not [CLS] token.
+        This is required for vec2text compatibility.
+        """
         with torch.no_grad():
             inputs = self.tokenizer(
-                text, return_tensors="pt", truncation=True, max_length=512, padding=True
+                text, return_tensors="pt", truncation=True, max_length=128, padding="max_length"
             ).to(self.device)
-            outputs = self.model(**inputs)
-            cls_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-        return cls_embedding.squeeze()
+
+            outputs = self.model(
+                input_ids=inputs['input_ids'],
+                attention_mask=inputs['attention_mask']
+            )
+            hidden_state = outputs.last_hidden_state
+
+            # Mean pooling (vec2text compatible)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+            sum_embeddings = torch.sum(hidden_state * attention_mask, dim=1)
+            sum_mask = torch.clamp(attention_mask.sum(dim=1), min=1e-9)
+            mean_embedding = (sum_embeddings / sum_mask).cpu().numpy()
+
+        return mean_embedding.squeeze()
 
 
 class FeatureExtractor(nn.Module):
@@ -126,7 +154,7 @@ class HbBoPs:
         exemplars: List[str],
         validation_data: List[Dict],
         llm_evaluator,
-        encoder_name: str = "bert-base-uncased",
+        encoder_name: str = "sentence-transformers/gtr-t5-base",
         bmin: int = 10,
         eta: float = 2.0,
         random_interleaving_prob: float = 0.1,
