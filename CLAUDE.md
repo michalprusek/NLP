@@ -220,29 +220,156 @@ ProTeGi includes aggressive prompt cleaning (`apply_gradient` method):
 - Strips meta-commentary patterns
 - Validates output before accepting
 
-## Dataset Structure
+## Repository Structure
 
 ```
-datasets/
-├── gsm8k/          # GSM8K dataset (7,473 train, 1,319 test)
-└── tos_local/      # Local ToS dataset from ToS_wInstructions
-                    # (6,589 train, 1,412 val, 1,413 test - ToS fairness classification)
-                    # 50 companies, 8 unfair categories, ~11% unfair clauses
-                    # Supports both multi-label (claudette) and binary (claudette_binary) tasks
-                    # Format: JSON files (train.json, validation.json, test.json)
+/home/prusek/NLP/
+├── datasets/                    # Input data and ground truth
+│   ├── gsm8k/                  # GSM8K dataset (7,473 train, 1,319 test)
+│   ├── tos_local/              # ToS fairness classification (6,589 train, 1,412 val, 1,413 test)
+│   │                           # 50 companies, 8 unfair categories, ~11% unfair clauses
+│   │                           # Supports multi-label (claudette) and binary (claudette_binary) tasks
+│   └── hbbops/                 # HbBoPs prompt datasets
+│       ├── instructions_5.txt        # 5 curated instructions (selected)
+│       ├── instructions_10.txt       # 10 uniform instructions
+│       ├── instructions_25.txt       # 25 diverse instructions (full)
+│       ├── examples_5.txt            # 5 selected exemplars
+│       ├── examples_25.txt           # 25 diverse exemplars (K-means clustering)
+│       └── full_grid_combined.jsonl  # Ground truth: all 625 prompt combinations
+│
+├── hbbops/                      # HbBoPs (Hyperband Bayesian Optimization for Prompts)
+│   ├── hbbops.py               # Core HbBoPs algorithm implementation
+│   ├── run_hbbops.py           # Main entry point for running experiments
+│   ├── prompt_inverse.py       # Gradient-based prompt optimization
+│   ├── data/                   # ToS dataset splits (train.json, validation.json, test.json)
+│   └── results/                # Experiment outputs
+│       ├── 10x25_*.json              # 10×25 grid search results
+│       ├── 25x25_*.json              # 25×25 grid search results
+│       ├── *.log                     # Detailed execution logs
+│       └── grid_size_comparison.png  # Visualization comparing grid sizes
+│
+├── visualize/                   # Visualization scripts and plots
+│   ├── compare_grid_sizes.py   # Compare 10×25 vs 25×25 experiments
+│   ├── visualize_split.py      # Analyze train/val/test splits
+│   ├── compare_all_hbbops.py   # Compare multiple HbBoPs runs
+│   ├── full_gp_visualization.png     # Full GP visualization
+│   └── split_visualization.png       # Dataset split visualization
+│
+├── results/                     # ProTeGi/OPRO experiment outputs
+│   ├── protegi_TIMESTAMP.json  # Full optimization history + config
+│   ├── protegi_TIMESTAMP.txt   # Best prompt + validation accuracy
+│   ├── opro_TIMESTAMP.json     # OPRO results
+│   └── opro_prompts_200it.*    # OPRO prompt datasets (CSV/JSON)
+│
+└── src/                         # Core implementation (ProTeGi, OPRO, evaluators)
 ```
 
-## Results Output
+**Key Directories:**
+- `datasets/`: Static input data (never modified by experiments)
+- `hbbops/results/`: HbBoPs experiment outputs and visualizations
+- `results/`: ProTeGi/OPRO optimization results
+- `visualize/`: Analysis and visualization scripts
 
-```
-results/
-├── protegi_TIMESTAMP.json    # Full optimization history + config
-├── protegi_TIMESTAMP.txt     # Best prompt + validation accuracy
-├── opro_TIMESTAMP.json
-└── opro_TIMESTAMP.txt
+**Best Practices:**
+1. **Input data** goes in `datasets/` (version controlled, read-only)
+2. **Experiment outputs** go in `hbbops/results/` or `results/` (gitignored large files)
+3. **Visualization scripts** go in `visualize/` with descriptive names
+4. **Generated plots** saved alongside experiment results for context
+
+## HbBoPs (Hyperband Bayesian Optimization for Prompts)
+
+HbBoPs is a multi-fidelity optimization algorithm that efficiently searches through large prompt spaces (instructions × exemplars) using adaptive resource allocation.
+
+### Running HbBoPs
+
+**Basic usage:**
+```bash
+# Run 10×25 grid search (10 instructions, 25 exemplars)
+uv run python hbbops/run_hbbops.py \
+    --instructions datasets/hbbops/instructions_10.txt \
+    --exemplars datasets/hbbops/examples_25.txt \
+    --output-dir hbbops/results
+
+# Run full 25×25 grid search
+uv run python hbbops/run_hbbops.py \
+    --instructions datasets/hbbops/instructions_25.txt \
+    --exemplars datasets/hbbops/examples_25.txt
 ```
 
-JSON includes: method, model, config, best_prompt, history (all iterations), validation scores
+**Key parameters:**
+- `--bmin`: Minimum validation instances (default: 10)
+- `--eta`: Halving parameter for Hyperband (default: 2.0)
+- `--backend`: LLM backend (`vllm`, `transformers`, `claude`)
+- `--model`: Task model to use
+- `--use-test-set`: Use test set for evaluation (for GT comparison)
+- `--ground-truth`: Path to ground truth JSONL for comparison
+
+### HbBoPs Output Files
+
+**JSON results (`hbbops/results/*.json`):**
+```json
+{
+  "ground_truth_path": "...",
+  "instruction_mapping": [8, 20, 15, ...],  // Selected instruction IDs
+  "exemplar_mapping": [0, 1, 2, ...],        // Selected exemplar IDs
+  "total_prompts_in_grid": 250,
+  "llm_calls": {
+    "hbbops_total": 67912,
+    "gt_total": 329750,
+    "efficiency_ratio": 4.86
+  },
+  "all_evaluated_prompts": [
+    {
+      "sel_inst": 0, "sel_ex": 7,
+      "orig_inst": 8, "orig_ex": 7,
+      "max_fidelity": 1319,
+      "hbbops_error": 0.1145,
+      "gt_error": 0.1304,
+      "diff_pp": -1.59
+    },
+    ...
+  ]
+}
+```
+
+**Text results (`hbbops/results/*.txt`):**
+- Best prompts at each fidelity level
+- Error rates and rankings
+- Summary statistics
+
+### Visualizing HbBoPs Results
+
+**Compare different grid sizes:**
+```bash
+# Generate comparison plot (10×25 vs 25×25)
+python3 visualize/compare_grid_sizes.py
+```
+
+**Output:** `hbbops/results/grid_size_comparison.png` with:
+1. **Accuracy Difference by Fidelity**: HbBoPs vs Ground Truth error (in pp)
+2. **Computational Efficiency**: LLM calls comparison (11.3x vs 4.9x)
+3. **Rank Correlation**: Spearman & Kendall with ground truth
+4. **Top-K Overlap**: Agreement on best prompts at various K
+
+**Key Insights from Grid Comparison:**
+- Larger grids (25×25) achieve **2.3× better efficiency** (11.3x vs 4.9x)
+- Rank correlation improves with grid size (Spearman 0.961 vs 0.945)
+- Top-K overlap is consistently higher for larger grids (90% vs 80% at K=5)
+- Similar number of HbBoPs calls (~70K) but vastly different GT coverage
+
+### HbBoPs Algorithm Overview
+
+**Multi-fidelity approach:**
+1. Start with many prompts at low fidelity (few validation examples)
+2. Progressively eliminate poor performers
+3. Allocate more resources (higher fidelity) to promising prompts
+4. Final evaluation at max fidelity (1,319 examples for ToS dataset)
+
+**Efficiency gains:**
+- Avoids full evaluation of all prompts
+- Focuses compute on most promising candidates
+- 5-11× fewer LLM calls vs. exhaustive grid search
+- Quality: High rank correlation with ground truth (ρ > 0.94)
 
 ## Important Constraints
 
