@@ -418,8 +418,8 @@
                 <div class="algorithm-card">
                     <h4>Embedding Encoder</h4>
                     <ul>
-                        <li>GTR-T5-base (vec2text compatible)</li>
-                        <li>Mean pooling over all tokens</li>
+                        <li>BERT-base-uncased</li>
+                        <li>[CLS] token extraction</li>
                         <li>768-dimensional embeddings</li>
                     </ul>
                 </div>
@@ -451,7 +451,7 @@
                 <div class="algorithm-card">
                     <h4><span class="badge badge-info">Original</span> HbBoPs</h4>
                     <ul>
-                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
                         <li><strong>Noise:</strong> Homoscedastic (constant)</li>
                         <li><strong>GP Training:</strong> Highest fidelity only</li>
                         <li><strong>EI:</strong> Minimize validation error</li>
@@ -475,8 +475,8 @@
                     <ul>
                         <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
                         <li><strong>Noise:</strong> Homoscedastic (constant)</li>
-                        <li><strong>GP Training:</strong> Highest fidelity only</li>
-                        <li><strong>Change:</strong> Same as Original but BERT encoder</li>
+                        <li><strong>GP Training:</strong> Top 75% fidelity levels</li>
+                        <li><strong>Change:</strong> BERT encoder + fidelity filtering</li>
                         <li><strong>Result:</strong> Best efficiency (12.2×)</li>
                     </ul>
                 </div>
@@ -484,7 +484,7 @@
                 <div class="algorithm-card">
                     <h4><span class="badge badge-warning">Improved 3</span></h4>
                     <ul>
-                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
                         <li><strong>Noise:</strong> Wilson score heteroscedastic</li>
                         <li><strong>Transform:</strong> Logit + Delta method</li>
                         <li><strong>Fidelity:</strong> IndexKernel (product kernel)</li>
@@ -506,7 +506,7 @@
                 <div class="algorithm-card">
                     <h4><span class="badge badge-error">Improved 5</span></h4>
                     <ul>
-                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
                         <li><strong>Noise:</strong> Simple binomial \( \sigma^2 = p(1-p)/n \)</li>
                         <li><strong>Transform:</strong> None (direct accuracy)</li>
                         <li><strong>EI:</strong> MAXIMIZE accuracy (not minimize error)</li>
@@ -536,21 +536,21 @@
                     <tbody>
                         <tr>
                             <td><strong>Encoder Model</strong></td>
-                            <td>GTR-T5-base</td>
                             <td>BERT-base</td>
                             <td>BERT-base</td>
-                            <td>GTR-T5-base</td>
-                            <td>GTR-T5-base</td>
-                            <td>GTR-T5-base</td>
+                            <td>BERT-base</td>
+                            <td>BERT-base</td>
+                            <td>BERT-base</td>
+                            <td>BERT-base</td>
                         </tr>
                         <tr>
                             <td><strong>Pooling Strategy</strong></td>
-                            <td>Mean</td>
                             <td>[CLS] token</td>
                             <td>[CLS] token</td>
-                            <td>Mean</td>
-                            <td>Mean</td>
-                            <td>Mean</td>
+                            <td>[CLS] token</td>
+                            <td>[CLS] token</td>
+                            <td>[CLS] token</td>
+                            <td>[CLS] token</td>
                         </tr>
                         <tr>
                             <td><strong>Noise Model</strong></td>
@@ -583,7 +583,7 @@
                             <td><strong>Training Data</strong></td>
                             <td>Top fidelity</td>
                             <td>All fidelities</td>
-                            <td>Top fidelity</td>
+                            <td>Top 75%</td>
                             <td>All fidelities</td>
                             <td>Top 75%</td>
                             <td>Top 75%</td>
@@ -599,12 +599,12 @@
                         </tr>
                         <tr>
                             <td><strong>Vec2Text Compatible</strong></td>
-                            <td>Yes</td>
                             <td>No</td>
                             <td>No</td>
-                            <td>Yes</td>
-                            <td>Yes</td>
-                            <td>Yes</td>
+                            <td>No</td>
+                            <td>No</td>
+                            <td>No</td>
+                            <td>No</td>
                         </tr>
                     </tbody>
                 </table>
@@ -799,8 +799,8 @@
                 </div>
 
                 <div class="finding-card">
-                    <h4>Encoder Choice Matters</h4>
-                    <p>BERT vs GTR-T5 shows different trade-offs. BERT (CLS) achieves better ranking correlation despite not being vec2text compatible.</p>
+                    <h4>Consistent Encoder</h4>
+                    <p>All implementations use BERT-base with [CLS] token extraction. This provides consistent 768-dim embeddings across all variants.</p>
                 </div>
 
                 <div class="finding-card">
@@ -828,10 +828,10 @@
                     <li>BERT encoder is well-understood and stable</li>
                 </ul>
 
-                <p style="margin-top: 1rem;"><strong>For Research (Vec2Text):</strong> <span class="badge badge-info">Original</span></p>
+                <p style="margin-top: 1rem;"><strong>For Research:</strong> <span class="badge badge-info">Original</span></p>
                 <ul>
-                    <li>GTR-T5 embeddings compatible with vec2text inversion</li>
-                    <li>Enables generative optimization in embedding space</li>
+                    <li>Simplest baseline implementation</li>
+                    <li>Good for understanding core algorithm</li>
                 </ul>
 
                 <p style="margin-top: 1rem;"><strong>Avoid:</strong> <span class="badge badge-error">Improved 5</span></p>
@@ -884,7 +884,7 @@
                 <li>Investigate why logit transform degrades test performance</li>
                 <li>Develop proper EI formulation for accuracy maximization</li>
                 <li>Test adaptive fidelity filtering based on signal-to-noise ratio</li>
-                <li>Combine BERT efficiency with GTR-T5 vec2text compatibility</li>
+                <li>Explore GTR-T5 encoder for vec2text compatibility</li>
             </ul>
         </section>
     </div>
