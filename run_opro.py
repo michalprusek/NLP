@@ -95,6 +95,13 @@ def main():
     )
 
     parser.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help="Total LLM evaluation budget (default: unlimited). Each eval costs minibatch-size.",
+    )
+
+    parser.add_argument(
         "--minibatch-size",
         type=int,
         default=261,
@@ -177,6 +184,7 @@ def main():
     print(f"Meta-model: {args.meta_model}")
     print(f"GPUs: {args.gpu_ids}")
     print(f"Iterations: {args.iterations}")
+    print(f"Budget: {args.budget if args.budget else 'unlimited'}")
     print(f"Minibatch: {args.minibatch_size}")
     print(f"Candidates/iter: {args.num_candidates}")
     print("="*60 + "\n")
@@ -226,6 +234,7 @@ def main():
         minibatch_size=args.minibatch_size,
         task_max_tokens=args.max_new_tokens,  # For math solutions (default: 2048)
         meta_max_tokens=500,  # For prompt generation (short)
+        total_budget=args.budget,  # Budget-based stopping
     )
 
     # Set up eval output directory
@@ -242,6 +251,37 @@ def main():
         verbose_meta=args.verbose_meta,
     )
 
+    # Evaluate on test set
+    print("\n" + "="*60)
+    print("TEST SET EVALUATION")
+    print("="*60)
+
+    test_evaluator = GSM8KEvaluator(
+        dataset_path="datasets/gsm8k",
+        split="test",
+        debug=args.debug,
+    )
+    print(f"Test set: {len(test_evaluator)} examples")
+
+    # Get all test examples
+    test_batch = test_evaluator.get_batch(0, len(test_evaluator))
+    test_questions = [ex['question'] for ex in test_batch]
+    test_prompts = [f"Question: {q}\n\n{best_prompt}\n\nAnswer:" for q in test_questions]
+
+    print(f"Evaluating best prompt on test set...")
+    test_outputs = task_llm.generate_batch(
+        test_prompts, temperature=0.0, max_new_tokens=args.max_new_tokens
+    )
+
+    test_indices = [ex['idx'] for ex in test_batch]
+    test_results = test_evaluator.evaluate_batch(test_outputs, test_indices)
+    test_accuracy = test_results['accuracy']
+    test_error = 1.0 - test_accuracy
+
+    print(f"\nTest accuracy: {test_accuracy:.2%}")
+    print(f"Test error: {test_error:.2%}")
+    print("="*60)
+
     # Save results
     output_file = output_dir / f"opro_{timestamp}.json"
     results = {
@@ -250,10 +290,15 @@ def main():
         "timestamp": timestamp,
         "config": {
             "iterations": args.iterations,
+            "budget": args.budget,
             "minibatch_size": args.minibatch_size,
             "num_candidates": args.num_candidates,
         },
+        "budget_used": optimizer.budget_used,
         "best_prompt": best_prompt,
+        "validation_accuracy": max(sp.score for sp in optimizer.scored_prompts) if optimizer.scored_prompts else 0,
+        "test_accuracy": test_accuracy,
+        "test_error": test_error,
         "history": history,
     }
 

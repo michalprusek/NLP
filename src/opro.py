@@ -48,6 +48,9 @@ class OPRO:
         meta_llm_client=None,
         task_max_tokens: int = 2048,
         meta_max_tokens: int = 500,
+        total_budget: int = None,  # Total LLM evaluation budget (None = unlimited)
+        max_meta_prompts: int = 20,  # Max prompts to show in meta-prompt (prevents context overflow)
+        max_prompt_length: int = 300,  # Max chars per prompt in meta-context
     ):
         self.task_llm = task_llm_client
         self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
@@ -58,9 +61,13 @@ class OPRO:
         self.keep_top_k = keep_top_k
         self.task_max_tokens = task_max_tokens
         self.meta_max_tokens = meta_max_tokens
+        self.total_budget = total_budget
+        self.max_meta_prompts = max_meta_prompts
+        self.max_prompt_length = max_prompt_length
 
         self.scored_prompts: List[ScoredPrompt] = []
         self.history = []
+        self.budget_used = 0  # Track LLM evaluations
 
         # Create fixed evaluation set (same for all prompts)
         dataset_size = len(evaluator)
@@ -89,6 +96,18 @@ class OPRO:
 
         return "\n\n".join(examples)
 
+    def _is_budget_exhausted(self) -> bool:
+        """Check if budget is exhausted."""
+        if self.total_budget is None:
+            return False
+        return self.budget_used >= self.total_budget
+
+    def _can_afford_evaluation(self) -> bool:
+        """Check if we can afford one more evaluation."""
+        if self.total_budget is None:
+            return True
+        return (self.budget_used + self.minibatch_size) <= self.total_budget
+
     def evaluate_prompt(
         self,
         prompt: str,
@@ -99,6 +118,9 @@ class OPRO:
     ) -> Tuple[float, Dict]:
         """Evaluate prompt on fixed evaluation set"""
         batch = self.fixed_eval_set
+
+        # Track budget
+        self.budget_used += len(batch)
 
         # Generate answers
         questions = [ex['question'] for ex in batch]
@@ -150,6 +172,12 @@ class OPRO:
 
         return score, results
 
+    def _truncate_prompt(self, prompt: str) -> str:
+        """Truncate prompt to max_prompt_length chars"""
+        if len(prompt) <= self.max_prompt_length:
+            return prompt
+        return prompt[:self.max_prompt_length - 3] + "..."
+
     def generate_candidates(
         self,
         verbose_meta: bool = False,
@@ -158,11 +186,15 @@ class OPRO:
         iteration: int = None
     ) -> List[str]:
         """Generate new prompt candidates"""
-        # Format scored prompts context
+        # Format scored prompts context (limited to prevent context overflow)
         if self.scored_prompts:
+            # Sort by score ascending (worst first, best last - as OPRO paper recommends)
+            sorted_prompts = sorted(self.scored_prompts, key=lambda x: x.score)
+            # Take only the top prompts to fit in context
+            limited_prompts = sorted_prompts[-self.max_meta_prompts:]
             scored_prompts_text = "\n".join([
-                f"text: {sp.prompt}\nscore: {int(bucket_score(sp.score) * 100)}"
-                for sp in sorted(self.scored_prompts, key=lambda x: x.score)
+                f"text: {self._truncate_prompt(sp.prompt)}\nscore: {int(bucket_score(sp.score) * 100)}"
+                for sp in limited_prompts
             ])
         else:
             scored_prompts_text = "(No prompts yet)"
@@ -265,6 +297,8 @@ class OPRO:
         if verbose:
             print(f"\n{'='*60}")
             print("OPRO Optimization")
+            if self.total_budget:
+                print(f"Budget: {self.total_budget} LLM evaluations")
             print(f"{'='*60}\n")
 
         if save_eval_json and eval_output_dir:
@@ -276,6 +310,12 @@ class OPRO:
             print("Evaluating initial prompts...\n")
 
         for idx, prompt in enumerate(initial_prompts):
+            # Check budget before evaluation
+            if not self._can_afford_evaluation():
+                if verbose:
+                    print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping initial evaluation.")
+                break
+
             score, _ = self.evaluate_prompt(
                 prompt,
                 save_eval_json=save_eval_json,
@@ -287,13 +327,24 @@ class OPRO:
             self.history.append({'iteration': -1, 'prompt': prompt, 'score': score})
 
             if verbose:
-                print(f"Score: {score:.1%} | {prompt if prompt else '(empty)'}")
+                budget_str = f" [budget: {self.budget_used}/{self.total_budget}]" if self.total_budget else ""
+                print(f"Score: {score:.1%} | {prompt if prompt else '(empty)'}{budget_str}")
 
         # Optimization loop
+        budget_exhausted = False
         for iteration in range(self.num_iterations):
+            # Check budget at start of iteration
+            if self._is_budget_exhausted():
+                if verbose:
+                    print(f"\nBudget exhausted ({self.budget_used}/{self.total_budget}). Stopping.")
+                budget_exhausted = True
+                break
+
             if verbose:
                 print(f"\n{'='*60}")
                 print(f"Iteration {iteration + 1}/{self.num_iterations}")
+                if self.total_budget:
+                    print(f"Budget: {self.budget_used}/{self.total_budget}")
                 print(f"{'='*60}\n")
 
             # Generate candidates
@@ -314,6 +365,13 @@ class OPRO:
 
             # Evaluate candidates
             for i, candidate in enumerate(candidates):
+                # Check budget before each evaluation
+                if not self._can_afford_evaluation():
+                    if verbose:
+                        print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping evaluation.")
+                    budget_exhausted = True
+                    break
+
                 if verbose:
                     print(f"Evaluating: {candidate[:60]}...")
 
@@ -328,7 +386,11 @@ class OPRO:
                 self.history.append({'iteration': iteration, 'prompt': candidate, 'score': score})
 
                 if verbose:
-                    print(f"Score: {score:.1%}")
+                    budget_str = f" [budget: {self.budget_used}/{self.total_budget}]" if self.total_budget else ""
+                    print(f"Score: {score:.1%}{budget_str}")
+
+            if budget_exhausted:
+                break
 
             # Keep top-k
             self.scored_prompts.sort(key=lambda x: x.score, reverse=True)
@@ -340,11 +402,18 @@ class OPRO:
                     print(f"  {i+1}. {sp}")
 
         # Return best
+        if not self.scored_prompts:
+            if verbose:
+                print("No prompts evaluated. Returning empty.")
+            return "", self.history
+
         best = max(self.scored_prompts, key=lambda x: x.score)
         if verbose:
             print(f"\n{'='*60}")
             print(f"Best prompt (score: {best.score:.1%}):")
             print(best.prompt)
+            if self.total_budget:
+                print(f"Total budget used: {self.budget_used}/{self.total_budget}")
             print(f"{'='*60}\n")
 
         return best.prompt, self.history
