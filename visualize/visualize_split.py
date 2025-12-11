@@ -47,14 +47,15 @@ def compute_ei_batch(hbbops, X_norm, vmin_b):
 
 
 def main():
-    base_dir = Path(__file__).parent.parent  # Go up to hbbops/
-    data_dir = base_dir / "data"
-    datasets_dir = base_dir.parent / "datasets" / "hbbops"
+    base_dir = Path(__file__).parent.parent  # /home/prusek/NLP
+    data_dir = base_dir / "hbbops" / "data"
+    datasets_dir = base_dir / "datasets" / "hbbops"
+    results_dir = Path(__file__).parent  # visualize/
     full_grid_path = datasets_dir / "full_grid_combined.jsonl"
 
     print("Loading data...")
-    instructions = load_instructions(str(datasets_dir / "instructions.txt"))
-    exemplars = load_exemplars(str(datasets_dir / "examples.txt"))
+    instructions = load_instructions(str(datasets_dir / "instructions_25.txt"))
+    exemplars = load_exemplars(str(datasets_dir / "examples_25.txt"))
 
     with open(data_dir / "validation.json", 'r') as f:
         validation_data = json.load(f)
@@ -186,29 +187,6 @@ def main():
     # Best actual prompt
     best_actual_idx = np.argmax(accuracies)
 
-    # Load optimized embedding from gradient ascent (if available)
-    opt_emb_2d = None
-    opt_result = None
-    opt_result_path = results_dir / "prompt_inverse_result.json"
-    if opt_result_path.exists():
-        with open(opt_result_path, 'r') as f:
-            opt_result = json.load(f)
-        if 'optimized_embedding' in opt_result:
-            print("Loading gradient-optimized embedding...")
-            opt_emb = np.array(opt_result['optimized_embedding'])
-            # Project through FeatureExtractor to get 10D latent
-            opt_tensor = torch.tensor(opt_emb, dtype=torch.float32, device=hbbops.device).unsqueeze(0)
-            opt_norm = (opt_tensor - hbbops.X_min) / denominator
-            with torch.no_grad():
-                opt_inst = opt_norm[:, :768]
-                opt_ex = opt_norm[:, 768:]
-                opt_latent = hbbops.gp_model.feature_extractor(opt_inst, opt_ex)
-                opt_latent_np = opt_latent.cpu().numpy()
-            # Project to 2D via UMAP
-            opt_emb_2d = reducer.transform(opt_latent_np)[0]
-            print(f"Optimized embedding 2D position: ({opt_emb_2d[0]:.3f}, {opt_emb_2d[1]:.3f})")
-            print(f"Optimized EI: {opt_result['optimized_ei']:.6f}")
-
     # Create visualization
     print("Creating visualization...")
     fig, ax = plt.subplots(figsize=(12, 10))
@@ -238,16 +216,6 @@ def main():
     ax.scatter(embedding_2d[best_actual_idx, 0], embedding_2d[best_actual_idx, 1],
                c='lime', s=300, marker='*', edgecolors='black', linewidths=2, zorder=10,
                label=f'Best acc = {accuracies[best_actual_idx]:.2%}')
-
-    # Mark gradient-optimized embedding (if available)
-    if opt_emb_2d is not None:
-        ax.scatter(opt_emb_2d[0], opt_emb_2d[1], c='magenta', s=350, marker='D',
-                   edgecolors='white', linewidths=2, zorder=11,
-                   label=f'Optimized EI = {opt_result["optimized_ei"]:.4f}')
-        # Draw arrow from best actual to optimized point
-        ax.annotate('', xy=(opt_emb_2d[0], opt_emb_2d[1]),
-                    xytext=(embedding_2d[best_actual_idx, 0], embedding_2d[best_actual_idx, 1]),
-                    arrowprops=dict(arrowstyle='->', color='magenta', lw=2, ls='--'))
 
     # Colorbars
     cbar_acc = plt.colorbar(scatter, ax=ax, label='Accuracy', shrink=0.6, pad=0.02)

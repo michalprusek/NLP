@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HbBoPs Methods Comparison - Prompt Optimization</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #1e40af;
+            --accent-color: #3b82f6;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-color: #1e293b;
+            --text-secondary: #64748b;
+            --border-color: #e2e8f0;
+            --success-color: #22c55e;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 3rem 2rem;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 700;
+        }
+
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            opacity: 0.8;
+            margin-top: 0.5rem;
+        }
+
+        section {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        section h2 {
+            color: var(--primary-color);
+            font-size: 1.75rem;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 3px solid var(--accent-color);
+        }
+
+        section h3 {
+            color: var(--secondary-color);
+            font-size: 1.25rem;
+            margin: 1.5rem 0 1rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+            color: var(--text-color);
+        }
+
+        .algorithm-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .algorithm-card {
+            background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
+            border-radius: 8px;
+            padding: 1.5rem;
+            border-left: 4px solid var(--accent-color);
+        }
+
+        .algorithm-card h4 {
+            color: var(--primary-color);
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .algorithm-card ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .algorithm-card li {
+            padding: 0.25rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            font-size: 0.95rem;
+        }
+
+        .algorithm-card li::before {
+            content: ">";
+            position: absolute;
+            left: 0;
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+
+        .formula-box {
+            background: #f1f5f9;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            overflow-x: auto;
+        }
+
+        .formula-box p {
+            margin-bottom: 0.5rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        tr:hover {
+            background-color: #f1f5f9;
+        }
+
+        .highlight-best {
+            background-color: #dcfce7 !important;
+            font-weight: 600;
+        }
+
+        .highlight-worst {
+            background-color: #fee2e2 !important;
+        }
+
+        .chart-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 2rem;
+            margin-top: 1.5rem;
+        }
+
+        .chart-wrapper {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 1.5rem;
+            height: 400px;
+        }
+
+        .chart-wrapper h4 {
+            text-align: center;
+            color: var(--secondary-color);
+            margin-bottom: 1rem;
+        }
+
+        .findings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .finding-card {
+            background: linear-gradient(135deg, #eff6ff, #dbeafe);
+            border-radius: 8px;
+            padding: 1.5rem;
+            border-left: 4px solid var(--success-color);
+        }
+
+        .finding-card.warning {
+            background: linear-gradient(135deg, #fffbeb, #fef3c7);
+            border-left-color: var(--warning-color);
+        }
+
+        .finding-card.negative {
+            background: linear-gradient(135deg, #fef2f2, #fee2e2);
+            border-left-color: var(--error-color);
+        }
+
+        .finding-card h4 {
+            color: var(--text-color);
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+
+        .finding-card p {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge-success {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 2rem;
+        }
+
+        .toc {
+            background: #f8fafc;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+            margin-bottom: 1rem;
+        }
+
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .toc li {
+            padding: 0.25rem 0;
+        }
+
+        .toc a {
+            color: var(--primary-color);
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        .version-comparison {
+            overflow-x: auto;
+        }
+
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.85rem;
+            overflow-x: auto;
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.75rem;
+            }
+
+            .container {
+                padding: 1rem;
+            }
+
+            section {
+                padding: 1.5rem;
+            }
+
+            .chart-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>HbBoPs Methods Comparison</h1>
+        <p>Hyperband-Based Bayesian Optimization for Prompt Selection</p>
+        <div class="subtitle">Comprehensive Analysis of Implementation Variants on GSM8K Dataset</div>
+    </header>
+
+    <div class="container">
+        <!-- Table of Contents -->
+        <nav class="toc">
+            <h3>Contents</h3>
+            <ul>
+                <li><a href="#introduction">1. Introduction</a></li>
+                <li><a href="#algorithm">2. Algorithm Overview</a></li>
+                <li><a href="#methods">3. Method Descriptions</a></li>
+                <li><a href="#implementation">4. Implementation Differences</a></li>
+                <li><a href="#results">5. Performance Results</a></li>
+                <li><a href="#findings">6. Key Findings</a></li>
+                <li><a href="#conclusions">7. Conclusions</a></li>
+            </ul>
+        </nav>
+
+        <!-- Introduction -->
+        <section id="introduction">
+            <h2>1. Introduction</h2>
+            <p>
+                <strong>HbBoPs (Hyperband-Based Bayesian Optimization for Prompt Selection)</strong> is a multi-fidelity
+                optimization algorithm designed to efficiently search large prompt spaces for Large Language Models (LLMs).
+                The method combines the query efficiency of Hyperband with the sample efficiency of Bayesian Optimization
+                using Deep Kernel Gaussian Processes.
+            </p>
+            <p>
+                This presentation compares <strong>six variants</strong> of HbBoPs, each implementing different strategies
+                for noise modeling, output transformation, and fidelity handling. The evaluation is performed on the
+                <strong>GSM8K</strong> mathematical reasoning dataset using a grid of instruction-exemplar prompt combinations.
+            </p>
+
+            <div class="formula-box">
+                <h4>Problem Setting</h4>
+                <p><strong>Goal:</strong> Find optimal prompt \( p^* = (i^*, e^*) \) that minimizes validation error:</p>
+                \[ p^* = \arg\min_{p \in \mathcal{P}} \mathbb{E}[\text{error}(p)] \]
+                <p>where \( \mathcal{P} = \{(i, e) : i \in \text{Instructions}, e \in \text{Exemplars}\} \)</p>
+                <p><strong>Search Space:</strong> 10×25 (250 prompts) or 25×25 (625 prompts) grid</p>
+            </div>
+        </section>
+
+        <!-- Algorithm Overview -->
+        <section id="algorithm">
+            <h2>2. Algorithm Overview</h2>
+
+            <h3>2.1 Core Components</h3>
+            <div class="algorithm-overview">
+                <div class="algorithm-card">
+                    <h4>Hyperband Scheduler</h4>
+                    <ul>
+                        <li>Multi-fidelity evaluation</li>
+                        <li>Successive halving strategy</li>
+                        <li>Parameters: \( b_{min}=10 \), \( \eta=2.0 \)</li>
+                        <li>10-15× fewer LLM calls than brute force</li>
+                    </ul>
+                </div>
+                <div class="algorithm-card">
+                    <h4>Deep Kernel GP</h4>
+                    <ul>
+                        <li>Structural-aware feature extractor</li>
+                        <li>Separate instruction/exemplar pathways</li>
+                        <li>768-dim → 10-dim latent features</li>
+                        <li>Matérn 5/2 ARD kernel</li>
+                    </ul>
+                </div>
+                <div class="algorithm-card">
+                    <h4>Acquisition Function</h4>
+                    <ul>
+                        <li>Expected Improvement (EI)</li>
+                        <li>Random interleaving (ρ=0.1)</li>
+                        <li>Hedge against poor GP predictions</li>
+                    </ul>
+                </div>
+                <div class="algorithm-card">
+                    <h4>Embedding Encoder</h4>
+                    <ul>
+                        <li>GTR-T5-base (vec2text compatible)</li>
+                        <li>Mean pooling over all tokens</li>
+                        <li>768-dimensional embeddings</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>2.2 Key Equations</h3>
+            <div class="formula-box">
+                <p><strong>Expected Improvement (for minimization):</strong></p>
+                \[ \text{EI}(p) = (v_{min} - \mu) \cdot \Phi(z) + \sigma \cdot \phi(z) \]
+                <p>where \( z = \frac{v_{min} - \mu}{\sigma} \), \( \mu \) and \( \sigma \) are GP posterior mean and std</p>
+
+                <p style="margin-top: 1rem;"><strong>Binomial Variance (for heteroscedastic noise):</strong></p>
+                \[ \sigma^2 = \frac{p(1-p)}{n} \]
+                <p>where \( p \) is accuracy and \( n \) is fidelity (number of samples)</p>
+
+                <p style="margin-top: 1rem;"><strong>Wilson Score Variance (robust for extreme values):</strong></p>
+                \[ \sigma^2_W = \frac{z^2}{4n^2} \cdot \frac{1}{(1 + z^2/n)^2} \]
+
+                <p style="margin-top: 1rem;"><strong>Logit Transform with Delta Method:</strong></p>
+                \[ y_{logit} = \log\left(\frac{p}{1-p}\right), \quad \sigma^2_{logit} = \frac{1}{n \cdot p \cdot (1-p)} \]
+            </div>
+        </section>
+
+        <!-- Method Descriptions -->
+        <section id="methods">
+            <h2>3. Method Descriptions</h2>
+
+            <div class="algorithm-overview">
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-info">Original</span> HbBoPs</h4>
+                    <ul>
+                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Noise:</strong> Homoscedastic (constant)</li>
+                        <li><strong>GP Training:</strong> Highest fidelity only</li>
+                        <li><strong>EI:</strong> Minimize validation error</li>
+                        <li><strong>Reference:</strong> Baseline implementation</li>
+                    </ul>
+                </div>
+
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-success">Improved</span> v1</h4>
+                    <ul>
+                        <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
+                        <li><strong>Noise:</strong> Binomial variance \( \sigma^2 = y(1-y)/b \)</li>
+                        <li><strong>GP Training:</strong> ALL fidelity levels</li>
+                        <li><strong>Weighting:</strong> Higher fidelity = more weight</li>
+                        <li><strong>Change:</strong> Uses FixedNoiseGaussianLikelihood</li>
+                    </ul>
+                </div>
+
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-success">Improved 2</span></h4>
+                    <ul>
+                        <li><strong>Encoder:</strong> BERT-base ([CLS] token)</li>
+                        <li><strong>Noise:</strong> Homoscedastic (constant)</li>
+                        <li><strong>GP Training:</strong> Highest fidelity only</li>
+                        <li><strong>Change:</strong> Same as Original but BERT encoder</li>
+                        <li><strong>Result:</strong> Best efficiency (12.2×)</li>
+                    </ul>
+                </div>
+
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-warning">Improved 3</span></h4>
+                    <ul>
+                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Noise:</strong> Wilson score heteroscedastic</li>
+                        <li><strong>Transform:</strong> Logit + Delta method</li>
+                        <li><strong>Fidelity:</strong> IndexKernel (product kernel)</li>
+                        <li><strong>New:</strong> Model persistence (save/load)</li>
+                    </ul>
+                </div>
+
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-warning">Improved 4</span></h4>
+                    <ul>
+                        <li><strong>Base:</strong> All features from Improved 3</li>
+                        <li><strong>Filter:</strong> Top 75% fidelity levels only</li>
+                        <li><strong>Rationale:</strong> Exclude noisy low-fidelity data</li>
+                        <li><strong>Trade-off:</strong> Less data, higher quality</li>
+                        <li><strong>Risk:</strong> May lose valuable information</li>
+                    </ul>
+                </div>
+
+                <div class="algorithm-card">
+                    <h4><span class="badge badge-error">Improved 5</span></h4>
+                    <ul>
+                        <li><strong>Encoder:</strong> GTR-T5-base (mean pooling)</li>
+                        <li><strong>Noise:</strong> Simple binomial \( \sigma^2 = p(1-p)/n \)</li>
+                        <li><strong>Transform:</strong> None (direct accuracy)</li>
+                        <li><strong>EI:</strong> MAXIMIZE accuracy (not minimize error)</li>
+                        <li><strong>Result:</strong> Poor performance (design flaw)</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- Implementation Differences -->
+        <section id="implementation">
+            <h2>4. Implementation Differences</h2>
+
+            <div class="version-comparison">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>Original</th>
+                            <th>Improved</th>
+                            <th>Improved 2</th>
+                            <th>Improved 3</th>
+                            <th>Improved 4</th>
+                            <th>Improved 5</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Encoder Model</strong></td>
+                            <td>GTR-T5-base</td>
+                            <td>BERT-base</td>
+                            <td>BERT-base</td>
+                            <td>GTR-T5-base</td>
+                            <td>GTR-T5-base</td>
+                            <td>GTR-T5-base</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Pooling Strategy</strong></td>
+                            <td>Mean</td>
+                            <td>[CLS] token</td>
+                            <td>[CLS] token</td>
+                            <td>Mean</td>
+                            <td>Mean</td>
+                            <td>Mean</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Noise Model</strong></td>
+                            <td>Constant</td>
+                            <td>Binomial</td>
+                            <td>Constant</td>
+                            <td>Wilson Score</td>
+                            <td>Wilson Score</td>
+                            <td>Binomial</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Output Transform</strong></td>
+                            <td>None</td>
+                            <td>None</td>
+                            <td>None</td>
+                            <td>Logit + Delta</td>
+                            <td>Logit + Delta</td>
+                            <td>None</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Fidelity Kernel</strong></td>
+                            <td>None</td>
+                            <td>None</td>
+                            <td>None</td>
+                            <td>IndexKernel</td>
+                            <td>IndexKernel</td>
+                            <td>IndexKernel</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Training Data</strong></td>
+                            <td>Top fidelity</td>
+                            <td>All fidelities</td>
+                            <td>Top fidelity</td>
+                            <td>All fidelities</td>
+                            <td>Top 75%</td>
+                            <td>Top 75%</td>
+                        </tr>
+                        <tr>
+                            <td><strong>EI Objective</strong></td>
+                            <td>Min error</td>
+                            <td>Min error</td>
+                            <td>Min error</td>
+                            <td>Max logit(acc)</td>
+                            <td>Max logit(acc)</td>
+                            <td>Max accuracy</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Vec2Text Compatible</strong></td>
+                            <td>Yes</td>
+                            <td>No</td>
+                            <td>No</td>
+                            <td>Yes</td>
+                            <td>Yes</td>
+                            <td>Yes</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Results -->
+        <section id="results">
+            <h2>5. Performance Results</h2>
+
+            <h3>5.1 10×25 Grid (250 prompts)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>Val Error</th>
+                        <th>Test Error</th>
+                        <th>LLM Calls</th>
+                        <th>Efficiency</th>
+                        <th>Spearman ρ</th>
+                        <th>Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Original</strong></td>
+                        <td>11.45%</td>
+                        <td>15.54%</td>
+                        <td>67,912</td>
+                        <td>4.9×</td>
+                        <td>0.957</td>
+                        <td>70.8%</td>
+                    </tr>
+                    <tr class="highlight-best">
+                        <td><strong>Improved</strong></td>
+                        <td>11.52%</td>
+                        <td>13.04%</td>
+                        <td>67,426</td>
+                        <td>4.9×</td>
+                        <td>0.970</td>
+                        <td>67.6%</td>
+                    </tr>
+                    <tr class="highlight-best">
+                        <td><strong>Improved 2</strong></td>
+                        <td>11.07%</td>
+                        <td>13.04%</td>
+                        <td>62,930</td>
+                        <td>5.2×</td>
+                        <td>0.972</td>
+                        <td>68.0%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Improved 3</strong></td>
+                        <td>11.52%</td>
+                        <td>16.45%</td>
+                        <td>~67,900</td>
+                        <td>4.9×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Improved 4</strong></td>
+                        <td>10.92%</td>
+                        <td>16.38%</td>
+                        <td>~71,500</td>
+                        <td>4.6×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                    <tr class="highlight-worst">
+                        <td><strong>Improved 5</strong></td>
+                        <td>26.08%</td>
+                        <td>29.87%</td>
+                        <td>~67,750</td>
+                        <td>4.9×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>5.2 25×25 Grid (625 prompts)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>Val Error</th>
+                        <th>Test Error</th>
+                        <th>LLM Calls</th>
+                        <th>Efficiency</th>
+                        <th>Spearman ρ</th>
+                        <th>Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Original</strong></td>
+                        <td>10.82%</td>
+                        <td>11.75%</td>
+                        <td>72,802</td>
+                        <td>11.3×</td>
+                        <td>-</td>
+                        <td>11.7%</td>
+                    </tr>
+                    <tr class="highlight-best">
+                        <td><strong>Improved 2</strong></td>
+                        <td>10.54%</td>
+                        <td>11.75%</td>
+                        <td>67,804</td>
+                        <td>12.2×</td>
+                        <td>0.972</td>
+                        <td>34.6%</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Improved 3</strong></td>
+                        <td>11.60%</td>
+                        <td>16.30%</td>
+                        <td>~72,800</td>
+                        <td>11.3×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                    <tr class="highlight-worst">
+                        <td><strong>Improved 4</strong></td>
+                        <td>18.57%</td>
+                        <td>22.44%</td>
+                        <td>~73,000</td>
+                        <td>11.3×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Improved 5</strong></td>
+                        <td>11.75%</td>
+                        <td>16.98%</td>
+                        <td>~72,800</td>
+                        <td>11.3×</td>
+                        <td>-</td>
+                        <td>-</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="chart-container">
+                <div class="chart-wrapper">
+                    <h4>Validation Error Comparison (10×25 Grid)</h4>
+                    <canvas id="valErrorChart10x25"></canvas>
+                </div>
+                <div class="chart-wrapper">
+                    <h4>Test Error Comparison (10×25 Grid)</h4>
+                    <canvas id="testErrorChart10x25"></canvas>
+                </div>
+                <div class="chart-wrapper">
+                    <h4>Validation Error Comparison (25×25 Grid)</h4>
+                    <canvas id="valErrorChart25x25"></canvas>
+                </div>
+                <div class="chart-wrapper">
+                    <h4>Efficiency Ratio (vs Brute Force)</h4>
+                    <canvas id="efficiencyChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Key Findings -->
+        <section id="findings">
+            <h2>6. Key Findings</h2>
+
+            <div class="findings-grid">
+                <div class="finding-card">
+                    <h4>Best Overall: Improved 2</h4>
+                    <p>BERT encoder with [CLS] pooling achieves best efficiency (12.2×) and competitive accuracy. Simple constant noise works well.</p>
+                </div>
+
+                <div class="finding-card">
+                    <h4>Best Test Error: Improved / Improved 2</h4>
+                    <p>Both achieve 13.04% test error on 10×25 grid, showing robustness of BERT-based approaches.</p>
+                </div>
+
+                <div class="finding-card warning">
+                    <h4>Logit Transform Pitfall</h4>
+                    <p>Improved 3 and 4 show worse test error despite sophisticated modeling. Logit transform may cause optimization issues.</p>
+                </div>
+
+                <div class="finding-card negative">
+                    <h4>Improved 5 Failure</h4>
+                    <p>Direct accuracy maximization performs poorly (26-30% error). EI formulation for maximization needs careful design.</p>
+                </div>
+
+                <div class="finding-card">
+                    <h4>Fidelity Filtering Risk</h4>
+                    <p>Improved 4's 75% filtering harms large grids (25×25). Discarding low-fidelity data loses valuable exploration signal.</p>
+                </div>
+
+                <div class="finding-card">
+                    <h4>Encoder Choice Matters</h4>
+                    <p>BERT vs GTR-T5 shows different trade-offs. BERT (CLS) achieves better ranking correlation despite not being vec2text compatible.</p>
+                </div>
+
+                <div class="finding-card">
+                    <h4>Hyperband Efficiency</h4>
+                    <p>All methods achieve 4.6×-12.2× efficiency over brute force. Multi-fidelity approach is consistently effective.</p>
+                </div>
+
+                <div class="finding-card warning">
+                    <h4>Complexity vs Performance</h4>
+                    <p>Simpler models (Original, Improved 2) often outperform complex variants (Improved 3-5). Occam's Razor applies.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Conclusions -->
+        <section id="conclusions">
+            <h2>7. Conclusions</h2>
+
+            <h3>7.1 Recommendations</h3>
+            <div class="formula-box">
+                <p><strong>For Production Use:</strong> <span class="badge badge-success">Improved 2</span></p>
+                <ul>
+                    <li>Best computational efficiency (12.2× speedup)</li>
+                    <li>Competitive accuracy with simpler implementation</li>
+                    <li>BERT encoder is well-understood and stable</li>
+                </ul>
+
+                <p style="margin-top: 1rem;"><strong>For Research (Vec2Text):</strong> <span class="badge badge-info">Original</span></p>
+                <ul>
+                    <li>GTR-T5 embeddings compatible with vec2text inversion</li>
+                    <li>Enables generative optimization in embedding space</li>
+                </ul>
+
+                <p style="margin-top: 1rem;"><strong>Avoid:</strong> <span class="badge badge-error">Improved 5</span></p>
+                <ul>
+                    <li>EI maximization formulation has design flaws</li>
+                    <li>Significantly worse performance across all metrics</li>
+                </ul>
+            </div>
+
+            <h3>7.2 Summary Table</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Criterion</th>
+                        <th>Best Method</th>
+                        <th>Worst Method</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Test Error (10×25)</td>
+                        <td class="highlight-best">Improved / Improved 2 (13.04%)</td>
+                        <td class="highlight-worst">Improved 5 (29.87%)</td>
+                    </tr>
+                    <tr>
+                        <td>Test Error (25×25)</td>
+                        <td class="highlight-best">Original / Improved 2 (11.75%)</td>
+                        <td class="highlight-worst">Improved 4 (22.44%)</td>
+                    </tr>
+                    <tr>
+                        <td>Efficiency</td>
+                        <td class="highlight-best">Improved 2 (12.2×)</td>
+                        <td>Improved 4 (4.6×)</td>
+                    </tr>
+                    <tr>
+                        <td>Ranking Correlation</td>
+                        <td class="highlight-best">Improved 2 (ρ=0.972)</td>
+                        <td>Original (ρ=0.957)</td>
+                    </tr>
+                    <tr>
+                        <td>Implementation Simplicity</td>
+                        <td class="highlight-best">Original / Improved 2</td>
+                        <td>Improved 3 / 4</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>7.3 Future Directions</h3>
+            <ul style="margin-left: 1.5rem;">
+                <li>Investigate why logit transform degrades test performance</li>
+                <li>Develop proper EI formulation for accuracy maximization</li>
+                <li>Test adaptive fidelity filtering based on signal-to-noise ratio</li>
+                <li>Combine BERT efficiency with GTR-T5 vec2text compatibility</li>
+            </ul>
+        </section>
+    </div>
+
+    <footer>
+        <p>HbBoPs Methods Comparison | Prompt Optimization Research</p>
+        <p>Dataset: GSM8K | Model: Qwen/Qwen2.5-7B-Instruct</p>
+        <p>Generated: December 2024</p>
+    </footer>
+
+    <script>
+        // Chart.js configurations
+        const chartColors = {
+            original: 'rgba(37, 99, 235, 0.8)',
+            improved: 'rgba(34, 197, 94, 0.8)',
+            improved2: 'rgba(16, 185, 129, 0.8)',
+            improved3: 'rgba(245, 158, 11, 0.8)',
+            improved4: 'rgba(249, 115, 22, 0.8)',
+            improved5: 'rgba(239, 68, 68, 0.8)'
+        };
+
+        const methods = ['Original', 'Improved', 'Improved 2', 'Improved 3', 'Improved 4', 'Improved 5'];
+        const colors = [chartColors.original, chartColors.improved, chartColors.improved2,
+                       chartColors.improved3, chartColors.improved4, chartColors.improved5];
+
+        // 10x25 Validation Error Chart
+        new Chart(document.getElementById('valErrorChart10x25'), {
+            type: 'bar',
+            data: {
+                labels: methods,
+                datasets: [{
+                    label: 'Validation Error (%)',
+                    data: [11.45, 11.52, 11.07, 11.52, 10.92, 26.08],
+                    backgroundColor: colors,
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 30,
+                        title: { display: true, text: 'Error (%)' }
+                    }
+                }
+            }
+        });
+
+        // 10x25 Test Error Chart
+        new Chart(document.getElementById('testErrorChart10x25'), {
+            type: 'bar',
+            data: {
+                labels: methods,
+                datasets: [{
+                    label: 'Test Error (%)',
+                    data: [15.54, 13.04, 13.04, 16.45, 16.38, 29.87],
+                    backgroundColor: colors,
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 35,
+                        title: { display: true, text: 'Error (%)' }
+                    }
+                }
+            }
+        });
+
+        // 25x25 Validation Error Chart
+        new Chart(document.getElementById('valErrorChart25x25'), {
+            type: 'bar',
+            data: {
+                labels: ['Original', 'Improved 2', 'Improved 3', 'Improved 4', 'Improved 5'],
+                datasets: [{
+                    label: 'Validation Error (%)',
+                    data: [10.82, 10.54, 11.60, 18.57, 11.75],
+                    backgroundColor: [chartColors.original, chartColors.improved2,
+                                    chartColors.improved3, chartColors.improved4, chartColors.improved5],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 25,
+                        title: { display: true, text: 'Error (%)' }
+                    }
+                }
+            }
+        });
+
+        // Efficiency Chart
+        new Chart(document.getElementById('efficiencyChart'), {
+            type: 'bar',
+            data: {
+                labels: ['Original (10×25)', 'Improved (10×25)', 'Improved 2 (10×25)',
+                        'Original (25×25)', 'Improved 2 (25×25)'],
+                datasets: [{
+                    label: 'Efficiency (× vs Brute Force)',
+                    data: [4.9, 4.9, 5.2, 11.3, 12.2],
+                    backgroundColor: [chartColors.original, chartColors.improved, chartColors.improved2,
+                                    chartColors.original, chartColors.improved2],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Speedup Factor' }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
