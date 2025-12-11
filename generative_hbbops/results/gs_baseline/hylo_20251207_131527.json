@@ -1,0 +1,213 @@
+{
+  "config": {
+    "data_path": "/home/prusek/NLP/datasets/hbbops/full_grid_combined.jsonl",
+    "instructions_path": "/home/prusek/NLP/datasets/hbbops/instructions_25.txt",
+    "exemplars_path": "/home/prusek/NLP/datasets/hbbops/examples_25.txt",
+    "validation_path": "/home/prusek/NLP/hbbops/data/validation.json",
+    "output_dir": "generative_hbbops/results/gs_baseline",
+    "n_initial_samples": 20,
+    "gp_train_epochs": 3000,
+    "gp_lr": 0.01,
+    "gp_patience": 10,
+    "gp_min_observations": 4,
+    "encoder_name": "sentence-transformers/gtr-t5-base",
+    "embedding_dim": 768,
+    "strategy": "gumbel_softmax",
+    "cd_n_steps": 500,
+    "cd_lr": 0.01,
+    "cd_convergence_threshold": 1e-06,
+    "cd_max_iterations": 10,
+    "gs_n_steps": 1000,
+    "gs_lr": 0.01,
+    "gs_initial_temperature": 5.0,
+    "gs_final_temperature": 0.1,
+    "gs_anneal_rate": 0.99,
+    "vec2text_num_steps": 50,
+    "vec2text_beam_width": 4,
+    "latent_dim": 10,
+    "save_visualizations": true,
+    "visualization_dpi": 300,
+    "device": "auto",
+    "seed": 42,
+    "use_log_ei": false,
+    "gradient_clip_norm": null,
+    "ei_epsilon": 1e-08,
+    "perturbation_scale": 0.1,
+    "cd_n_restarts": 5,
+    "use_leaky_relu": false,
+    "leaky_relu_slope": 0.01
+  },
+  "timestamp": "2025-12-07T13:15:27.548658",
+  "initial_samples": [
+    {
+      "prompt_idx": 534,
+      "instruction_id": 21,
+      "exemplar_id": 9,
+      "error_rate": 0.11751326762699014,
+      "timestamp": "2025-11-26T16:29:10.008041"
+    },
+    {
+      "prompt_idx": 537,
+      "instruction_id": 21,
+      "exemplar_id": 12,
+      "error_rate": 0.12661106899166036,
+      "timestamp": "2025-11-26T16:42:31.227240"
+    },
+    {
+      "prompt_idx": 207,
+      "instruction_id": 8,
+      "exemplar_id": 7,
+      "error_rate": 0.13040181956027294,
+      "timestamp": "2025-11-26T16:30:16.123744"
+    },
+    {
+      "prompt_idx": 212,
+      "instruction_id": 8,
+      "exemplar_id": 12,
+      "error_rate": 0.13419257012888552,
+      "timestamp": "2025-11-26T16:55:37.275666"
+    },
+    {
+      "prompt_idx": 232,
+      "instruction_id": 9,
+      "exemplar_id": 7,
+      "error_rate": 0.13874147081122062,
+      "timestamp": "2025-11-26T18:19:53.446154"
+    },
+    {
+      "prompt_idx": 211,
+      "instruction_id": 8,
+      "exemplar_id": 11,
+      "error_rate": 0.13949962092494314,
+      "timestamp": "2025-11-26T16:47:14.388217"
+    },
+    {
+      "prompt_idx": 236,
+      "instruction_id": 9,
+      "exemplar_id": 11,
+      "error_rate": 0.14935557240333586,
+      "timestamp": "2025-11-26T18:36:05.347970"
+    },
+    {
+      "prompt_idx": 209,
+      "instruction_id": 8,
+      "exemplar_id": 9,
+      "error_rate": 0.15466262319939347,
+      "timestamp": "2025-11-26T16:39:01.204791"
+    },
+    {
+      "prompt_idx": 532,
+      "instruction_id": 21,
+      "exemplar_id": 7,
+      "error_rate": 0.15466262319939347,
+      "timestamp": "2025-11-26T16:22:10.645865"
+    },
+    {
+      "prompt_idx": 222,
+      "instruction_id": 8,
+      "exemplar_id": 22,
+      "error_rate": 0.16148597422289612,
+      "timestamp": "2025-11-26T17:39:19.895414"
+    },
+    {
+      "prompt_idx": 242,
+      "instruction_id": 9,
+      "exemplar_id": 17,
+      "error_rate": 0.16224412433661864,
+      "timestamp": "2025-11-26T19:00:56.388591"
+    },
+    {
+      "prompt_idx": 247,
+      "instruction_id": 9,
+      "exemplar_id": 22,
+      "error_rate": 0.1652767247915087,
+      "timestamp": "2025-11-26T19:17:28.412397"
+    },
+    {
+      "prompt_idx": 311,
+      "instruction_id": 12,
+      "exemplar_id": 11,
+      "error_rate": 0.1683093252463988,
+      "timestamp": "2025-11-26T23:34:52.868609"
+    },
+    {
+      "prompt_idx": 586,
+      "instruction_id": 23,
+      "exemplar_id": 11,
+      "error_rate": 0.17513267626990145,
+      "timestamp": "2025-11-26T19:35:10.426704"
+    },
+    {
+      "prompt_idx": 203,
+      "instruction_id": 8,
+      "exemplar_id": 3,
+      "error_rate": 0.17816527672479152,
+      "timestamp": "2025-11-26T16:13:33.743571"
+    },
+    {
+      "prompt_idx": 223,
+      "instruction_id": 8,
+      "exemplar_id": 23,
+      "error_rate": 0.17892342683851403,
+      "timestamp": "2025-11-26T17:39:19.920179"
+    },
+    {
+      "prompt_idx": 241,
+      "instruction_id": 9,
+      "exemplar_id": 16,
+      "error_rate": 0.18043972706595907,
+      "timestamp": "2025-11-26T18:52:53.785825"
+    },
+    {
+      "prompt_idx": 257,
+      "instruction_id": 10,
+      "exemplar_id": 7,
+      "error_rate": 0.18271417740712662,
+      "timestamp": "2025-11-26T19:59:53.152681"
+    },
+    {
+      "prompt_idx": 261,
+      "instruction_id": 10,
+      "exemplar_id": 11,
+      "error_rate": 0.18802122820318423,
+      "timestamp": "2025-11-26T20:17:33.713177"
+    },
+    {
+      "prompt_idx": 186,
+      "instruction_id": 7,
+      "exemplar_id": 11,
+      "error_rate": 0.1910538286580743,
+      "timestamp": "2025-11-26T15:01:22.631755"
+    }
+  ],
+  "vmin_b": 0.11751326762699014,
+  "best_initial_sample": {
+    "prompt_idx": 534,
+    "instruction_id": 21,
+    "exemplar_id": 9,
+    "error_rate": 0.11751326762699014,
+    "timestamp": "2025-11-26T16:29:10.008041"
+  },
+  "optimization": {
+    "strategy": "gumbel_softmax",
+    "n_iterations": 1000,
+    "final_ei": 0.0012321150861680508,
+    "selected_exemplar_idx": 9
+  },
+  "inversion": {
+    "instruction_text": "\u2013 where it\u2019s in Western Milk, then in British Milk, now in New York Milk Producers\u2019 Milk \u2013 but contrary to a",
+    "exemplar_id": 9,
+    "exemplar_text": "# Exemplar 10 (original ID: 18)\n\nQ: Mary's sheep can run 12 feet per second, and her sheepdog can run 20 feet per second. A sheep standing 160 feet away from the sheep dog bolts, and the dog runs after it. How many seconds does it take the dog to catch the sheep?\nA: First find how much faster the dog is than the sheep: 20 feet/second - 12 feet/second = <<20-12=8>>8 feet/second\n\nQ: Hilary is shucking corn from ears that grew on her farm. She gets four ears of corn per stalk, and she has 108 stalk",
+    "cosine_similarity": 0.023235399276018143
+  },
+  "prediction": {
+    "error_rate_mean": 0.17385417222976685,
+    "error_rate_std": 0.00836766418069601,
+    "accuracy_mean": 0.8261458277702332
+  },
+  "visualizations": [
+    "generative_hbbops/results/gs_baseline/hylo_1_initial_gp.png",
+    "generative_hbbops/results/gs_baseline/hylo_2_optimization.png",
+    "generative_hbbops/results/gs_baseline/hylo_3_verification.png"
+  ]
+}

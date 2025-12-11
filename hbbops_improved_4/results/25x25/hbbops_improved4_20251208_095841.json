@@ -1,0 +1,47 @@
+{
+  "method": "HbBoPs_Improved_4",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "config": {
+    "bmin": 10,
+    "eta": 2.0,
+    "logit_epsilon": 0.001,
+    "improvements": [
+      "heteroscedastic_noise_wilson",
+      "output_warping_logit_delta",
+      "multi_fidelity_gp_product_kernel",
+      "top_75pct_fidelity_filtering"
+    ]
+  },
+  "best_prompt": {
+    "instruction_id": 8,
+    "exemplar_id": 10,
+    "instruction": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar": "Q: Moses and Tiffany want to see who is faster. But instead of a race, they just start running down the block. Tiffany runs 6 blocks in 3 minutes. Moses runs 12 blocks in 8 minutes. What is the speed (defined as blocks per minute) of the runner with the higher average speed?\nA: Tiffany runs 2 blocks per minute because 6 / 3 = <<6/3=2>>2\n\nQ: In 2 years, Maxwell will be twice his sister's age. If his sister is now 2, how old is Maxwell now?\nA: In two years, Maxwell's sister will be 2 years + 2 years = <<2+2=4>>4 years old.\n\nQ: On the planet Orbius-5, there are 250 days per year, and each year is equally divided into 5 seasons. If an astronaut from earth lands on planet Orbius-5 and stays there for 3 seasons before returning to earth, what is the number of days the astronaut will spend on Orbius-5?\nA: If 1 year is 250 days, and each year is divided into 5 equal-length seasons, then each season is 250/5=<<250/5=50>>50 days long.\n\nQ: Janice opened an art book that she had found in the library and found 5 drawings on the first page. After opening the first ten pages, she realized that the number of drawings on each page increased by five after every page. How many drawings were in the first five pages?\nA: If the first page had 5 drawings, and the number of drawings on each page increased by five, the second page had 5+5 = <<5+5=10>>10\n\nQ: After violating the group's policies, 20 members of a Facebook group were removed by the group's admin. If each member posted 50 messages per day in the group and the number of members in the group was 150 before the admin removed some, calculate the total number of messages the remaining members would send in a week.\nA: If there were 150 members in the group before the admin removed 20, then 150-20 = <<150-20=130>>130 members remained after 20 were removed."
+  },
+  "validation_error": 0.18574677786201665,
+  "test_error": 0.22441243366186506,
+  "num_evaluations": 577,
+  "fidelity_levels": [
+    10,
+    20,
+    40,
+    41,
+    80,
+    82,
+    160,
+    164,
+    320,
+    328,
+    329,
+    640,
+    656,
+    658,
+    659,
+    1280,
+    1312,
+    1316,
+    1318,
+    1319
+  ],
+  "num_design_data_points": 599
+}

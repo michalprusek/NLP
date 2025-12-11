@@ -1,0 +1,46 @@
+{
+  "method": "HbBoPs_Improved_5",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "config": {
+    "bmin": 10,
+    "eta": 2.0,
+    "improvements": [
+      "heteroscedastic_noise_binomial",
+      "no_logit_transform",
+      "multi_fidelity_gp_product_kernel",
+      "top_75pct_fidelity_filtering"
+    ]
+  },
+  "best_prompt": {
+    "instruction_id": 2,
+    "exemplar_id": 22,
+    "instruction": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar": "Q: A dog barks 30 times per minute.  If 2 dogs bark 30 times per minute, how many times will they have barked after 10 minutes?\nA: There are 2 dogs and they each bark 30 times per minute so together they bark 2*30 = <<2*30=60>>60 times per minute\n\nQ: There are 248 pages in a book. Joanna can read 16 pages per hour. On Monday, she reads for 3 hours. On Tuesday, she reads for 6.5 hours. How many more hours does she need to read to finish the book?\nA: On Monday, Joanna reads 3*16=<<3*16=48>>48 pages.\n\nQ: James builds a 20 story building.  The first 10 stories are each 12 feet tall each.  The remaining floors are each 3 feet taller.  How tall is the building?\nA: The first 10 floors are 10*12=<<10*12=120>>120 feet\n\nQ: An apple tree has three times as many apples as the number of plums on a plum tree. If Damien picks 3/5 of the fruits from the trees, calculate the total number of plums and apples remaining on the tree if there were 180 apples on the apple tree before Damien picked any of the fruits.\nA: Initially, the were 180//3= <<180//3=60>>60 plums on the plum tree.\n\nQ: John and Anna bought some eBook readers. John bought 15 eBook readers less than Anna did. Unfortunately, John lost 3 eBook readers. If Anna bought 50 eBook readers, how many eBook readers do they have altogether?\nA: John bought 50-15 = <<50-15=35>>35 eBook readers."
+  },
+  "validation_error": 0.2608036391205459,
+  "test_error": 0.2987111448066717,
+  "num_evaluations": 535,
+  "fidelity_levels": [
+    10,
+    20,
+    40,
+    41,
+    80,
+    82,
+    160,
+    164,
+    320,
+    328,
+    329,
+    640,
+    656,
+    658,
+    659,
+    1280,
+    1312,
+    1316,
+    1318,
+    1319
+  ],
+  "num_design_data_points": 599
+}
