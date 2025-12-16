@@ -44,6 +44,9 @@ def aggregate_scores(
     if not error_rates:
         raise ValueError("error_rates cannot be empty")
 
+    if strategy == "weighted_softmin" and temperature <= 0:
+        raise ValueError("temperature must be positive for weighted_softmin strategy")
+
     models = list(error_rates.keys())
     errors = np.array([error_rates[m] for m in models])
 

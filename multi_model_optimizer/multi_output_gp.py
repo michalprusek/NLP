@@ -7,6 +7,7 @@ optimization by sharing information across models.
 """
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import gpytorch
@@ -15,7 +16,7 @@ import torch
 import torch.nn as nn
 
 # Add parent directory for imports
-sys.path.insert(0, "/home/prusek/NLP")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 class FeatureExtractor(nn.Module):

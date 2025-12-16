@@ -3,12 +3,13 @@ Configuration dataclasses for Multi-Model Universal Prompt Optimizer.
 """
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 
 # Add parent directory for imports
-sys.path.insert(0, "/home/prusek/NLP")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from hybrid_opro_hbbops.config import HybridConfig
 
 

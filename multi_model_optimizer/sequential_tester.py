@@ -7,10 +7,11 @@ guarantees using union bound (Bonferroni) correction.
 import math
 import sys
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Add parent directory for imports
-sys.path.insert(0, "/home/prusek/NLP")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from multi_model_optimizer.aggregation import aggregate_scores, compute_bounds_aggregated
 

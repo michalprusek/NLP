@@ -149,6 +149,9 @@ def run_opro_for_model(
 
     print(f"\nResults saved to: {result_file}")
 
+    # Store budget_used before cleanup
+    budget_used = optimizer.budget_used
+
     # Cleanup to free GPU memory
     del llm_client
     del optimizer
@@ -158,15 +161,15 @@ def run_opro_for_model(
     try:
         import torch
         torch.cuda.empty_cache()
-    except ImportError:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to clear CUDA cache: {e}")
 
     return {
         "model": model_name,
         "best_prompt": best_prompt,
         "validation_accuracy": validation_accuracy,
         "test_accuracy": test_accuracy,
-        "budget_used": optimizer.budget_used if 'optimizer' in dir() else budget,
+        "budget_used": budget_used,
     }
 
 

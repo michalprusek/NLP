@@ -9,14 +9,16 @@ import gc
 import os
 import re
 import sys
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 
 # Add parent directory for imports
-sys.path.insert(0, "/home/prusek/NLP")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from multi_model_optimizer.config import MultiModelConfig
 
@@ -360,8 +362,9 @@ class ModelEvaluatorPool:
                 results[model_name] = result.error_rate
                 print(f"  Accuracy: {1 - result.error_rate:.2%}")
             except Exception as e:
-                print(f"  Error: {e}")
-                results[model_name] = 1.0
+                print(f"  [ERROR] {type(e).__name__}: {e}")
+                traceback.print_exc()
+                results[model_name] = 1.0  # Worst-case error rate on failure
 
         return results
 
@@ -392,8 +395,8 @@ class ModelEvaluatorPool:
                     result = future.result(timeout=self.config.model_timeout)
                     results[model_name] = result.error_rate
                 except Exception as e:
-                    print(f"Error evaluating {model_name}: {e}")
-                    results[model_name] = 1.0
+                    print(f"[ERROR] {model_name}: {type(e).__name__}: {e}")
+                    results[model_name] = 1.0  # Worst-case error rate on failure
 
         return results
 
@@ -416,8 +419,8 @@ class ModelEvaluatorPool:
                 )
                 results[model_name] = result.error_rate
             except Exception as e:
-                print(f"Error evaluating {model_name}: {e}")
-                results[model_name] = 1.0
+                print(f"[ERROR] {model_name}: {type(e).__name__}: {e}")
+                results[model_name] = 1.0  # Worst-case error rate on failure
 
         return results
 
@@ -454,8 +457,8 @@ class ModelEvaluatorPool:
                     )
                     results[model_name] = result.num_correct
                 except Exception as e:
-                    print(f"Error evaluating {model_name}: {e}")
-                    results[model_name] = 0
+                    print(f"[ERROR] {model_name}: {type(e).__name__}: {e}")
+                    results[model_name] = 0  # Zero correct on failure
             return results
 
         # Multi-GPU mode
@@ -479,8 +482,8 @@ class ModelEvaluatorPool:
                         result = future.result(timeout=self.config.model_timeout)
                         results[model_name] = result.num_correct
                     except Exception as e:
-                        print(f"Error evaluating {model_name}: {e}")
-                        results[model_name] = 0
+                        print(f"[ERROR] {model_name}: {type(e).__name__}: {e}")
+                        results[model_name] = 0  # Zero correct on failure
         else:
             for model_name in self.models:
                 try:
@@ -493,8 +496,8 @@ class ModelEvaluatorPool:
                     )
                     results[model_name] = result.num_correct
                 except Exception as e:
-                    print(f"Error evaluating {model_name}: {e}")
-                    results[model_name] = 0
+                    print(f"[ERROR] {model_name}: {type(e).__name__}: {e}")
+                    results[model_name] = 0  # Zero correct on failure
 
         return results
 
@@ -566,10 +569,11 @@ class ModelEvaluatorPool:
                     print(f"    Evaluated {len(candidates)} candidates")
 
                 except Exception as e:
-                    print(f"    Error: {e}")
+                    print(f"    [ERROR] {model_name}: {type(e).__name__}: {e}")
+                    traceback.print_exc()
                     # Set error rate to 1.0 for all candidates on this model
                     for cand_idx in range(len(candidates)):
-                        results[cand_idx][model_name] = 1.0
+                        results[cand_idx][model_name] = 1.0  # Worst-case error rate on failure
         else:
             # Multi-GPU mode: still batch per model for consistency
             for model_name in self.models:
@@ -587,8 +591,8 @@ class ModelEvaluatorPool:
                         )
                         results[cand_idx][model_name] = result.error_rate
                     except Exception as e:
-                        print(f"    Error on candidate {cand_idx}: {e}")
-                        results[cand_idx][model_name] = 1.0
+                        print(f"    [ERROR] candidate {cand_idx} on {model_name}: {type(e).__name__}: {e}")
+                        results[cand_idx][model_name] = 1.0  # Worst-case error rate on failure
 
         return results
 

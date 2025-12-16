@@ -10,6 +10,7 @@ import os
 import random
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -17,7 +18,7 @@ import torch
 from transformers import AutoTokenizer, AutoModel
 
 # Add parent directory for imports
-sys.path.insert(0, "/home/prusek/NLP")
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from multi_model_optimizer.config import (
     MultiModelConfig,
@@ -252,8 +253,16 @@ class MultiModelHybridOptimizer:
         path = self.config.initial_instructions_path
         print(f"Loading initial instructions from: {path}")
 
-        with open(path, "r") as f:
-            content = f.read()
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Initial instructions file not found: {path}\n"
+                f"Please verify the --initial-instructions argument."
+            )
+        except IOError as e:
+            raise IOError(f"Error reading initial instructions file {path}: {e}")
 
         # Parse numbered list (1. instruction\n2. instruction\n...)
         instructions = []
@@ -275,8 +284,16 @@ class MultiModelHybridOptimizer:
         path = self.config.initial_exemplars_path
         print(f"Loading initial exemplars from: {path}")
 
-        with open(path, "r") as f:
-            content = f.read()
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Initial exemplars file not found: {path}\n"
+                f"Please verify the --initial-exemplars argument."
+            )
+        except IOError as e:
+            raise IOError(f"Error reading initial exemplars file {path}: {e}")
 
         # Parse exemplar blocks (separated by double newlines or markers)
         blocks = content.split("\n\n")
@@ -338,16 +355,10 @@ class MultiModelHybridOptimizer:
         print(f"  Backend: {self.config.meta_model_backend}")
 
         # Create LLM client for meta-model
-        from src.llm_client import create_llm_client, GeminiClient
+        from src.llm_client import create_llm_client
 
         # Check if using API-based meta-model (Gemini, OpenAI)
-        if self.config.meta_model_backend == "gemini":
-            # Use Gemini API directly
-            meta_llm = GeminiClient(
-                model_name=self.config.meta_model,
-                api_key=self.config.meta_model_api_key,
-            )
-        elif self.config.meta_model_backend in ("openai", "deepinfra"):
+        if self.config.meta_model_backend in ("gemini", "openai", "deepinfra"):
             # Use OpenAI-compatible API
             meta_llm = create_llm_client(
                 self.config.meta_model,
@@ -484,49 +495,63 @@ class MultiModelHybridOptimizer:
         init_ex_ids = self._load_initial_exemplars()
 
         # Load results
-        with open(path, "r") as f:
-            for line in f:
+        try:
+            with open(path, "r") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Phase 1 results file not found: {path}\n"
+                f"Please verify the --phase1-results argument."
+            )
+        except IOError as e:
+            raise IOError(f"Error reading Phase 1 results file {path}: {e}")
+
+        for line_num, line in enumerate(lines, 1):
+            try:
                 record = json.loads(line)
-                inst_id = record["instruction_id"]
-                ex_id = record["exemplar_id"]
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON at line {line_num} in {path}: {e}")
 
-                # This is for single-model results, need to adapt for multi-model
-                if "model_error_rates" in record:
-                    model_error_rates = record["model_error_rates"]
-                else:
-                    # Single model format: convert to multi-model
-                    error_rate = record["error_rate"]
-                    model_error_rates = {
-                        m: error_rate for m in self.config.target_models
-                    }
+            inst_id = record["instruction_id"]
+            ex_id = record["exemplar_id"]
 
-                fidelity = record.get("fidelity", self.nvalid)
+            # This is for single-model results, need to adapt for multi-model
+            if "model_error_rates" in record:
+                model_error_rates = record["model_error_rates"]
+            else:
+                # Single model format: convert to multi-model
+                error_rate = record["error_rate"]
+                model_error_rates = {
+                    m: error_rate for m in self.config.target_models
+                }
 
-                # Add to design data
-                point = MultiModelDesignPoint(
-                    instruction_id=inst_id,
-                    exemplar_id=ex_id,
-                    instruction_embedding=self.instruction_embeddings[inst_id],
-                    exemplar_embedding=self.exemplar_embeddings[ex_id],
-                    model_error_rates=model_error_rates,
-                    aggregated_error=aggregate_scores(
-                        model_error_rates,
-                        self.config.aggregation,
-                        self.config.softmin_temperature,
-                    ),
-                    fidelity=fidelity,
-                )
-                self.design_data.append(point)
+            fidelity = record.get("fidelity", self.nvalid)
 
-                # Update best
-                agg_accuracy = 1.0 - point.aggregated_error
-                if agg_accuracy > self.best_aggregated_accuracy:
-                    self.best_aggregated_accuracy = agg_accuracy
-                    self.best_instruction = self.instructions[inst_id]
-                    self.best_instruction_id = inst_id
-                    self.best_exemplar = self.exemplars[ex_id]
-                    self.best_exemplar_id = ex_id
-                    self.best_per_model_accuracies = {
+            # Add to design data
+            point = MultiModelDesignPoint(
+                instruction_id=inst_id,
+                exemplar_id=ex_id,
+                instruction_embedding=self.instruction_embeddings[inst_id],
+                exemplar_embedding=self.exemplar_embeddings[ex_id],
+                model_error_rates=model_error_rates,
+                aggregated_error=aggregate_scores(
+                    model_error_rates,
+                    self.config.aggregation,
+                    self.config.softmin_temperature,
+                ),
+                fidelity=fidelity,
+            )
+            self.design_data.append(point)
+
+            # Update best
+            agg_accuracy = 1.0 - point.aggregated_error
+            if agg_accuracy > self.best_aggregated_accuracy:
+                self.best_aggregated_accuracy = agg_accuracy
+                self.best_instruction = self.instructions[inst_id]
+                self.best_instruction_id = inst_id
+                self.best_exemplar = self.exemplars[ex_id]
+                self.best_exemplar_id = ex_id
+                self.best_per_model_accuracies = {
                         m: 1.0 - e for m, e in model_error_rates.items()
                     }
 
@@ -1309,8 +1334,9 @@ class MultiModelHybridOptimizer:
                     for model in self.config.target_models:
                         if model not in model_accs:
                             model_accs[model] = 1.0 - per_model_errors[model][0]
-                except:
-                    pass
+                except Exception as e:
+                    if verbose:
+                        print(f"  Warning: GP prediction failed for candidate: {e}")
 
             # Compute aggregated accuracy
             if model_accs:
