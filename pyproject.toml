@@ -9,6 +9,7 @@ dependencies = [
     "bokeh>=3.4.3",
     "catboost>=1.2.0",
     "datasets>=4.2.0",
+    "google-generativeai>=0.8.5",
     "gpytorch>=1.13",
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",

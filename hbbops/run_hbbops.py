@@ -57,6 +57,18 @@ from src.llm_client import create_llm_client
 
 
 # Simple number pattern - matches integers and decimals (including negative)
+
+'''
+   [-+]?  \d+  (?:  [.,]  \d+  )?
+   ─┬──   ─┬─  ─┬─  ─┬──  ─┬─  ─┬
+    │      │    │    │     │    │
+    │      │    │    │     │    └─ decimals (optional)
+    │      │    │    │     └────── numbers after separator
+    │      │    │    └──────────── dot or comma
+    │      │    └───────────────── group without catching
+    │      └────────────────────── whole number (mandatory)
+    └───────────────────────────── sing (optional)
+'''
 NUMBER_PATTERN = r'[-+]?\d+(?:[.,]\d+)?'
 
 
