@@ -441,7 +441,7 @@
 
     <span class="comment"># Multi-output GP configuration</span>
     use_multi_output_gp: bool = <span class="keyword">True</span>
-    gp_num_tasks: int = <span class="number">4</span>   <span class="comment"># One output per model</span>
+    gp_num_tasks: int = <span class="number">3</span>   <span class="comment"># Auto-set to len(target_models) in __post_init__</span>
     gp_rank: int = <span class="number">2</span>       <span class="comment"># Rank of ICM task covariance</span>
 
     <span class="comment"># Budget</span>
@@ -472,7 +472,7 @@
         <div class="slide">
             <h1><span class="phase-indicator phase-1">Phase 1</span> Initial Hyperband Screening</h1>
 
-            <p>Initial evaluation of 25x25 grid of instructions and exemplars on all models.</p>
+            <p>Initial evaluation of all instruction × exemplar combinations on all models (typically 25×25 grid).</p>
 
             <pre><code><span class="keyword">def</span> <span class="function">_run_phase1_hyperband</span>(self, verbose: bool):
     <span class="string">"""Run Hyperband screening on all models."""</span>
@@ -538,6 +538,9 @@
     sorted_instructions = sorted(
         unique_instructions.items(), key=<span class="keyword">lambda</span> x: x[<span class="number">1</span>], reverse=<span class="keyword">True</span>
     )[:self.config.opro_keep_top_k]
+
+    <span class="comment"># Convert to ScoredInstruction objects for OPRO</span>
+    scored_objs = [ScoredInstruction(inst, acc) <span class="keyword">for</span> inst, acc <span class="keyword">in</span> sorted_instructions]
 
     <span class="comment"># Generate new instructions using meta-model</span>
     new_instructions = self.opro_generator.generate_candidates(
@@ -621,7 +624,7 @@
     <span class="comment"># Single-GPU mode: evaluate all candidates per model before switching</span>
     <span class="keyword">for</span> model_name <span class="keyword">in</span> self.models:
         print(f<span class="string">"Loading {model_name}..."</span>)
-        client = self.single_gpu_manager.<span class="function">load_model</span>(model_name)
+        client = self.single_gpu_manager.<span class="function">load_model</span>(model_name, self.max_tokens)
 
         <span class="comment"># Evaluate ALL candidates on this model</span>
         <span class="keyword">for</span> cand_idx, prompts <span class="keyword">in</span> enumerate(all_candidate_prompts):
@@ -673,6 +676,7 @@
         <span class="keyword">return</span>
 
     <span class="comment"># Prepare training data</span>
+    points = high_fidelity_points
     inst_embs = np.array([p.instruction_embedding <span class="keyword">for</span> p <span class="keyword">in</span> points])
     ex_embs = np.array([p.exemplar_embedding <span class="keyword">for</span> p <span class="keyword">in</span> points])
 
@@ -795,7 +799,7 @@
         <span class="comment"># Evaluate on all models</span>
         error_rates = self.evaluator_pool.evaluate_prompt_all_models(...)
 
-        <span class="comment"># Update budget: each model = fidelity tokens</span>
+        <span class="comment"># Update budget: fidelity samples × number of models</span>
         self.budget_used += fidelity * len(self.config.target_models)
 
         <span class="comment"># Store in cache</span>
@@ -888,13 +892,15 @@
 
     <span class="keyword">def</span> <span class="function">_cleanup_gpu</span>(self):
         <span class="string">"""Clean up GPU memory after unloading."""</span>
-        <span class="keyword">del</span> self.current_client
-        self.current_client = <span class="keyword">None</span>
-        self.current_model_name = <span class="keyword">None</span>
+        <span class="keyword">if</span> self.current_client <span class="keyword">is not None</span>:
+            <span class="keyword">del</span> self.current_client
+            self.current_client = <span class="keyword">None</span>
+            self.current_model_name = <span class="keyword">None</span>
 
         gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+        <span class="keyword">if</span> torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
 </code></pre>
         </div>
 
@@ -918,7 +924,7 @@
                 <tr>
                     <td><code>minimum</code></td>
                     <td>max(e<sub>i</sub>)</td>
-                    <td>Worst-case (worst model)</td>
+                    <td>Worst-case (max error = min accuracy)</td>
                 </tr>
                 <tr>
                     <td><code class="highlight">weighted_softmin</code></td>
@@ -1139,10 +1145,10 @@ task_corr = task_cov / (std.unsqueeze(<span class="number">0</span>) * std.unsqu
     <span class="keyword">def</span> <span class="function">__init__</span>(self, model_names, confidence=<span class="number">0.95</span>, ...):
         self.num_models = len(model_names)
 
-        <span class="comment"># Bonferroni correction</span>
+        <span class="comment"># Bonferroni correction for 3 models</span>
         alpha = <span class="number">1</span> - confidence  <span class="comment"># 0.05</span>
-        per_model_alpha = alpha / self.num_models  <span class="comment"># 0.05/3 = 0.0167</span>
-        self.per_model_delta = per_model_alpha
+        per_model_alpha = alpha / self.num_models  <span class="comment"># 0.05/3 ≈ 0.0167</span>
+        self.per_model_delta = per_model_alpha  <span class="comment"># Per-model confidence: 98.3%</span>
 
     <span class="keyword">def</span> <span class="function">hoeffding_bound</span>(self, n: int) -> float:
         <span class="string">"""Hoeffding epsilon with Bonferroni correction."""</span>
