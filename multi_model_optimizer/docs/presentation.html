@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Model Universal Prompt Optimizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .slides-container {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .slide {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            height: 100vh;
+            padding: 40px 60px;
+            overflow-y: auto;
+        }
+
+        .slide.active {
+            display: flex;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            color: #58a6ff;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        h2 {
+            font-size: 1.8em;
+            color: #79c0ff;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+
+        h3 {
+            font-size: 1.3em;
+            color: #a5d6ff;
+            margin: 15px 0 10px 0;
+            font-weight: 500;
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            color: #8b949e;
+            margin-bottom: 30px;
+        }
+
+        p {
+            line-height: 1.7;
+            margin-bottom: 15px;
+            color: #c9d1d9;
+        }
+
+        .highlight {
+            color: #7ee787;
+        }
+
+        .warning {
+            color: #f85149;
+        }
+
+        .info {
+            color: #58a6ff;
+        }
+
+        ul {
+            margin-left: 25px;
+            margin-bottom: 15px;
+        }
+
+        li {
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+
+        pre {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        code {
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+        }
+
+        .keyword { color: #ff7b72; }
+        .string { color: #a5d6ff; }
+        .number { color: #79c0ff; }
+        .comment { color: #8b949e; }
+        .function { color: #d2a8ff; }
+        .class-name { color: #7ee787; }
+        .decorator { color: #ffa657; }
+        .param { color: #ffa657; }
+
+        .formula {
+            background: #161b22;
+            border-left: 3px solid #58a6ff;
+            padding: 15px 20px;
+            margin: 15px 0;
+            font-size: 1.1em;
+            border-radius: 0 6px 6px 0;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin: 20px 0;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .box {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .box-highlight {
+            border-color: #58a6ff;
+        }
+
+        .model-tag {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #21262d;
+            border-radius: 12px;
+            font-size: 0.85em;
+            margin: 2px;
+        }
+
+        .model-qwen { border: 1px solid #7ee787; color: #7ee787; }
+        .model-llama { border: 1px solid #58a6ff; color: #58a6ff; }
+        .model-mistral { border: 1px solid #f0883e; color: #f0883e; }
+
+        .navigation {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            z-index: 100;
+        }
+
+        .nav-btn {
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 1em;
+            transition: all 0.2s;
+        }
+
+        .nav-btn:hover {
+            background: #30363d;
+            border-color: #58a6ff;
+        }
+
+        .nav-dots {
+            display: flex;
+            gap: 8px;
+        }
+
+        .dot {
+            width: 10px;
+            height: 10px;
+            background: #30363d;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .dot.active {
+            background: #58a6ff;
+        }
+
+        .dot:hover {
+            background: #8b949e;
+        }
+
+        .slide-number {
+            position: fixed;
+            top: 20px;
+            right: 30px;
+            color: #8b949e;
+            font-size: 0.9em;
+        }
+
+        .svg-diagram {
+            display: flex;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .svg-diagram svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border: 1px solid #30363d;
+        }
+
+        th {
+            background: #161b22;
+            color: #58a6ff;
+        }
+
+        tr:nth-child(even) {
+            background: #0d1117;
+        }
+
+        .center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            height: 100%;
+        }
+
+        .phase-indicator {
+            display: inline-block;
+            padding: 6px 16px;
+            background: #238636;
+            border-radius: 20px;
+            font-weight: 500;
+            margin-bottom: 10px;
+        }
+
+        .phase-1 { background: #1f6feb; }
+        .phase-2 { background: #8957e5; }
+        .phase-3 { background: #238636; }
+        .phase-4 { background: #f0883e; }
+        .phase-5 { background: #da3633; }
+    </style>
+</head>
+<body>
+    <div class="slides-container">
+        <!-- Slide 1: Title -->
+        <div class="slide active">
+            <div class="center">
+                <h1>Multi-Model Universal Prompt Optimizer</h1>
+                <p class="subtitle">Finding a single prompt that works across 3 different LLMs</p>
+                <div style="margin-top: 40px;">
+                    <span class="model-tag model-qwen">Qwen/Qwen2.5-7B-Instruct</span>
+                    <span class="model-tag model-llama">meta-llama/Llama-3.1-8B-Instruct</span>
+                    <span class="model-tag model-mistral">mistralai/Mistral-7B-Instruct-v0.3</span>
+                </div>
+                <p style="margin-top: 60px; color: #8b949e;">
+                    Hybrid OPRO + HbBoPs with Multi-Output Gaussian Process<br>
+                    ICM Kernel for cross-model correlations
+                </p>
+            </div>
+        </div>
+
+        <!-- Slide 2: Motivation -->
+        <div class="slide">
+            <h1>Motivation: Why a Universal Prompt?</h1>
+
+            <div class="grid-2">
+                <div class="box">
+                    <h3>Problem</h3>
+                    <ul>
+                        <li>Each LLM has different preferences for instruction format</li>
+                        <li>Model-specific prompts require N-fold optimization</li>
+                        <li>Hard to maintain consistency across models</li>
+                        <li>Changing models = new optimization</li>
+                    </ul>
+                </div>
+                <div class="box box-highlight">
+                    <h3>Solution: Universal Prompt</h3>
+                    <ul>
+                        <li>Single prompt works well on ALL models</li>
+                        <li>Score aggregation: <code class="highlight">weighted_softmin</code></li>
+                        <li>Cross-model correlations via ICM kernel</li>
+                        <li>Bonferroni correction for joint confidence</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3>Target Models (7-8B parameters)</h3>
+            <div class="grid-3">
+                <div class="box">
+                    <span class="model-tag model-qwen">Qwen 2.5-7B</span>
+                    <p>Alibaba - strong in math, Chinese + English</p>
+                </div>
+                <div class="box">
+                    <span class="model-tag model-llama">Llama 3.1-8B</span>
+                    <p>Meta - versatile, large community</p>
+                </div>
+                <div class="box">
+                    <span class="model-tag model-mistral">Mistral-7B v0.3</span>
+                    <p>Mistral AI - efficient, European model</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 3: Architecture Overview -->
+        <div class="slide">
+            <h1>System Architecture</h1>
+
+            <div class="svg-diagram">
+                <svg width="900" height="500" viewBox="0 0 900 500">
+                    <!-- Background boxes -->
+                    <rect x="50" y="30" width="180" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+                    <text x="140" y="65" fill="#58a6ff" text-anchor="middle" font-size="14">run_multi_model.py</text>
+
+                    <rect x="280" y="30" width="150" height="60" rx="6" fill="#161b22" stroke="#7ee787"/>
+                    <text x="355" y="65" fill="#7ee787" text-anchor="middle" font-size="14">config.py</text>
+
+                    <!-- Main optimizer box -->
+                    <rect x="50" y="120" width="800" height="80" rx="6" fill="#21262d" stroke="#58a6ff" stroke-width="2"/>
+                    <text x="450" y="155" fill="#79c0ff" text-anchor="middle" font-size="16" font-weight="bold">MultiModelHybridOptimizer</text>
+                    <text x="450" y="180" fill="#8b949e" text-anchor="middle" font-size="12">5-phase optimization cycle</text>
+
+                    <!-- Components row -->
+                    <rect x="50" y="230" width="170" height="70" rx="6" fill="#161b22" stroke="#f0883e"/>
+                    <text x="135" y="260" fill="#f0883e" text-anchor="middle" font-size="12">ModelEvaluatorPool</text>
+                    <text x="135" y="280" fill="#8b949e" text-anchor="middle" font-size="10">Multi/Single GPU</text>
+
+                    <rect x="240" y="230" width="170" height="70" rx="6" fill="#161b22" stroke="#7ee787"/>
+                    <text x="325" y="260" fill="#7ee787" text-anchor="middle" font-size="12">MultiOutputGPTrainer</text>
+                    <text x="325" y="280" fill="#8b949e" text-anchor="middle" font-size="10">ICM Kernel</text>
+
+                    <rect x="430" y="230" width="170" height="70" rx="6" fill="#161b22" stroke="#d2a8ff"/>
+                    <text x="515" y="260" fill="#d2a8ff" text-anchor="middle" font-size="12">SequentialTester</text>
+                    <text x="515" y="280" fill="#8b949e" text-anchor="middle" font-size="10">Bonferroni bounds</text>
+
+                    <rect x="620" y="230" width="170" height="70" rx="6" fill="#161b22" stroke="#79c0ff"/>
+                    <text x="705" y="260" fill="#79c0ff" text-anchor="middle" font-size="12">OPROGenerator</text>
+                    <text x="705" y="280" fill="#8b949e" text-anchor="middle" font-size="10">Meta-LLM</text>
+
+                    <!-- Aggregation box -->
+                    <rect x="300" y="330" width="200" height="50" rx="6" fill="#161b22" stroke="#ff7b72"/>
+                    <text x="400" y="360" fill="#ff7b72" text-anchor="middle" font-size="12">aggregation.py</text>
+
+                    <!-- Models at bottom -->
+                    <rect x="100" y="420" width="150" height="50" rx="6" fill="#0d1117" stroke="#7ee787"/>
+                    <text x="175" y="450" fill="#7ee787" text-anchor="middle" font-size="11">Qwen 2.5-7B</text>
+
+                    <rect x="300" y="420" width="150" height="50" rx="6" fill="#0d1117" stroke="#58a6ff"/>
+                    <text x="375" y="450" fill="#58a6ff" text-anchor="middle" font-size="11">Llama 3.1-8B</text>
+
+                    <rect x="500" y="420" width="150" height="50" rx="6" fill="#0d1117" stroke="#f0883e"/>
+                    <text x="575" y="450" fill="#f0883e" text-anchor="middle" font-size="11">Mistral-7B</text>
+
+                    <!-- Arrows -->
+                    <path d="M140 90 L140 120" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+                    <path d="M355 90 L355 120" stroke="#7ee787" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+                    <path d="M135 200 L135 230" stroke="#f0883e" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+                    <path d="M325 200 L325 230" stroke="#7ee787" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+                    <path d="M515 200 L515 230" stroke="#d2a8ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+                    <path d="M705 200 L705 230" stroke="#79c0ff" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+                    <path d="M135 300 L135 350 L300 355" stroke="#ff7b72" stroke-width="1" fill="none"/>
+                    <path d="M325 300 L325 330" stroke="#ff7b72" stroke-width="1" fill="none"/>
+                    <path d="M515 300 L515 350 L500 355" stroke="#ff7b72" stroke-width="1" fill="none"/>
+
+                    <path d="M400 380 L400 400 L175 420" stroke="#7ee787" stroke-width="1" fill="none"/>
+                    <path d="M400 380 L400 420" stroke="#58a6ff" stroke-width="1" fill="none"/>
+                    <path d="M400 380 L400 400 L575 420" stroke="#f0883e" stroke-width="1" fill="none"/>
+
+                    <defs>
+                        <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Slide 4: Configuration -->
+        <div class="slide">
+            <h1>Configuration: MultiModelConfig</h1>
+
+            <pre><code><span class="decorator">@dataclass</span>
+<span class="keyword">class</span> <span class="class-name">MultiModelConfig</span>(HybridConfig):
+    <span class="comment"># Target models (3 frontier 7-8B models)</span>
+    target_models: List[str] = field(default_factory=<span class="keyword">lambda</span>: [
+        <span class="string">"Qwen/Qwen2.5-7B-Instruct"</span>,
+        <span class="string">"meta-llama/Llama-3.1-8B-Instruct"</span>,
+        <span class="string">"mistralai/Mistral-7B-Instruct-v0.3"</span>,
+    ])
+
+    <span class="comment"># GPU assignment for each model</span>
+    gpu_assignment: Dict[str, int] = field(default_factory=<span class="keyword">lambda</span>: {
+        <span class="string">"Qwen/Qwen2.5-7B-Instruct"</span>: <span class="number">0</span>,
+        <span class="string">"meta-llama/Llama-3.1-8B-Instruct"</span>: <span class="number">1</span>,
+        <span class="string">"mistralai/Mistral-7B-Instruct-v0.3"</span>: <span class="number">2</span>,
+    })
+
+    <span class="comment"># Aggregation strategy</span>
+    aggregation: str = <span class="string">"weighted_softmin"</span>
+    softmin_temperature: float = <span class="number">0.1</span>
+
+    <span class="comment"># Multi-output GP configuration</span>
+    use_multi_output_gp: bool = <span class="keyword">True</span>
+    gp_num_tasks: int = <span class="number">4</span>   <span class="comment"># One output per model</span>
+    gp_rank: int = <span class="number">2</span>       <span class="comment"># Rank of ICM task covariance</span>
+
+    <span class="comment"># Budget</span>
+    total_llm_budget: int = <span class="number">200000</span>
+</code></pre>
+
+            <div class="grid-2">
+                <div class="box">
+                    <h3>Validation in __post_init__</h3>
+                    <ul>
+                        <li>GPU assignment for all models</li>
+                        <li>Valid aggregation strategy</li>
+                        <li>Model weights sum to 1.0</li>
+                        <li>gp_num_tasks = len(target_models)</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <h3>Data Structures</h3>
+                    <ul>
+                        <li><code class="highlight">MultiModelDesignPoint</code> - GP training data</li>
+                        <li><code class="highlight">MultiModelPromptCandidate</code> - Candidate with predictions</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 5: Phase 1 -->
+        <div class="slide">
+            <h1><span class="phase-indicator phase-1">Phase 1</span> Initial Hyperband Screening</h1>
+
+            <p>Initial evaluation of 25x25 grid of instructions and exemplars on all models.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">_run_phase1_hyperband</span>(self, verbose: bool):
+    <span class="string">"""Run Hyperband screening on all models."""</span>
+    init_inst_ids = self._load_initial_instructions()  <span class="comment"># 25 instructions</span>
+    init_ex_ids = self._load_initial_exemplars()       <span class="comment"># 25 exemplars</span>
+
+    min_fidelity = self.config.bmin  <span class="comment"># Minimum samples (10-20)</span>
+
+    <span class="keyword">for</span> inst_id <span class="keyword">in</span> init_inst_ids:
+        <span class="keyword">for</span> ex_id <span class="keyword">in</span> init_ex_ids:
+            <span class="keyword">if</span> self.budget_used >= self.config.total_llm_budget:
+                <span class="keyword">return</span>
+
+            <span class="comment"># Evaluate on ALL 3 models</span>
+            model_error_rates = self._evaluate_prompt(inst_id, ex_id, min_fidelity)
+
+            <span class="comment"># Create design point for GP</span>
+            point = MultiModelDesignPoint(
+                instruction_id=inst_id,
+                exemplar_id=ex_id,
+                instruction_embedding=self.instruction_embeddings[inst_id],
+                exemplar_embedding=self.exemplar_embeddings[ex_id],
+                model_error_rates=model_error_rates,
+                aggregated_error=<span class="function">aggregate_scores</span>(
+                    model_error_rates, self.config.aggregation,
+                    self.config.softmin_temperature,
+                ),
+                fidelity=min_fidelity,
+            )
+            self.design_data.append(point)
+
+            <span class="comment"># Update best result</span>
+            agg_accuracy = <span class="number">1.0</span> - point.aggregated_error
+            <span class="keyword">if</span> agg_accuracy > self.best_aggregated_accuracy:
+                self.best_aggregated_accuracy = agg_accuracy
+                <span class="comment"># ... save best instruction/exemplar</span>
+</code></pre>
+        </div>
+
+        <!-- Slide 6: Phase 2 -->
+        <div class="slide">
+            <h1><span class="phase-indicator phase-2">Phase 2</span> OPRO Instruction Generation</h1>
+
+            <p>Meta-model generates new instructions based on top-K best aggregated scores.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">_run_phase2_opro</span>(self, verbose: bool) -> List[str]:
+    <span class="string">"""Phase 2: Generate new instructions using OPRO."""</span>
+    self._init_opro_generator()
+
+    <span class="comment"># Get top-K instructions by aggregated accuracy</span>
+    scored_instructions = []
+    <span class="keyword">for</span> point <span class="keyword">in</span> self.design_data:
+        scored_instructions.append(
+            (self.instructions[point.instruction_id], <span class="number">1.0</span> - point.aggregated_error)
+        )
+
+    <span class="comment"># Deduplicate and sort</span>
+    unique_instructions = {}
+    <span class="keyword">for</span> inst, acc <span class="keyword">in</span> scored_instructions:
+        <span class="keyword">if</span> inst <span class="keyword">not in</span> unique_instructions <span class="keyword">or</span> acc > unique_instructions[inst]:
+            unique_instructions[inst] = acc
+
+    sorted_instructions = sorted(
+        unique_instructions.items(), key=<span class="keyword">lambda</span> x: x[<span class="number">1</span>], reverse=<span class="keyword">True</span>
+    )[:self.config.opro_keep_top_k]
+
+    <span class="comment"># Generate new instructions using meta-model</span>
+    new_instructions = self.opro_generator.generate_candidates(
+        scored_instructions=scored_objs,
+        existing_instructions=set(self.instructions.values()),
+        verbose=verbose,
+    )
+
+    <span class="comment"># Register new instructions with embeddings</span>
+    <span class="keyword">for</span> inst <span class="keyword">in</span> new_instructions:
+        self.register_instruction(inst)
+
+    <span class="keyword">return</span> new_instructions  <span class="comment"># 8 new candidates</span>
+</code></pre>
+
+            <div class="box" style="margin-top: 20px;">
+                <h3>OPRO Meta-Prompt contains:</h3>
+                <ul>
+                    <li>Top-K instructions with their <span class="highlight">aggregated scores</span></li>
+                    <li>Existing instructions for deduplication</li>
+                    <li>Request for 8 new instructions</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Slide 7: Phase 3 -->
+        <div class="slide">
+            <h1><span class="phase-indicator phase-3">Phase 3</span> GP Screening</h1>
+
+            <p>Multi-Output GP predicts error rates for <strong>all models at once</strong> without actual evaluation.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">_run_phase3_gp_screening</span>(self, new_instructions, verbose) -> List[Candidate]:
+    <span class="comment"># Sample new exemplars dynamically</span>
+    new_exemplars = []
+    <span class="keyword">for</span> _ <span class="keyword">in</span> range(self.config.num_dynamic_exemplars):
+        exemplar = self.exemplar_sampler.sample_single(k=<span class="number">5</span>)
+        <span class="keyword">if</span> exemplar:
+            new_exemplars.append(exemplar)
+
+    <span class="comment"># Create candidates (instruction x exemplar grid)</span>
+    candidates = []
+    <span class="keyword">for</span> inst <span class="keyword">in</span> new_instructions:
+        <span class="keyword">for</span> ex <span class="keyword">in</span> new_exemplars:
+            candidates.append(MultiModelPromptCandidate(...))
+
+    <span class="comment"># GP prediction for ALL models at once</span>
+    inst_embs = np.array([c.instruction_embedding <span class="keyword">for</span> c <span class="keyword">in</span> candidates])
+    ex_embs = np.array([c.exemplar_embedding <span class="keyword">for</span> c <span class="keyword">in</span> candidates])
+
+    aggregated_errors, per_model_errors = self.gp_trainer.<span class="function">predict_aggregated</span>(
+        inst_embs, ex_embs,
+        aggregation=<span class="string">"weighted_softmin"</span>,
+        temperature=<span class="number">0.1</span>,
+    )
+    <span class="comment"># Returns: (N,) aggregated errors + Dict[model -> (N,)]</span>
+
+    <span class="comment"># Sort by predicted aggregated error</span>
+    candidates.sort(key=<span class="keyword">lambda</span> c: c.gp_aggregated_prediction)
+
+    <span class="keyword">return</span> candidates[:self.config.gp_top_k]  <span class="comment"># Top 10</span>
+</code></pre>
+
+            <div class="formula">
+                <strong>Fast screening:</strong> 40 candidates → 10 best in ~100ms (no LLM calls)
+            </div>
+        </div>
+
+        <!-- Slide 8: Phase 4 -->
+        <div class="slide">
+            <h1><span class="phase-indicator phase-4">Phase 4</span> Batch Evaluation</h1>
+
+            <p>Strategy <span class="highlight">batch-per-model</span>: Load each model ONCE, evaluate ALL candidates.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">evaluate_candidates_batch_per_model</span>(
+    self, candidates, validation_data, fidelity
+) -> List[Dict[str, float]]:
+    <span class="string">"""Evaluate multiple candidates with minimal model switching."""</span>
+
+    results = [{} <span class="keyword">for</span> _ <span class="keyword">in</span> candidates]
+
+    <span class="comment"># Single-GPU mode: evaluate all candidates per model before switching</span>
+    <span class="keyword">for</span> model_name <span class="keyword">in</span> self.models:
+        print(f<span class="string">"Loading {model_name}..."</span>)
+        client = self.single_gpu_manager.<span class="function">load_model</span>(model_name)
+
+        <span class="comment"># Evaluate ALL candidates on this model</span>
+        <span class="keyword">for</span> cand_idx, prompts <span class="keyword">in</span> enumerate(all_candidate_prompts):
+            responses = client.generate_batch(prompts, ...)
+
+            num_correct = <span class="number">0</span>
+            <span class="keyword">for</span> response, expected <span class="keyword">in</span> zip(responses, answers):
+                extracted = extract_answer(response)
+                <span class="keyword">if</span> compare_answers(extracted, expected):
+                    num_correct += <span class="number">1</span>
+
+            error_rate = <span class="number">1.0</span> - (num_correct / len(prompts))
+            results[cand_idx][model_name] = error_rate
+
+        print(f<span class="string">"Evaluated {len(candidates)} candidates"</span>)
+
+    <span class="keyword">return</span> results  <span class="comment"># [{model -> error_rate}, ...]</span>
+</code></pre>
+
+            <div class="grid-2" style="margin-top: 20px;">
+                <div class="box">
+                    <h3>Without batch-per-model</h3>
+                    <p class="warning">30 model loads (10 candidates × 3 models)</p>
+                </div>
+                <div class="box box-highlight">
+                    <h3>With batch-per-model</h3>
+                    <p class="highlight">3 model loads (1 per model)</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 9: Phase 5 -->
+        <div class="slide">
+            <h1><span class="phase-indicator phase-5">Phase 5</span> GP Retrain</h1>
+
+            <p>Retrain Multi-Output GP on accumulated <span class="highlight">high-fidelity</span> data for better predictions in next iterations.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">_run_phase5_gp_retrain</span>(self, verbose: bool):
+    <span class="string">"""Phase 5: Retrain GP on accumulated high-fidelity data."""</span>
+
+    <span class="comment"># Filter to high-fidelity points (>= nvalid/2)</span>
+    high_fidelity_points = [
+        p <span class="keyword">for</span> p <span class="keyword">in</span> self.design_data
+        <span class="keyword">if</span> p.fidelity >= self.nvalid // <span class="number">2</span>
+    ]
+
+    <span class="keyword">if</span> len(high_fidelity_points) < <span class="number">10</span>:
+        print(<span class="string">"Not enough high-fidelity data, skipping retrain"</span>)
+        <span class="keyword">return</span>
+
+    <span class="comment"># Prepare training data</span>
+    inst_embs = np.array([p.instruction_embedding <span class="keyword">for</span> p <span class="keyword">in</span> points])
+    ex_embs = np.array([p.exemplar_embedding <span class="keyword">for</span> p <span class="keyword">in</span> points])
+
+    model_error_rates = {
+        m: np.array([p.model_error_rates[m] <span class="keyword">for</span> p <span class="keyword">in</span> points])
+        <span class="keyword">for</span> m <span class="keyword">in</span> self.config.target_models
+    }
+
+    <span class="comment"># Train GP - learns cross-model correlations</span>
+    self.gp_trainer.<span class="function">train</span>(
+        instruction_embeddings=inst_embs,
+        exemplar_embeddings=ex_embs,
+        model_error_rates=model_error_rates,
+        verbose=verbose,
+    )
+</code></pre>
+
+            <div class="formula">
+                <strong>Why high-fidelity?</strong> We train GP only on data with sufficient sample count
+                to make predictions more reliable.
+            </div>
+        </div>
+
+        <!-- Slide 10: Workflow Diagram -->
+        <div class="slide">
+            <h1>5-Phase Optimization Cycle</h1>
+
+            <div class="svg-diagram">
+                <svg width="900" height="450" viewBox="0 0 900 450">
+                    <!-- Phase boxes -->
+                    <rect x="50" y="50" width="150" height="80" rx="6" fill="#1f6feb" stroke="#58a6ff"/>
+                    <text x="125" y="80" fill="white" text-anchor="middle" font-size="12" font-weight="bold">Phase 1</text>
+                    <text x="125" y="100" fill="white" text-anchor="middle" font-size="10">Hyperband</text>
+                    <text x="125" y="115" fill="#a5d6ff" text-anchor="middle" font-size="9">25×25 grid</text>
+
+                    <rect x="230" y="50" width="150" height="80" rx="6" fill="#8957e5" stroke="#d2a8ff"/>
+                    <text x="305" y="80" fill="white" text-anchor="middle" font-size="12" font-weight="bold">Phase 2</text>
+                    <text x="305" y="100" fill="white" text-anchor="middle" font-size="10">OPRO</text>
+                    <text x="305" y="115" fill="#e0c0ff" text-anchor="middle" font-size="9">8 candidates</text>
+
+                    <rect x="410" y="50" width="150" height="80" rx="6" fill="#238636" stroke="#7ee787"/>
+                    <text x="485" y="80" fill="white" text-anchor="middle" font-size="12" font-weight="bold">Phase 3</text>
+                    <text x="485" y="100" fill="white" text-anchor="middle" font-size="10">GP Screening</text>
+                    <text x="485" y="115" fill="#a5ffbe" text-anchor="middle" font-size="9">Top 10</text>
+
+                    <rect x="590" y="50" width="150" height="80" rx="6" fill="#f0883e" stroke="#ffa657"/>
+                    <text x="665" y="80" fill="white" text-anchor="middle" font-size="12" font-weight="bold">Phase 4</text>
+                    <text x="665" y="100" fill="white" text-anchor="middle" font-size="10">Evaluation</text>
+                    <text x="665" y="115" fill="#ffd0a0" text-anchor="middle" font-size="9">Batch/Model</text>
+
+                    <rect x="770" y="50" width="100" height="80" rx="6" fill="#da3633" stroke="#f85149"/>
+                    <text x="820" y="80" fill="white" text-anchor="middle" font-size="12" font-weight="bold">Phase 5</text>
+                    <text x="820" y="100" fill="white" text-anchor="middle" font-size="10">GP Retrain</text>
+
+                    <!-- Arrows -->
+                    <path d="M200 90 L230 90" stroke="#58a6ff" stroke-width="2" fill="none" marker-end="url(#arrow2)"/>
+                    <path d="M380 90 L410 90" stroke="#d2a8ff" stroke-width="2" fill="none" marker-end="url(#arrow2)"/>
+                    <path d="M560 90 L590 90" stroke="#7ee787" stroke-width="2" fill="none" marker-end="url(#arrow2)"/>
+                    <path d="M740 90 L770 90" stroke="#ffa657" stroke-width="2" fill="none" marker-end="url(#arrow2)"/>
+
+                    <!-- Loop arrow -->
+                    <path d="M820 130 L820 180 L305 180 L305 130" stroke="#8b949e" stroke-width="2" fill="none" stroke-dasharray="5,5" marker-end="url(#arrow2)"/>
+                    <text x="560" y="200" fill="#8b949e" text-anchor="middle" font-size="11">Repeat for N iterations</text>
+
+                    <!-- Data flow -->
+                    <rect x="50" y="250" width="820" height="170" rx="6" fill="#161b22" stroke="#30363d"/>
+                    <text x="460" y="275" fill="#79c0ff" text-anchor="middle" font-size="14" font-weight="bold">Data Flow</text>
+
+                    <rect x="80" y="295" width="180" height="40" rx="4" fill="#21262d" stroke="#58a6ff"/>
+                    <text x="170" y="320" fill="#58a6ff" text-anchor="middle" font-size="11">design_data[]</text>
+
+                    <rect x="290" y="295" width="180" height="40" rx="4" fill="#21262d" stroke="#7ee787"/>
+                    <text x="380" y="320" fill="#7ee787" text-anchor="middle" font-size="11">GP predictions</text>
+
+                    <rect x="500" y="295" width="180" height="40" rx="4" fill="#21262d" stroke="#f0883e"/>
+                    <text x="590" y="320" fill="#f0883e" text-anchor="middle" font-size="11">actual_accuracies</text>
+
+                    <rect x="710" y="295" width="130" height="40" rx="4" fill="#21262d" stroke="#f85149"/>
+                    <text x="775" y="320" fill="#f85149" text-anchor="middle" font-size="11">best_result</text>
+
+                    <path d="M260 315 L290 315" stroke="#8b949e" stroke-width="1" fill="none" marker-end="url(#arrow2)"/>
+                    <path d="M470 315 L500 315" stroke="#8b949e" stroke-width="1" fill="none" marker-end="url(#arrow2)"/>
+                    <path d="M680 315 L710 315" stroke="#8b949e" stroke-width="1" fill="none" marker-end="url(#arrow2)"/>
+
+                    <!-- Budget counter -->
+                    <rect x="80" y="360" width="790" height="40" rx="4" fill="#0d1117" stroke="#8b949e"/>
+                    <text x="460" y="385" fill="#8b949e" text-anchor="middle" font-size="11">budget_used += fidelity × num_models (each evaluation)</text>
+
+                    <defs>
+                        <marker id="arrow2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#8b949e"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Slide 11: Budget Management -->
+        <div class="slide">
+            <h1>Budget Management</h1>
+
+            <p>Precise tracking of consumed tokens with cache system.</p>
+
+            <pre><code><span class="keyword">class</span> <span class="class-name">MultiModelHybridOptimizer</span>:
+    <span class="keyword">def</span> <span class="function">__init__</span>(self, ...):
+        <span class="comment"># Budget tracking</span>
+        self.budget_used = <span class="number">0</span>
+
+        <span class="comment"># Cache: (inst_id, ex_id, fidelity) -> Dict[model, error_rate]</span>
+        self.eval_cache: Dict[Tuple[int, int, int], Dict[str, float]] = {}
+
+    <span class="keyword">def</span> <span class="function">_evaluate_prompt</span>(self, instruction_id, exemplar_id, fidelity):
+        <span class="string">"""Evaluate a prompt on all models."""</span>
+        cache_key = (instruction_id, exemplar_id, fidelity)
+
+        <span class="comment"># Check cache</span>
+        <span class="keyword">if</span> cache_key <span class="keyword">in</span> self.eval_cache:
+            <span class="keyword">return</span> self.eval_cache[cache_key]  <span class="comment"># No budget spent</span>
+
+        <span class="comment"># Evaluate on all models</span>
+        error_rates = self.evaluator_pool.evaluate_prompt_all_models(...)
+
+        <span class="comment"># Update budget: each model = fidelity tokens</span>
+        self.budget_used += fidelity * len(self.config.target_models)
+
+        <span class="comment"># Store in cache</span>
+        self.eval_cache[cache_key] = error_rates
+        <span class="keyword">return</span> error_rates
+
+    <span class="keyword">def</span> <span class="function">run</span>(self, num_iterations):
+        <span class="keyword">for</span> iteration <span class="keyword">in</span> range(num_iterations):
+            <span class="comment"># Early stopping when budget exhausted</span>
+            <span class="keyword">if</span> self.budget_used >= self.config.total_llm_budget:
+                print(f<span class="string">"Budget exhausted at iteration {iteration}"</span>)
+                <span class="keyword">break</span>
+</code></pre>
+
+            <div class="formula">
+                <strong>Budget formula:</strong> <code>budget_used += fidelity × num_models</code><br>
+                With fidelity=100 and 3 models: +300 per evaluation
+            </div>
+        </div>
+
+        <!-- Slide 12: Evaluator Pool -->
+        <div class="slide">
+            <h1>Evaluator Pool: Two Modes</h1>
+
+            <div class="grid-2">
+                <div class="box">
+                    <h3 class="info">Multi-GPU Parallel</h3>
+                    <p>Each model on its own GPU</p>
+                    <pre><code><span class="keyword">with</span> ProcessPoolExecutor(max_workers=<span class="number">4</span>) <span class="keyword">as</span> executor:
+    futures = {
+        executor.submit(
+            _evaluate_single_model_subprocess,
+            model_name,
+            gpu_assignment[model_name],
+            prompts, answers,
+        ): model_name
+        <span class="keyword">for</span> model_name <span class="keyword">in</span> self.models
+    }
+
+    <span class="keyword">for</span> future <span class="keyword">in</span> as_completed(futures):
+        result = future.result(timeout=<span class="number">300</span>)
+        results[model_name] = result.error_rate</code></pre>
+                    <p class="highlight">Fast, but requires 4 GPUs</p>
+                </div>
+                <div class="box box-highlight">
+                    <h3 class="highlight">Single-GPU Sequential</h3>
+                    <p>Intelligent model switching</p>
+                    <pre><code><span class="keyword">for</span> model_name <span class="keyword">in</span> self.models:
+    <span class="comment"># Manager tracks loaded model</span>
+    result = self.single_gpu_manager.evaluate(
+        model_name,
+        prompts,
+        answers,
+        max_tokens,
+    )
+    results[model_name] = result.error_rate</code></pre>
+                    <p class="highlight">Memory efficient, 1 GPU suffices</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 13: SingleGPUModelManager -->
+        <div class="slide">
+            <h1>SingleGPUModelManager</h1>
+
+            <p>Intelligent management of model loading/unloading on a single GPU.</p>
+
+            <pre><code><span class="keyword">class</span> <span class="class-name">SingleGPUModelManager</span>:
+    <span class="keyword">def</span> <span class="function">__init__</span>(self, gpu_id=<span class="number">0</span>, gpu_memory_utilization=<span class="number">0.85</span>):
+        self.gpu_id = gpu_id
+        self.current_model_name: Optional[str] = <span class="keyword">None</span>
+        self.current_client: Optional[Any] = <span class="keyword">None</span>
+
+    <span class="keyword">def</span> <span class="function">load_model</span>(self, model_name: str, max_tokens: int) -> Any:
+        <span class="comment"># If same model already loaded, reuse it</span>
+        <span class="keyword">if</span> model_name == self.current_model_name <span class="keyword">and</span> self.current_client:
+            print(f<span class="string">"Reusing loaded model: {model_name}"</span>)
+            <span class="keyword">return</span> self.current_client
+
+        <span class="comment"># If different model, free memory</span>
+        <span class="keyword">if</span> self.current_model_name <span class="keyword">is not None</span>:
+            print(f<span class="string">"Unloading model: {self.current_model_name}"</span>)
+            self._cleanup_gpu()
+
+        <span class="comment"># Load new model</span>
+        print(f<span class="string">"Loading model: {model_name}"</span>)
+        self.current_client = VLLMClient(model_name=model_name, ...)
+        self.current_model_name = model_name
+        <span class="keyword">return</span> self.current_client
+
+    <span class="keyword">def</span> <span class="function">_cleanup_gpu</span>(self):
+        <span class="string">"""Clean up GPU memory after unloading."""</span>
+        <span class="keyword">del</span> self.current_client
+        self.current_client = <span class="keyword">None</span>
+        self.current_model_name = <span class="keyword">None</span>
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+</code></pre>
+        </div>
+
+        <!-- Slide 14: Aggregation Strategies -->
+        <div class="slide">
+            <h1>Aggregation Strategies</h1>
+
+            <p>4 methods for combining per-model scores into a single universal score.</p>
+
+            <table>
+                <tr>
+                    <th>Strategy</th>
+                    <th>Formula</th>
+                    <th>Characteristics</th>
+                </tr>
+                <tr>
+                    <td><code>average</code></td>
+                    <td>∑(w<sub>i</sub> × e<sub>i</sub>)</td>
+                    <td>Simple weighted mean</td>
+                </tr>
+                <tr>
+                    <td><code>minimum</code></td>
+                    <td>max(e<sub>i</sub>)</td>
+                    <td>Worst-case (worst model)</td>
+                </tr>
+                <tr>
+                    <td><code class="highlight">weighted_softmin</code></td>
+                    <td>softmax(e/T) · e</td>
+                    <td>Smooth approximation to minimum</td>
+                </tr>
+                <tr>
+                    <td><code>harmonic</code></td>
+                    <td>1 - H(accuracies)</td>
+                    <td>Harmonic mean of accuracies</td>
+                </tr>
+            </table>
+
+            <pre><code><span class="keyword">def</span> <span class="function">aggregate_scores</span>(error_rates, strategy, temperature=<span class="number">0.1</span>, weights=<span class="keyword">None</span>):
+    errors = np.array([error_rates[m] <span class="keyword">for</span> m <span class="keyword">in</span> models])
+    errors = np.clip(errors, <span class="number">0.0</span>, <span class="number">1.0</span>)
+
+    <span class="keyword">if</span> strategy == <span class="string">"average"</span>:
+        <span class="keyword">return</span> float(np.sum(w * errors))
+
+    <span class="keyword">elif</span> strategy == <span class="string">"minimum"</span>:
+        <span class="keyword">return</span> float(np.max(errors))  <span class="comment"># For errors: max = worst</span>
+
+    <span class="keyword">elif</span> strategy == <span class="string">"weighted_softmin"</span>:
+        <span class="comment"># Softmax on errors gives more weight to worse models</span>
+        exp_weights = np.exp(errors / temperature)
+        softmax_weights = exp_weights / np.sum(exp_weights)
+        <span class="keyword">return</span> float(np.sum(softmax_weights * errors))
+
+    <span class="keyword">elif</span> strategy == <span class="string">"harmonic"</span>:
+        accuracies = <span class="number">1.0</span> - errors
+        harmonic_acc = len(accuracies) / np.sum(<span class="number">1.0</span> / accuracies)
+        <span class="keyword">return</span> float(<span class="number">1.0</span> - harmonic_acc)
+</code></pre>
+        </div>
+
+        <!-- Slide 15: Weighted SoftMin Detail -->
+        <div class="slide">
+            <h1>Weighted SoftMin: Mathematics</h1>
+
+            <div class="formula">
+                <strong>Formula:</strong> agg_error = Σ softmax(e<sub>i</sub>/T) × e<sub>i</sub>
+                <br><br>
+                where softmax(e<sub>i</sub>/T) = exp(e<sub>i</sub>/T) / Σexp(e<sub>j</sub>/T)
+            </div>
+
+            <div class="grid-2">
+                <div class="box">
+                    <h3>T → 0 (conservative)</h3>
+                    <p>Approaches <code>max(errors)</code></p>
+                    <p>Strong penalty on weak models</p>
+                    <pre><code><span class="comment"># errors = [0.1, 0.3, 0.15]</span>
+<span class="comment"># T=0.01 → ~0.29 (close to max)</span></code></pre>
+                </div>
+                <div class="box">
+                    <h3>T → ∞ (balanced)</h3>
+                    <p>Approaches <code>mean(errors)</code></p>
+                    <p>Equal weight to all models</p>
+                    <pre><code><span class="comment"># errors = [0.1, 0.3, 0.15]</span>
+<span class="comment"># T=10 → ~0.183 (close to mean)</span></code></pre>
+                </div>
+            </div>
+
+            <h3>Example with T=0.1 (default)</h3>
+            <pre><code>errors = {<span class="string">"Qwen"</span>: <span class="number">0.10</span>, <span class="string">"Llama"</span>: <span class="number">0.30</span>, <span class="string">"Mistral"</span>: <span class="number">0.15</span>}
+
+<span class="comment"># Calculate softmax weights</span>
+exp_weights = [exp(<span class="number">0.10</span>/<span class="number">0.1</span>), exp(<span class="number">0.30</span>/<span class="number">0.1</span>), exp(<span class="number">0.15</span>/<span class="number">0.1</span>)]
+             = [<span class="number">2.72</span>, <span class="number">20.09</span>, <span class="number">4.48</span>]
+
+softmax_weights = [<span class="number">0.10</span>, <span class="number">0.74</span>, <span class="number">0.16</span>]  <span class="comment"># Llama has 74% weight!</span>
+
+agg_error = <span class="number">0.10</span>×<span class="number">0.10</span> + <span class="number">0.74</span>×<span class="number">0.30</span> + <span class="number">0.16</span>×<span class="number">0.15</span> = <span class="number">0.256</span>
+<span class="comment"># Compare: mean = 0.183, max = 0.30</span></code></pre>
+
+            <div class="formula">
+                <strong>Intuition:</strong> Model with highest error gets highest weight → penalizes weak performers
+            </div>
+        </div>
+
+        <!-- Slide 16: Multi-Output GP Architecture -->
+        <div class="slide">
+            <h1>Multi-Output GP: Architecture</h1>
+
+            <div class="svg-diagram">
+                <svg width="850" height="350" viewBox="0 0 850 350">
+                    <!-- Input -->
+                    <rect x="20" y="50" width="120" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+                    <text x="80" y="75" fill="#58a6ff" text-anchor="middle" font-size="11">instruction_emb</text>
+                    <text x="80" y="95" fill="#8b949e" text-anchor="middle" font-size="10">(768,)</text>
+
+                    <rect x="20" y="130" width="120" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+                    <text x="80" y="155" fill="#58a6ff" text-anchor="middle" font-size="11">exemplar_emb</text>
+                    <text x="80" y="175" fill="#8b949e" text-anchor="middle" font-size="10">(768,)</text>
+
+                    <!-- Feature Extractor -->
+                    <rect x="180" y="30" width="200" height="180" rx="6" fill="#21262d" stroke="#7ee787"/>
+                    <text x="280" y="55" fill="#7ee787" text-anchor="middle" font-size="12" font-weight="bold">FeatureExtractor</text>
+
+                    <rect x="200" y="70" width="160" height="35" rx="4" fill="#161b22" stroke="#30363d"/>
+                    <text x="280" y="92" fill="#c9d1d9" text-anchor="middle" font-size="10">inst_encoder: 768→64→32</text>
+
+                    <rect x="200" y="115" width="160" height="35" rx="4" fill="#161b22" stroke="#30363d"/>
+                    <text x="280" y="137" fill="#c9d1d9" text-anchor="middle" font-size="10">ex_encoder: 768→64→32</text>
+
+                    <rect x="200" y="160" width="160" height="35" rx="4" fill="#161b22" stroke="#30363d"/>
+                    <text x="280" y="182" fill="#c9d1d9" text-anchor="middle" font-size="10">joint: 64→32→10</text>
+
+                    <!-- Latent -->
+                    <rect x="420" y="90" width="100" height="60" rx="6" fill="#161b22" stroke="#d2a8ff"/>
+                    <text x="470" y="115" fill="#d2a8ff" text-anchor="middle" font-size="11">latent</text>
+                    <text x="470" y="135" fill="#8b949e" text-anchor="middle" font-size="10">(10,)</text>
+
+                    <!-- GP -->
+                    <rect x="560" y="50" width="260" height="140" rx="6" fill="#21262d" stroke="#f0883e"/>
+                    <text x="690" y="75" fill="#f0883e" text-anchor="middle" font-size="12" font-weight="bold">MultiOutputGP (ICM)</text>
+
+                    <rect x="580" y="90" width="110" height="35" rx="4" fill="#161b22" stroke="#30363d"/>
+                    <text x="635" y="112" fill="#c9d1d9" text-anchor="middle" font-size="9">K_data: Matern 5/2</text>
+
+                    <rect x="700" y="90" width="100" height="35" rx="4" fill="#161b22" stroke="#30363d"/>
+                    <text x="750" y="112" fill="#c9d1d9" text-anchor="middle" font-size="9">K_task: ICM</text>
+
+                    <text x="690" y="150" fill="#8b949e" text-anchor="middle" font-size="10">K = K_data ⊗ K_task</text>
+                    <text x="690" y="170" fill="#8b949e" text-anchor="middle" font-size="9">(rank=2)</text>
+
+                    <!-- Output -->
+                    <rect x="580" y="230" width="70" height="50" rx="4" fill="#0d1117" stroke="#7ee787"/>
+                    <text x="615" y="260" fill="#7ee787" text-anchor="middle" font-size="9">Qwen</text>
+
+                    <rect x="665" y="230" width="70" height="50" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+                    <text x="700" y="260" fill="#58a6ff" text-anchor="middle" font-size="9">Llama</text>
+
+                    <rect x="750" y="230" width="70" height="50" rx="4" fill="#0d1117" stroke="#f0883e"/>
+                    <text x="785" y="260" fill="#f0883e" text-anchor="middle" font-size="9">Mistral</text>
+
+                    <!-- Arrows -->
+                    <path d="M140 80 L180 80" stroke="#58a6ff" stroke-width="2"/>
+                    <path d="M140 160 L180 160" stroke="#58a6ff" stroke-width="2"/>
+                    <path d="M380 120 L420 120" stroke="#7ee787" stroke-width="2"/>
+                    <path d="M520 120 L560 120" stroke="#d2a8ff" stroke-width="2"/>
+                    <path d="M615 190 L615 230" stroke="#7ee787" stroke-width="1"/>
+                    <path d="M700 190 L700 230" stroke="#58a6ff" stroke-width="1"/>
+                    <path d="M785 190 L785 230" stroke="#f0883e" stroke-width="1"/>
+
+                    <text x="20" y="330" fill="#8b949e" font-size="11">Input: 768-dim BERT embeddings → Latent: 10-dim → Output: error rate per model</text>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Slide 17: ICM Kernel -->
+        <div class="slide">
+            <h1>ICM Kernel: Mathematics</h1>
+
+            <div class="formula">
+                <strong>Intrinsic Coregionalization Model (ICM):</strong><br><br>
+                K((x, i), (x', j)) = K<sub>data</sub>(x, x') × K<sub>task</sub>(i, j)
+            </div>
+
+            <div class="grid-2">
+                <div class="box">
+                    <h3>K<sub>data</sub>: Matern 5/2</h3>
+                    <p>Operates on latent features</p>
+                    <pre><code>data_kernel = ScaleKernel(
+    MaternKernel(
+        nu=<span class="number">2.5</span>,
+        ard_num_dims=latent_dim,  <span class="comment"># 10</span>
+    )
+)</code></pre>
+                    <p class="info">"Similar prompts have similar results"</p>
+                </div>
+                <div class="box box-highlight">
+                    <h3>K<sub>task</sub>: Low-rank covariance</h3>
+                    <p>Correlations between models</p>
+                    <pre><code><span class="comment"># Task covariance = B @ B^T + diag(v)</span>
+<span class="comment"># where B: (num_tasks, rank)</span>
+<span class="comment">#       v: (num_tasks,) diagonal variance</span>
+
+MultitaskKernel(
+    data_kernel,
+    num_tasks=<span class="number">3</span>,
+    rank=<span class="number">2</span>,  <span class="comment"># Low-rank approximation</span>
+)</code></pre>
+                    <p class="highlight">"If it works on Qwen, it likely works on Llama"</p>
+                </div>
+            </div>
+
+            <h3>Task correlations after training</h3>
+            <pre><code><span class="comment"># Extract correlation matrix from trained model</span>
+task_covar = model.covar_module.task_covar_module
+B = task_covar.covar_factor.detach()  <span class="comment"># (3, 2)</span>
+v = task_covar.var.detach()           <span class="comment"># (3,)</span>
+task_cov = B @ B.T + torch.diag(v)    <span class="comment"># (3, 3)</span>
+
+<span class="comment"># Normalize to correlation</span>
+std = torch.sqrt(torch.diag(task_cov))
+task_corr = task_cov / (std.unsqueeze(<span class="number">0</span>) * std.unsqueeze(<span class="number">1</span>))
+
+<span class="comment"># Example output:</span>
+<span class="comment"># Qwen <-> Llama: 0.85</span>
+<span class="comment"># Qwen <-> Mistral: 0.72</span>
+<span class="comment"># Llama <-> Mistral: 0.78</span></code></pre>
+        </div>
+
+        <!-- Slide 18: Sequential Testing -->
+        <div class="slide">
+            <h1>Sequential Testing: Hoeffding + Bonferroni</h1>
+
+            <p>Multi-model sequential testing with <span class="highlight">joint confidence guarantees</span>.</p>
+
+            <div class="formula">
+                <strong>Bonferroni correction:</strong> For k models with target confidence (1-α):<br>
+                per_model_alpha = α / k<br>
+                per_model_confidence = 1 - α/k
+            </div>
+
+            <pre><code><span class="keyword">class</span> <span class="class-name">MultiModelSequentialTester</span>:
+    <span class="keyword">def</span> <span class="function">__init__</span>(self, model_names, confidence=<span class="number">0.95</span>, ...):
+        self.num_models = len(model_names)
+
+        <span class="comment"># Bonferroni correction</span>
+        alpha = <span class="number">1</span> - confidence  <span class="comment"># 0.05</span>
+        per_model_alpha = alpha / self.num_models  <span class="comment"># 0.05/3 = 0.0167</span>
+        self.per_model_delta = per_model_alpha
+
+    <span class="keyword">def</span> <span class="function">hoeffding_bound</span>(self, n: int) -> float:
+        <span class="string">"""Hoeffding epsilon with Bonferroni correction."""</span>
+        <span class="keyword">return</span> math.sqrt(math.log(<span class="number">2</span> / self.per_model_delta) / (<span class="number">2</span> * n))
+
+    <span class="keyword">def</span> <span class="function">decide</span>(self, model_successes, n_samples, best_agg_accuracy):
+        <span class="comment"># Per-model bounds</span>
+        bounds = self.compute_per_model_bounds(model_successes, n_samples)
+
+        <span class="comment"># Aggregate bounds across models</span>
+        agg_lower_acc, agg_upper_acc = compute_bounds_aggregated(bounds, ...)
+
+        <span class="comment"># Decision logic</span>
+        <span class="keyword">if</span> agg_upper_acc < best_agg_accuracy:
+            <span class="keyword">return</span> Decision.DROP    <span class="comment"># Even optimistic estimate can't beat champion</span>
+
+        <span class="keyword">if</span> agg_lower_acc > best_agg_accuracy <span class="keyword">and</span> n_samples >= min_promote:
+            <span class="keyword">return</span> Decision.PROMOTE <span class="comment"># Even pessimistic estimate is better</span>
+
+        <span class="keyword">return</span> Decision.CONTINUE <span class="comment"># Need more samples</span>
+</code></pre>
+        </div>
+
+        <!-- Slide 19: Model-Sequential Mode -->
+        <div class="slide">
+            <h1>Model-Sequential Mode</h1>
+
+            <p>Alternative workflow for <span class="highlight">single-GPU</span> with minimal model switching.</p>
+
+            <pre><code><span class="keyword">def</span> <span class="function">_run_model_sequential</span>(self, num_iterations, verbose):
+    <span class="string">"""Process each model completely before switching."""</span>
+
+    iterations_per_model = num_iterations // len(self.config.target_models)
+
+    <span class="keyword">for</span> model_idx, current_model <span class="keyword">in</span> enumerate(self.config.target_models):
+        <span class="comment"># Load model ONCE</span>
+        self._preload_model(current_model)
+
+        <span class="comment"># All iterations with this model</span>
+        <span class="keyword">for</span> local_iter <span class="keyword">in</span> range(iterations_per_model):
+            <span class="comment"># Phase 2: OPRO with current model as meta-model</span>
+            new_instructions = self._run_phase2_opro_single_model(current_model)
+
+            <span class="comment"># Phase 3: GP screening (predicts for ALL models)</span>
+            top_candidates = self._run_phase3_gp_screening(new_instructions)
+
+            <span class="comment"># Phase 4: Evaluate ONLY on current model</span>
+            self._run_phase4_evaluation_single_model(top_candidates, current_model)
+            <span class="comment"># GP predicts results for other models</span>
+
+            <span class="comment"># Phase 5: Retrain GP</span>
+            self._run_phase5_gp_retrain()
+
+    <span class="comment"># FINAL VERIFICATION: Top-K candidates on ALL models</span>
+    self._run_final_verification()  <span class="comment"># Only place where we switch all models</span>
+</code></pre>
+
+            <div class="grid-2" style="margin-top: 20px;">
+                <div class="box">
+                    <h3>Standard mode</h3>
+                    <p>3 model switches per iteration</p>
+                    <p class="warning">10 iterations = 30 switches</p>
+                </div>
+                <div class="box box-highlight">
+                    <h3>Model-Sequential</h3>
+                    <p>3 switches + 1 final verification</p>
+                    <p class="highlight">10 iterations = 4 switches</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 20: Conclusion -->
+        <div class="slide">
+            <h1>Conclusion: Key Innovations</h1>
+
+            <div class="grid-2">
+                <div class="box box-highlight">
+                    <h3 class="highlight">What the system solves</h3>
+                    <ul>
+                        <li><strong>Universal Prompt:</strong> One prompt for 3 LLMs</li>
+                        <li><strong>ICM Kernel:</strong> Learning cross-model correlations</li>
+                        <li><strong>Weighted SoftMin:</strong> Intelligent aggregation</li>
+                        <li><strong>Bonferroni:</strong> Joint confidence guarantees</li>
+                        <li><strong>Batch-per-Model:</strong> Efficient evaluation</li>
+                    </ul>
+                </div>
+                <div class="box">
+                    <h3>Trade-offs</h3>
+                    <ul>
+                        <li>More evaluations than single-model</li>
+                        <li>GP training overhead</li>
+                        <li>Conservative aggregation may penalize</li>
+                        <li>Single-GPU = slower (switching)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 30px;">Main Files</h3>
+            <table>
+                <tr>
+                    <th>File</th>
+                    <th>Functionality</th>
+                </tr>
+                <tr>
+                    <td><code>optimizer.py</code></td>
+                    <td>5-phase cycle, main logic</td>
+                </tr>
+                <tr>
+                    <td><code>multi_output_gp.py</code></td>
+                    <td>ICM kernel, cross-model predictions</td>
+                </tr>
+                <tr>
+                    <td><code>aggregation.py</code></td>
+                    <td>4 aggregation strategies</td>
+                </tr>
+                <tr>
+                    <td><code>evaluator_pool.py</code></td>
+                    <td>Multi/Single GPU evaluation</td>
+                </tr>
+                <tr>
+                    <td><code>sequential_tester.py</code></td>
+                    <td>Bonferroni-corrected bounds</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="slide-number">
+        <span id="current-slide">1</span> / <span id="total-slides">20</span>
+    </div>
+
+    <div class="navigation">
+        <button class="nav-btn" onclick="prevSlide()">&#8592; Prev</button>
+        <div class="nav-dots" id="nav-dots"></div>
+        <button class="nav-btn" onclick="nextSlide()">Next &#8594;</button>
+    </div>
+
+    <script>
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        let currentSlide = 0;
+
+        // Initialize dots
+        const dotsContainer = document.getElementById('nav-dots');
+        for (let i = 0; i < totalSlides; i++) {
+            const dot = document.createElement('span');
+            dot.className = 'dot' + (i === 0 ? ' active' : '');
+            dot.onclick = () => goToSlide(i);
+            dotsContainer.appendChild(dot);
+        }
+
+        document.getElementById('total-slides').textContent = totalSlides;
+
+        function updateSlide() {
+            slides.forEach((slide, index) => {
+                slide.classList.toggle('active', index === currentSlide);
+            });
+
+            document.querySelectorAll('.dot').forEach((dot, index) => {
+                dot.classList.toggle('active', index === currentSlide);
+            });
+
+            document.getElementById('current-slide').textContent = currentSlide + 1;
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides - 1) {
+                currentSlide++;
+                updateSlide();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 0) {
+                currentSlide--;
+                updateSlide();
+            }
+        }
+
+        function goToSlide(index) {
+            currentSlide = index;
+            updateSlide();
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                prevSlide();
+            } else if (e.key === 'Home') {
+                goToSlide(0);
+            } else if (e.key === 'End') {
+                goToSlide(totalSlides - 1);
+            }
+        });
+    </script>
+</body>
+</html>
