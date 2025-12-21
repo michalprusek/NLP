@@ -59,6 +59,57 @@ class VLLMClient(LLMClient):
         if self.use_chat_template:
             print("Using chat template (Instruct model)")
 
+    def cleanup(self):
+        """
+        Properly cleanup vLLM resources and free GPU memory.
+
+        This is critical for switching models on single GPU.
+        """
+        import gc
+        import torch
+
+        if hasattr(self, 'llm') and self.llm is not None:
+            # Shutdown the vLLM engine properly
+            try:
+                # Try to shutdown the engine if method exists
+                if hasattr(self.llm, 'llm_engine'):
+                    engine = self.llm.llm_engine
+                    if hasattr(engine, 'model_executor'):
+                        executor = engine.model_executor
+                        if hasattr(executor, 'shutdown'):
+                            executor.shutdown()
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
+            except Exception as e:
+                print(f"  Warning during engine shutdown: {e}")
+
+            # Delete the LLM object
+            del self.llm
+            self.llm = None
+
+        # Delete tokenizer
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+
+        # NOTE: Do NOT destroy distributed process groups here!
+        # vLLM manages its own process groups and destroying them
+        # causes "Process group not initialized" errors on next model load.
+        # The gc.collect() and empty_cache() below are sufficient.
+
+        # Multiple rounds of garbage collection (important for vLLM)
+        for _ in range(3):
+            gc.collect()
+
+        # Clear CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            # Reset peak memory stats
+            torch.cuda.reset_peak_memory_stats()
+
+        print("  vLLM client cleaned up")
+
     def _format_prompt(self, prompt: str) -> str:
         if not self.use_chat_template:
             return prompt
@@ -110,7 +161,7 @@ class OpenAIClient(LLMClient):
         temperature = kwargs.get('temperature', 0.0)
 
         results = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -119,9 +170,11 @@ class OpenAIClient(LLMClient):
                     messages=[{"role": "user", "content": prompt}]
                 )
                 results.append(response.choices[0].message.content)
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"OpenAI error: {e}")
-                results.append("")
+                print(f"[WARNING] OpenAI error on prompt {i+1}/{len(prompts)}: {e}")
+                results.append("")  # Empty string signals failure to caller
         return results
 
 
@@ -150,7 +203,7 @@ class DeepInfraClient(LLMClient):
         temperature = kwargs.get('temperature', 0.0)
 
         results = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -159,9 +212,11 @@ class DeepInfraClient(LLMClient):
                     messages=[{"role": "user", "content": prompt}]
                 )
                 results.append(response.choices[0].message.content)
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"DeepInfra error: {e}")
-                results.append("")
+                print(f"[WARNING] DeepInfra error on prompt {i+1}/{len(prompts)}: {e}")
+                results.append("")  # Empty string signals failure to caller
         return results
 
 
