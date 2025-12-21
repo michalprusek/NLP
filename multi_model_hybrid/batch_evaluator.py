@@ -138,7 +138,7 @@ class BatchPerModelEvaluator:
             for i, candidate in enumerate(candidates):
                 if local_budget <= 0:
                     if verbose:
-                        print(f"    Budget exhausted")
+                        print("    Budget exhausted")
                     break
 
                 # Get best accuracy for comparison
@@ -170,6 +170,11 @@ class BatchPerModelEvaluator:
                         f"    Candidate {i+1}/{len(candidates)}: "
                         f"acc={acc:.2%}, n={fidelity}, decision={decision.value}"
                     )
+
+            # Unload model to free GPU memory before loading next model
+            if verbose:
+                print(f"  Unloading model: {model_short}")
+            self.model_manager.unload()
 
         budget_consumed = self.budget_used - initial_budget
         return candidates, budget_consumed

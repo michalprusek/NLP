@@ -456,56 +456,60 @@ class MultiModelHybridOptimizer:
         # Use batch evaluation at minimum fidelity
         min_fidelity = self.config.bmin
 
-        for inst_id in list(self.instructions.keys()):
-            for ex_id in list(self.exemplars.keys()):
-                if self.budget_used >= self.config.total_llm_budget:
-                    return
+        # Use batch evaluation via evaluator pool - create once outside the loop
+        from multi_model_optimizer.evaluator_pool import ModelEvaluatorPool
+        pool = ModelEvaluatorPool(self.config)
 
-                # Evaluate on all models
-                instruction = self.instructions[inst_id]
-                exemplar = self.exemplars[ex_id]
+        try:
+            for inst_id in list(self.instructions.keys()):
+                for ex_id in list(self.exemplars.keys()):
+                    if self.budget_used >= self.config.total_llm_budget:
+                        pool.cleanup()
+                        return
 
-                # Use batch evaluation via evaluator pool
-                from multi_model_optimizer.evaluator_pool import ModelEvaluatorPool
-                pool = ModelEvaluatorPool(self.config)
+                    # Evaluate on all models
+                    instruction = self.instructions[inst_id]
+                    exemplar = self.exemplars[ex_id]
 
-                model_error_rates = pool.evaluate_prompt_all_models(
-                    instruction=instruction,
-                    exemplar=exemplar,
-                    validation_data=self.validation_data,
-                    fidelity=min_fidelity,
-                )
+                    model_error_rates = pool.evaluate_prompt_all_models(
+                        instruction=instruction,
+                        exemplar=exemplar,
+                        validation_data=self.validation_data,
+                        fidelity=min_fidelity,
+                    )
 
-                self.budget_used += min_fidelity * len(self.config.target_models)
+                    self.budget_used += min_fidelity * len(self.config.target_models)
 
-                # Add to design data
-                point = MultiModelHybridDesignPoint(
-                    instruction_id=inst_id,
-                    exemplar_id=ex_id,
-                    instruction_embedding=self.instruction_embeddings[inst_id],
-                    exemplar_embedding=self.exemplar_embeddings[ex_id],
-                    actual_model_errors=model_error_rates,
-                    actual_model_fidelities={m: min_fidelity for m in model_error_rates},
-                    aggregated_error=aggregate_scores(
-                        model_error_rates,
-                        self.config.aggregation,
-                        self.config.softmin_temperature,
-                    ),
-                    evaluation_complete=True,
-                )
-                self.design_data.append(point)
+                    # Add to design data
+                    point = MultiModelHybridDesignPoint(
+                        instruction_id=inst_id,
+                        exemplar_id=ex_id,
+                        instruction_embedding=self.instruction_embeddings[inst_id],
+                        exemplar_embedding=self.exemplar_embeddings[ex_id],
+                        actual_model_errors=model_error_rates,
+                        actual_model_fidelities={m: min_fidelity for m in model_error_rates},
+                        aggregated_error=aggregate_scores(
+                            model_error_rates,
+                            self.config.aggregation,
+                            self.config.softmin_temperature,
+                        ),
+                        evaluation_complete=True,
+                    )
+                    self.design_data.append(point)
 
-                # Update best
-                agg_accuracy = 1.0 - point.aggregated_error
-                if agg_accuracy > self.best_aggregated_accuracy:
-                    self.best_aggregated_accuracy = agg_accuracy
-                    self.best_instruction = instruction
-                    self.best_instruction_id = inst_id
-                    self.best_exemplar = exemplar
-                    self.best_exemplar_id = ex_id
-                    self.best_per_model_accuracies = {
-                        m: 1.0 - e for m, e in model_error_rates.items()
-                    }
+                    # Update best
+                    agg_accuracy = 1.0 - point.aggregated_error
+                    if agg_accuracy > self.best_aggregated_accuracy:
+                        self.best_aggregated_accuracy = agg_accuracy
+                        self.best_instruction = instruction
+                        self.best_instruction_id = inst_id
+                        self.best_exemplar = exemplar
+                        self.best_exemplar_id = ex_id
+                        self.best_per_model_accuracies = {
+                            m: 1.0 - e for m, e in model_error_rates.items()
+                        }
+        finally:
+            pool.cleanup()
 
         if verbose:
             print(f"Evaluated {len(self.design_data)} initial prompts")

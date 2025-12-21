@@ -221,6 +221,9 @@ class MultiModelHybridConfig(MultiModelConfig):
 
     def __post_init__(self):
         """Validate and adjust configuration."""
+        # Run parent validations first
+        super().__post_init__()
+
         # Ensure per-model selection matches gp_top_k
         self.per_model_selection.top_k_per_model = self.gp_top_k
 
