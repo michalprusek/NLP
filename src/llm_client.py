@@ -78,6 +78,8 @@ class VLLMClient(LLMClient):
                         executor = engine.model_executor
                         if hasattr(executor, 'shutdown'):
                             executor.shutdown()
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
                 print(f"  Warning during engine shutdown: {e}")
 
@@ -159,7 +161,7 @@ class OpenAIClient(LLMClient):
         temperature = kwargs.get('temperature', 0.0)
 
         results = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -168,9 +170,11 @@ class OpenAIClient(LLMClient):
                     messages=[{"role": "user", "content": prompt}]
                 )
                 results.append(response.choices[0].message.content)
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"OpenAI error: {e}")
-                results.append("")
+                print(f"[WARNING] OpenAI error on prompt {i+1}/{len(prompts)}: {e}")
+                results.append("")  # Empty string signals failure to caller
         return results
 
 
@@ -199,7 +203,7 @@ class DeepInfraClient(LLMClient):
         temperature = kwargs.get('temperature', 0.0)
 
         results = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model_name,
@@ -208,9 +212,11 @@ class DeepInfraClient(LLMClient):
                     messages=[{"role": "user", "content": prompt}]
                 )
                 results.append(response.choices[0].message.content)
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"DeepInfra error: {e}")
-                results.append("")
+                print(f"[WARNING] DeepInfra error on prompt {i+1}/{len(prompts)}: {e}")
+                results.append("")  # Empty string signals failure to caller
         return results
 
 

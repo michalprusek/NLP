@@ -91,9 +91,9 @@ class PerModelSelector:
         selected_indices: Set[int] = set()
 
         for model_name in self.model_names:
-            # Sort by UCB score (lower is better for error rate)
+            # Sort by LCB score (lower is better for error rate)
             model_scores = [
-                (i, c.gp_predictions[model_name].ucb_score)
+                (i, c.gp_predictions[model_name].lcb_score)
                 for i, c in enumerate(candidates)
                 if model_name in c.gp_predictions
             ]
@@ -155,10 +155,10 @@ class PerModelSelector:
                 mean_error = float(means[model_name][i])
                 std_error = float(stds[model_name][i])
 
-                # UCB for minimization: lower bound of error
+                # LCB for minimization: optimistic lower bound of error
                 # We want to explore candidates that MIGHT have low error
-                # UCB = mean - kappa * std gives optimistic estimate
-                ucb_score = mean_error - kappa * std_error
+                # LCB = mean - kappa * std gives optimistic (low) estimate
+                lcb_score = mean_error - kappa * std_error
 
                 candidate.gp_predictions[model_name] = PerModelCandidateScore(
                     instruction_id=candidate.instruction_id,
@@ -166,7 +166,7 @@ class PerModelSelector:
                     model_name=model_name,
                     gp_mean=mean_error,
                     gp_std=std_error,
-                    ucb_score=ucb_score,
+                    lcb_score=lcb_score,
                     rank_in_model=-1,  # Set later during selection
                 )
 
@@ -197,7 +197,7 @@ class PerModelSelector:
                 lines.append(
                     f"    {rank+1}. inst={c.instruction_id}, ex={c.exemplar_id}, "
                     f"mean={score.gp_mean:.4f}, std={score.gp_std:.4f}, "
-                    f"ucb={score.ucb_score:.4f}"
+                    f"lcb={score.lcb_score:.4f}"
                 )
 
         # Count overlap

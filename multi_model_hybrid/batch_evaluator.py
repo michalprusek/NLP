@@ -30,6 +30,11 @@ from multi_model_optimizer.evaluator_pool import (
 )
 
 
+class EvaluationError(Exception):
+    """Raised when LLM evaluation fails (distinct from candidate performing poorly)."""
+    pass
+
+
 class HoeffdingDecision(Enum):
     """Decision outcome from Hoeffding-based sequential test."""
     DROP = "drop"
@@ -40,6 +45,9 @@ class HoeffdingDecision(Enum):
 
     CONTINUE = "continue"
     """Need more samples to decide."""
+
+    SKIPPED = "skipped"
+    """Evaluation failed due to LLM error (not a valid result)."""
 
 
 class BatchPerModelEvaluator:
@@ -203,37 +211,43 @@ class BatchPerModelEvaluator:
 
         Returns:
             Tuple of (error_rate, samples_used, decision)
+            If evaluation fails, returns (1.0, 0, SKIPPED).
         """
         n_samples = 0
         successes = 0
         decision = HoeffdingDecision.CONTINUE
 
-        while decision == HoeffdingDecision.CONTINUE:
-            # Get next step
-            next_n = self._get_next_step(n_samples)
-            next_n = min(next_n, self.nvalid, n_samples + budget_limit)
+        try:
+            while decision == HoeffdingDecision.CONTINUE:
+                # Get next step
+                next_n = self._get_next_step(n_samples)
+                next_n = min(next_n, self.nvalid, n_samples + budget_limit)
 
-            if next_n <= n_samples:
-                break
+                if next_n <= n_samples:
+                    break
 
-            # Evaluate additional samples
-            new_successes = self._evaluate_samples(
-                candidate,
-                model_name,
-                client,
-                self.validation_data[n_samples:next_n]
-            )
+                # Evaluate additional samples
+                new_successes = self._evaluate_samples(
+                    candidate,
+                    model_name,
+                    client,
+                    self.validation_data[n_samples:next_n]
+                )
 
-            successes += new_successes
-            n_samples = next_n
+                successes += new_successes
+                n_samples = next_n
 
-            # Make decision
-            decision = self._hoeffding_decide(
-                successes, n_samples, best_accuracy
-            )
+                # Make decision
+                decision = self._hoeffding_decide(
+                    successes, n_samples, best_accuracy
+                )
 
-            if n_samples >= self.nvalid:
-                break
+                if n_samples >= self.nvalid:
+                    break
+        except EvaluationError as e:
+            if verbose:
+                print(f"      [SKIPPED] {e}")
+            return 1.0, 0, HoeffdingDecision.SKIPPED
 
         error_rate = 1 - (successes / n_samples) if n_samples > 0 else 1.0
         return error_rate, n_samples, decision
@@ -274,9 +288,12 @@ class BatchPerModelEvaluator:
                 max_new_tokens=self.config.task_max_tokens,
                 temperature=0.0,
             )
+        except KeyboardInterrupt:
+            raise  # Never swallow keyboard interrupt
         except Exception as e:
-            print(f"      [ERROR] LLM generation failed: {e}")
-            return 0
+            raise EvaluationError(
+                f"LLM generation failed for {len(prompts)} prompts: {e}"
+            ) from e
 
         # Count successes
         successes = 0

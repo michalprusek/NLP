@@ -380,6 +380,12 @@ class MultiModelHybridOptimizer:
         path = self.config.phase1_results_path
         print(f"Loading Phase 1 results from: {path}")
 
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Phase 1 results file not found: {path}\n"
+                f"Either set skip_phase1_hbbops=False or provide a valid phase1_results_path."
+            )
+
         # Load initial instructions and exemplars
         # Note: When loading Phase 1 results, we always load from file
         # (APE forward is for fresh runs, not loading pre-computed results)
@@ -387,8 +393,11 @@ class MultiModelHybridOptimizer:
         self._load_initial_exemplars()
 
         # Load results
-        with open(path, "r") as f:
-            lines = f.readlines()
+        try:
+            with open(path, "r") as f:
+                lines = f.readlines()
+        except Exception as e:
+            raise RuntimeError(f"Failed to read Phase 1 results file: {path}: {e}") from e
 
         for line in lines:
             record = json.loads(line)
@@ -577,8 +586,18 @@ class MultiModelHybridOptimizer:
         path = self.config.initial_instructions_path
         print(f"Loading initial instructions from: {path}")
 
-        with open(path, "r") as f:
-            content = f.read()
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Initial instructions file not found: {path}\n"
+                f"Set use_ape_forward_init=True to generate instructions, "
+                f"or provide a valid initial_instructions_path."
+            )
+
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to read instructions file: {path}: {e}") from e
 
         instructions = []
         for line in content.strip().split("\n"):
@@ -598,8 +617,18 @@ class MultiModelHybridOptimizer:
         path = self.config.initial_exemplars_path
         print(f"Loading initial exemplars from: {path}")
 
-        with open(path, "r") as f:
-            content = f.read()
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Initial exemplars file not found: {path}\n"
+                f"Set use_ape_forward_init=True to generate exemplars, "
+                f"or provide a valid initial_exemplars_path."
+            )
+
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to read exemplars file: {path}: {e}") from e
 
         # Parse exemplar blocks (separated by 80 equals signs)
         blocks = content.split("=" * 80)

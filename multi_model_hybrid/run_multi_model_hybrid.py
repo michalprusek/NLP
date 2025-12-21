@@ -95,8 +95,8 @@ Examples:
         help="Maximum unique candidates from union (default: 30)"
     )
     parser.add_argument(
-        "--ucb-kappa", type=float, default=2.0,
-        help="UCB exploration parameter (default: 2.0)"
+        "--lcb-kappa", type=float, default=2.0,
+        help="LCB exploration parameter for minimizing error (default: 2.0)"
     )
 
     # Aggregation
@@ -250,8 +250,8 @@ Examples:
 
     # Output
     parser.add_argument(
-        "--output-dir", type=str, default="multi_model_hybrid/results",
-        help="Output directory for results (default: multi_model_hybrid/results)"
+        "--output-dir", type=str, default="results/multi_model_hybrid",
+        help="Output directory for results (default: results/multi_model_hybrid)"
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -283,7 +283,7 @@ def main():
     per_model_config = PerModelSelectionConfig(
         top_k_per_model=args.top_k_per_model,
         max_union_candidates=args.max_union,
-        ucb_kappa=args.ucb_kappa,
+        ucb_kappa=args.lcb_kappa,
     )
 
     # GPU assignment (all on single GPU)
@@ -357,7 +357,7 @@ def main():
     print(f"\nConfiguration:")
     print(f"  Models: {config.target_models}")
     print(f"  Selection: Top {args.top_k_per_model} per model, union up to {args.max_union}")
-    print(f"  UCB kappa: {args.ucb_kappa}")
+    print(f"  LCB kappa: {args.lcb_kappa}")
     print(f"  Aggregation: {config.aggregation} (T={config.softmin_temperature})")
     print(f"  Budget: {config.total_llm_budget:,}")
     print(f"  Iterations: {args.iterations}")

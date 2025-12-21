@@ -9,8 +9,7 @@ This is used for initial instruction generation in Phase 1 (HbBoPs),
 while OPRO is used for iterative refinement in Phase 2.
 """
 import random
-import re
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Callable
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -91,6 +90,8 @@ class APEForwardGenerator:
         seen = set()
         attempts = 0
         max_attempts = self.num_candidates * 3
+        consecutive_failures = 0
+        max_consecutive_failures = 10
 
         while len(candidates) < self.num_candidates and attempts < max_attempts:
             attempts += 1
@@ -108,9 +109,17 @@ class APEForwardGenerator:
                     temperature=self.temperature,
                     max_new_tokens=self.max_tokens,
                 )
+                consecutive_failures = 0  # Reset on success
+            except KeyboardInterrupt:
+                raise  # Never swallow keyboard interrupt
             except Exception as e:
+                consecutive_failures += 1
                 if verbose:
-                    print(f"  Generation error: {e}")
+                    print(f"  Generation error (attempt {attempts}): {e}")
+                if consecutive_failures >= max_consecutive_failures:
+                    print(f"  [ERROR] {consecutive_failures} consecutive failures, aborting generation")
+                    print(f"  Check model configuration and GPU memory.")
+                    break
                 continue
 
             # Extract instruction
@@ -289,7 +298,10 @@ class APEForwardGenerator:
                 temperature=self.temperature,
                 max_new_tokens=self.max_tokens,
             )
-        except Exception:
+        except KeyboardInterrupt:
+            raise  # Never swallow keyboard interrupt
+        except Exception as e:
+            print(f"[WARNING] Single instruction generation failed: {e}")
             return ""
 
         return self._extract_instruction(response)

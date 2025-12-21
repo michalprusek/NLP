@@ -26,7 +26,8 @@ class PerModelSelectionConfig:
     Configuration for per-model GP-based candidate selection.
 
     Each model independently selects its top-k candidates based on
-    UCB (Upper Confidence Bound) scores from the GP predictions.
+    LCB (Lower Confidence Bound) scores from the GP predictions.
+    Uses LCB = mean - kappa*std for minimizing error rate.
     The union of all per-model selections forms the evaluation pool.
     """
 
@@ -37,10 +38,19 @@ class PerModelSelectionConfig:
     """Maximum unique candidates from union of per-model selections."""
 
     use_uncertainty: bool = True
-    """Whether to use UCB (mean - kappa*std) for selection."""
+    """Whether to use LCB (mean - kappa*std) for selection vs mean-only."""
 
     ucb_kappa: float = 2.0
-    """UCB exploration parameter. Higher = more exploration."""
+    """LCB exploration parameter. Higher = more exploration (wider bounds)."""
+
+    def __post_init__(self):
+        """Validate configuration."""
+        if self.top_k_per_model < 1:
+            raise ValueError("top_k_per_model must be >= 1")
+        if self.max_union_candidates < self.top_k_per_model:
+            raise ValueError("max_union_candidates must be >= top_k_per_model")
+        if self.ucb_kappa < 0:
+            raise ValueError("ucb_kappa must be non-negative")
 
 
 @dataclass
@@ -48,7 +58,8 @@ class PerModelCandidateScore:
     """
     Score for a candidate on a specific model from GP prediction.
 
-    Stores both mean prediction and uncertainty for UCB-based selection.
+    Stores both mean prediction and uncertainty for LCB-based selection.
+    LCB (Lower Confidence Bound) is used since we minimize error rate.
     """
 
     instruction_id: int
@@ -66,8 +77,8 @@ class PerModelCandidateScore:
     gp_std: float
     """GP prediction uncertainty (standard deviation)."""
 
-    ucb_score: float
-    """UCB score: mean - kappa * std (lower is better for error rate)."""
+    lcb_score: float
+    """LCB score: mean - kappa * std (lower is better, optimistic for low error)."""
 
     rank_in_model: int = -1
     """Rank within this model's selection (1 = best)."""
@@ -88,7 +99,7 @@ class MultiModelHybridCandidate:
     """Instruction registry ID."""
 
     instruction_embedding: np.ndarray
-    """768-dimensional instruction embedding."""
+    """Instruction embedding (dimension depends on encoder model)."""
 
     exemplar: str
     """Exemplar text (few-shot examples)."""
@@ -97,7 +108,7 @@ class MultiModelHybridCandidate:
     """Exemplar registry ID."""
 
     exemplar_embedding: np.ndarray
-    """768-dimensional exemplar embedding."""
+    """Exemplar embedding (dimension depends on encoder model)."""
 
     # Per-model GP predictions (filled during Phase 3)
     gp_predictions: Dict[str, PerModelCandidateScore] = field(default_factory=dict)
@@ -116,7 +127,7 @@ class MultiModelHybridCandidate:
 
     # Hoeffding decisions per model
     decisions: Dict[str, str] = field(default_factory=dict)
-    """Map: model_name -> 'drop'/'promote'/'full'."""
+    """Map: model_name -> 'drop'/'promote'/'continue'/'skipped'."""
 
     # Aggregated results
     aggregated_accuracy: Optional[float] = None
@@ -138,10 +149,10 @@ class MultiModelHybridDesignPoint:
     """Exemplar registry ID."""
 
     instruction_embedding: np.ndarray
-    """768-dimensional instruction embedding."""
+    """Instruction embedding (dimension depends on encoder model)."""
 
     exemplar_embedding: np.ndarray
-    """768-dimensional exemplar embedding."""
+    """Exemplar embedding (dimension depends on encoder model)."""
 
     # Actual evaluations (model -> error_rate)
     actual_model_errors: Dict[str, float] = field(default_factory=dict)
@@ -223,6 +234,20 @@ class MultiModelHybridConfig(MultiModelConfig):
         """Validate and adjust configuration."""
         # Run parent validations first
         super().__post_init__()
+
+        # Validate Hoeffding parameters
+        if not 0 < self.hoeffding_confidence < 1:
+            raise ValueError("hoeffding_confidence must be in (0, 1)")
+        if self.hoeffding_min_samples < 1:
+            raise ValueError("hoeffding_min_samples must be >= 1")
+        if self.hoeffding_min_samples >= self.hoeffding_min_promote_samples:
+            raise ValueError("hoeffding_min_samples must be < hoeffding_min_promote_samples")
+
+        # Validate APE parameters
+        if self.ape_num_final > self.ape_num_candidates:
+            raise ValueError("ape_num_final must be <= ape_num_candidates")
+        if self.ape_num_samples < 1:
+            raise ValueError("ape_num_samples must be >= 1")
 
         # Ensure per-model selection matches gp_top_k
         self.per_model_selection.top_k_per_model = self.gp_top_k
