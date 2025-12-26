@@ -73,7 +73,8 @@ def evaluate_prompt(
 
     for response, expected in zip(responses, expected_answers):
         predicted = extract_answer(response)
-        if predicted and compare_numbers(predicted, expected):
+        expected_num = extract_answer(expected)  # Extract number from expected answer
+        if predicted and expected_num and compare_numbers(predicted, expected_num):
             correct += 1
 
     return 1.0 - (correct / total)
@@ -146,6 +147,7 @@ def main():
 
     # APE Data Augmentation
     parser.add_argument("--ape-instructions", type=int, default=1000, help="Number of APE-generated instructions")
+    parser.add_argument("--ape-cache", type=str, default="datasets/hbbops/ape_instructions_1000.json", help="Path to cache APE instructions")
     parser.add_argument("--skip-ape", action="store_true", help="Skip APE generation (use original instructions only)")
 
     # Output
@@ -195,8 +197,9 @@ def main():
     # APE Data Augmentation
     if not args.skip_ape:
         log("\n" + "=" * 60)
-        log("Generating Instructions via APE Forward Pass")
+        log("Loading/Generating Instructions via APE Forward Pass")
         log("=" * 60)
+        log(f"APE cache path: {args.ape_cache}")
 
         from robust_vec2text.ape_generator import APEInstructionGenerator
 
@@ -205,7 +208,9 @@ def main():
             backend=args.backend,
         )
 
-        ape_instructions = ape_generator.generate_instructions(
+        # Use generate_or_load to cache/load instructions
+        ape_instructions = ape_generator.generate_or_load(
+            cache_path=args.ape_cache,
             validation_data=validation_data,
             num_instructions=args.ape_instructions,
             verbose=True,
@@ -304,6 +309,13 @@ def main():
     log(f"\nOptimized instruction:")
     log(f"  Text: {result.text}")
     log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
+
+    # Free GPU memory before evaluation
+    log("\nClearing GPU memory for evaluation...")
+    del inference
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # Evaluate novel prompt
     log("\n" + "=" * 60)

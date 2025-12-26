@@ -4,9 +4,13 @@ Generates diverse instructions using forward pass APE method:
 - Show Q/A examples to LLM
 - Ask it to generate instruction that would help solve them
 - Collect 1000+ unique instructions for VAE training
+
+Supports caching to avoid regenerating instructions each run.
 """
 
+import json
 import random
+from pathlib import Path
 from typing import List, Optional
 from tqdm import tqdm
 
@@ -183,3 +187,74 @@ Instruction:"""
             instruction = instruction[:500]
 
         return instruction if instruction else None
+
+    def save_instructions(self, instructions: List[str], path: str) -> None:
+        """Save instructions to JSON file.
+
+        Args:
+            instructions: List of instruction strings
+            path: Path to save file
+        """
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(instructions, f, ensure_ascii=False, indent=2)
+        print(f"Saved {len(instructions)} instructions to {path}")
+
+    @staticmethod
+    def load_instructions(path: str) -> List[str]:
+        """Load instructions from JSON file.
+
+        Args:
+            path: Path to load file
+
+        Returns:
+            List of instruction strings
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            instructions = json.load(f)
+        print(f"Loaded {len(instructions)} instructions from {path}")
+        return instructions
+
+    def generate_or_load(
+        self,
+        cache_path: str,
+        validation_data: List[dict],
+        num_instructions: int = 1000,
+        examples_per_prompt: int = 5,
+        batch_size: int = 50,
+        temperature: float = 1.0,
+        verbose: bool = True,
+    ) -> List[str]:
+        """Generate instructions or load from cache if exists.
+
+        Args:
+            cache_path: Path to cache file
+            validation_data: List of {"question": ..., "answer": ...} dicts
+            num_instructions: Target number of unique instructions
+            examples_per_prompt: Q/A examples per generation prompt
+            batch_size: Number of prompts to generate in parallel
+            temperature: Generation temperature
+            verbose: Print progress
+
+        Returns:
+            List of unique instruction strings
+        """
+        cache_file = Path(cache_path)
+
+        if cache_file.exists():
+            return self.load_instructions(cache_path)
+
+        # Generate new instructions
+        instructions = self.generate_instructions(
+            validation_data=validation_data,
+            num_instructions=num_instructions,
+            examples_per_prompt=examples_per_prompt,
+            batch_size=batch_size,
+            temperature=temperature,
+            verbose=verbose,
+        )
+
+        # Save to cache
+        self.save_instructions(instructions, cache_path)
+
+        return instructions
