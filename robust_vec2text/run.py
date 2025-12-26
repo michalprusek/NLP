@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Robust VAE-HbBoPs CLI.
+
+Instruction-only optimization with VAE latent space and gradient-based EI.
+"""
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any
+
+import torch
+
+from robust_vec2text.optimizer import RobustHbBoPs
+from robust_vec2text.inference import RobustInference
+
+
+def load_instructions(path: str) -> list:
+    """Load instructions from text file (one per line)."""
+    with open(path, "r") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def load_exemplars(path: str) -> list:
+    """Load exemplars from text file (one per line)."""
+    with open(path, "r") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def load_validation(path: str) -> list:
+    """Load validation data from JSON."""
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def evaluate_prompt(
+    prompt: str,
+    validation_data: list,
+    model: str,
+    backend: str = "vllm",
+) -> float:
+    """Evaluate prompt on validation set.
+
+    Returns error rate (lower is better).
+    """
+    from src.llm_client import create_llm_client
+    from src.gsm8k_evaluator import extract_answer, compare_numbers
+
+    client = create_llm_client(model, backend)
+
+    correct = 0
+    total = len(validation_data)
+
+    # Batch generate for efficiency
+    prompts = []
+    expected_answers = []
+
+    for item in validation_data:
+        question = item["question"]
+        expected = item["answer"]
+        full_prompt = f"{prompt}\n\nQ: {question}\nA:"
+        prompts.append(full_prompt)
+        expected_answers.append(expected)
+
+    # Generate all at once
+    responses = client.generate_batch(
+        prompts,
+        max_tokens=256,
+        temperature=0.0,
+    )
+
+    for response, expected in zip(responses, expected_answers):
+        predicted = extract_answer(response)
+        if predicted and compare_numbers(predicted, expected):
+            correct += 1
+
+    return 1.0 - (correct / total)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Robust VAE-HbBoPs Optimization")
+
+    # Data paths
+    parser.add_argument(
+        "--instructions",
+        type=str,
+        default="datasets/hbbops/instructions_25.txt",
+        help="Path to instructions file",
+    )
+    parser.add_argument(
+        "--exemplars",
+        type=str,
+        default="datasets/hbbops/examples_25.txt",
+        help="Path to exemplars file",
+    )
+    parser.add_argument(
+        "--grid-path",
+        type=str,
+        default="datasets/hbbops/full_grid_combined.jsonl",
+        help="Path to pre-evaluated grid",
+    )
+    parser.add_argument(
+        "--validation",
+        type=str,
+        default="hbbops_improved_2/data/validation.json",
+        help="Path to validation data",
+    )
+
+    # Model
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="Qwen/Qwen2.5-7B-Instruct",
+        help="Model for evaluation",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="vllm",
+        choices=["vllm", "openai", "deepinfra"],
+        help="Backend for LLM",
+    )
+
+    # Optimization parameters
+    parser.add_argument("--top-k", type=int, default=25, help="Top prompts from grid")
+    parser.add_argument("--latent-dim", type=int, default=32, help="VAE latent dimension")
+
+    # VAE training
+    parser.add_argument("--vae-epochs", type=int, default=200, help="VAE training epochs")
+    parser.add_argument("--vae-lr", type=float, default=0.001, help="VAE learning rate")
+    parser.add_argument("--vae-patience", type=int, default=30, help="VAE early stopping")
+
+    # GP training
+    parser.add_argument("--gp-epochs", type=int, default=500, help="GP training epochs")
+    parser.add_argument("--gp-lr", type=float, default=0.01, help="GP learning rate")
+
+    # Gradient optimization
+    parser.add_argument("--opt-steps", type=int, default=50, help="Gradient optimization steps")
+    parser.add_argument("--opt-lr", type=float, default=0.1, help="Gradient optimization LR")
+
+    # Vec2Text
+    parser.add_argument("--v2t-steps", type=int, default=50, help="Vec2Text steps")
+    parser.add_argument("--v2t-beam", type=int, default=8, help="Vec2Text beam width")
+    parser.add_argument("--cosine-threshold", type=float, default=0.95, help="Cycle consistency threshold")
+
+    # Output
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="robust_vec2text/results",
+        help="Output directory",
+    )
+    parser.add_argument("--debug", action="store_true", help="Debug mode")
+
+    args = parser.parse_args()
+
+    # Create output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Log file
+    log_path = output_dir / f"run_{timestamp}.log"
+    result_path = output_dir / f"result_{timestamp}.json"
+
+    # Log function
+    def log(msg: str):
+        print(msg)
+        with open(log_path, "a") as f:
+            f.write(msg + "\n")
+
+    log("=" * 60)
+    log("Robust VAE-HbBoPs Optimization")
+    log("=" * 60)
+    log(f"Timestamp: {timestamp}")
+    log(f"Arguments: {vars(args)}")
+
+    # Load data
+    instructions = load_instructions(args.instructions)
+    exemplars = load_exemplars(args.exemplars)
+    validation_data = load_validation(args.validation)
+
+    log(f"\nLoaded data:")
+    log(f"  Instructions: {len(instructions)}")
+    log(f"  Exemplars: {len(exemplars)}")
+    log(f"  Validation: {len(validation_data)} samples")
+
+    # Initialize optimizer
+    log("\n" + "=" * 60)
+    log("Initializing Optimizer")
+    log("=" * 60)
+
+    optimizer = RobustHbBoPs(
+        instructions=instructions,
+        exemplars=exemplars,
+        device="cuda",
+        latent_dim=args.latent_dim,
+    )
+
+    # Load grid
+    log("\n" + "=" * 60)
+    log("Loading Pre-evaluated Grid")
+    log("=" * 60)
+
+    grid_prompts = optimizer.load_grid(args.grid_path, top_k=args.top_k)
+
+    best_prompt = optimizer.best_grid_prompt
+    log(f"\nBest from grid:")
+    log(f"  Instruction ID: {best_prompt.instruction_id}")
+    log(f"  Exemplar ID: {best_prompt.exemplar_id}")
+    log(f"  Error rate: {best_prompt.error_rate:.4f}")
+
+    # Train VAE
+    log("\n" + "=" * 60)
+    log("Training VAE on Instruction Embeddings")
+    log("=" * 60)
+
+    vae_history = optimizer.train_vae(
+        epochs=args.vae_epochs,
+        lr=args.vae_lr,
+        patience=args.vae_patience,
+        verbose=True,
+    )
+
+    # Train GP
+    log("\n" + "=" * 60)
+    log("Training GP on Latent Space")
+    log("=" * 60)
+
+    gp_success = optimizer.train_gp(
+        max_epochs=args.gp_epochs,
+        lr=args.gp_lr,
+        verbose=True,
+    )
+
+    if not gp_success:
+        log("ERROR: GP training failed!")
+        sys.exit(1)
+
+    # Initialize inference
+    log("\n" + "=" * 60)
+    log("Initializing Inference Pipeline")
+    log("=" * 60)
+
+    inference = RobustInference(
+        vae=optimizer.get_vae(),
+        gp_trainer=optimizer.get_gp_trainer(),
+        gtr=optimizer.gtr,
+        device="cuda",
+        cosine_threshold=args.cosine_threshold,
+    )
+
+    # Get best latent
+    best_latent = optimizer.get_best_latent()
+    log(f"Best latent norm: {best_latent.norm().item():.4f}")
+
+    # Run optimization
+    log("\n" + "=" * 60)
+    log("Running Gradient-Based Optimization")
+    log("=" * 60)
+
+    result = inference.full_pipeline(
+        initial_latent=best_latent,
+        best_y=best_prompt.error_rate,
+        n_opt_steps=args.opt_steps,
+        opt_lr=args.opt_lr,
+        v2t_steps=args.v2t_steps,
+        v2t_beam=args.v2t_beam,
+        verbose=True,
+    )
+
+    log(f"\nOptimized instruction:")
+    log(f"  Text: {result.text}")
+    log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
+    log(f"  Passed threshold: {result.passed_threshold}")
+
+    # Evaluate novel prompt
+    log("\n" + "=" * 60)
+    log("Evaluating Novel Prompt")
+    log("=" * 60)
+
+    # Construct full prompt with fixed exemplar
+    novel_prompt = f"{result.text}\n\n{best_prompt.exemplar}"
+    log(f"Novel prompt (instruction + best exemplar):")
+    log(f"  {novel_prompt[:200]}...")
+
+    log(f"\nEvaluating on {len(validation_data)} validation samples...")
+
+    novel_error = evaluate_prompt(
+        novel_prompt,
+        validation_data,
+        args.model,
+        args.backend,
+    )
+
+    log(f"Novel prompt error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
+    log(f"Grid best error rate: {best_prompt.error_rate:.4f}")
+    log(f"Improvement: {best_prompt.error_rate - novel_error:.4f}")
+
+    # Save results
+    results: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "args": vars(args),
+        "grid_best": {
+            "instruction_id": best_prompt.instruction_id,
+            "exemplar_id": best_prompt.exemplar_id,
+            "instruction": best_prompt.instruction,
+            "exemplar": best_prompt.exemplar,
+            "error_rate": best_prompt.error_rate,
+        },
+        "optimized": {
+            "instruction": result.text,
+            "cosine_similarity": result.cosine_similarity,
+            "passed_threshold": result.passed_threshold,
+            "full_prompt": novel_prompt,
+            "error_rate": novel_error,
+        },
+        "improvement": best_prompt.error_rate - novel_error,
+        "vae_best_cosine": optimizer.vae_trainer.best_cosine,
+    }
+
+    with open(result_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    log("\n" + "=" * 60)
+    log("Run Complete")
+    log("=" * 60)
+    log(f"Log: {log_path}")
+    log(f"Results: {result_path}")
+
+
+if __name__ == "__main__":
+    main()
