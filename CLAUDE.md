@@ -79,6 +79,26 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 5
 - `results/`, `hbbops/results/`: Experiment outputs (gitignored)
 - `visualize/`: Analysis and comparison scripts
 
+## Best Practices
+
+### Skip HbBoPs - Use Pre-evaluated Grid
+For faster experimentation, always load top prompts from pre-evaluated grid instead of running full HbBoPs:
+
+```python
+# Load top 25 prompts from pre-evaluated grid
+grid_file = "datasets/hbbops/full_grid_combined.jsonl"
+# Contains 625 pre-evaluated (instruction, exemplar, error_rate) tuples
+# Sort by error_rate ascending and take top N
+```
+
+Use full HbBoPs only when explicitly requested. The pre-evaluated grid saves hours of LLM evaluation time.
+
+### VAE-HbBoPs Quick Mode
+```bash
+# Fast mode: Load top 25 from grid, train VAE+GP, optimize latent
+uv run python -m vae_hbbops.run_vae_hbbops --from-grid --top-k 25
+```
+
 ## Constraints
 
 - vLLM requires CUDA GPU; Claude API requires `ANTHROPIC_API_KEY`

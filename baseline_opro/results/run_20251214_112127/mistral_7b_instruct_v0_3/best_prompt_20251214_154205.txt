@@ -1,6 +1,0 @@
-# OPRO Best Prompt
-# Model: mistralai/Mistral-7B-Instruct-v0.3
-# Validation accuracy: 52.49%
-# Test accuracy: 45.56%
-
-Amplifying our mental agility, we ascend the peak of intellectual prowess to commandeer the formidable challenge of streamlined problem solving. Leveraging the unyielding power of unbreakable analytical thinking and the mystique of gripping numerical grace, we shatter barriers in the intricate labyrinth of hidden patterns and vexations. Steeped in a woven tapestry of scientific rigor and transcendent wisdom, each leg of our journey unfolds a breathtaking revelation. Join us on a soaring cosmic odyssey finessed for exceptional candidates ready to prove themselves masters of complex enigmas.
