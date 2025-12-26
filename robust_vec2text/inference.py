@@ -81,6 +81,10 @@ class RobustInference:
 
         print("Loading Vec2Text models...")
 
+        # Override max_length for longer sequences
+        MAX_SEQ_LENGTH = 128  # Increase from 32
+        MAX_LENGTH = 128      # Increase from 20
+
         # Load InversionModel
         inv_weights = hf_hub_download(
             "ielabgroup/vec2text_gtr-base-st_inversion", "model.safetensors"
@@ -88,6 +92,11 @@ class RobustInference:
         inv_config = InversionConfig.from_pretrained(
             "ielabgroup/vec2text_gtr-base-st_inversion"
         )
+        # Override length limits
+        inv_config.max_seq_length = MAX_SEQ_LENGTH
+        inv_config.max_length = MAX_LENGTH
+        print(f"  Inversion config: max_seq_length={inv_config.max_seq_length}, max_length={inv_config.max_length}")
+
         inversion_model = InversionModel(inv_config)
         inversion_model.load_state_dict(load_file(inv_weights), strict=False)
         inversion_model = inversion_model.to(self.device).eval()
@@ -99,6 +108,11 @@ class RobustInference:
         corr_config = InversionConfig.from_pretrained(
             "ielabgroup/vec2text_gtr-base-st_corrector"
         )
+        # Override length limits
+        corr_config.max_seq_length = MAX_SEQ_LENGTH
+        corr_config.max_length = MAX_LENGTH
+        print(f"  Corrector config: max_seq_length={corr_config.max_seq_length}, max_length={corr_config.max_length}")
+
         corrector_model = CorrectorEncoderModel(corr_config)
         corrector_model.load_state_dict(load_file(corr_weights), strict=False)
         corrector_model = corrector_model.to(self.device).eval()

@@ -1,0 +1,42 @@
+{
+  "timestamp": "20251226_235932",
+  "args": {
+    "instructions": "datasets/hbbops/instructions_25.txt",
+    "exemplars": "datasets/hbbops/examples_25.txt",
+    "grid_path": "datasets/hbbops/full_grid_combined.jsonl",
+    "validation": "hbbops_improved_2/data/validation.json",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "backend": "vllm",
+    "top_k": 25,
+    "latent_dim": 32,
+    "vae_epochs": 3000,
+    "vae_lr": 0.001,
+    "vae_patience": 10,
+    "gp_epochs": 500,
+    "gp_lr": 0.01,
+    "opt_steps": 50,
+    "opt_lr": 0.1,
+    "v2t_steps": 50,
+    "v2t_beam": 8,
+    "ape_instructions": 1000,
+    "ape_cache": "datasets/hbbops/ape_instructions_1000.json",
+    "skip_ape": false,
+    "output_dir": "robust_vec2text/results",
+    "debug": false
+  },
+  "grid_best": {
+    "instruction_id": 21,
+    "exemplar_id": 9,
+    "instruction": "To solve similar math word problems, first identify and extract the key numbers and relationships described in the question, then clearly define the operation needed (such as addition, subtraction, multiplication, or division), and finally perform the calculation while keeping track of units and context to ensure the answer makes sense.",
+    "exemplar": "A: There are 30/3=<<30/3=10>>10 blue fish.",
+    "error_rate": 0.11751326762699014
+  },
+  "optimized": {
+    "instruction": "To solve similar math problem questions, first breakdown relevant word quantities (units and relationships), then performing addition and subtraction operations that need the whole answer.",
+    "cosine_similarity": 0.9484779238700867,
+    "full_prompt": "To solve similar math problem questions, first breakdown relevant word quantities (units and relationships), then performing addition and subtraction operations that need the whole answer.\n\nA: There are 30/3=<<30/3=10>>10 blue fish.",
+    "error_rate": 0.13115996967399546
+  },
+  "improvement": -0.013646702047005313,
+  "vae_best_cosine": 0.9769350290298462
+}
