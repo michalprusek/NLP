@@ -29,9 +29,9 @@ class VAETrainer:
         input_dim: int = 768,
         latent_dim: int = 32,
         device: str = "cuda",
-        lambda_cosine: float = 1.0,
-        lambda_mse: float = 0.1,
-        lambda_kld: float = 0.001,
+        lambda_cosine: float = 10.0,   # Increased from 1.0 for better reconstruction
+        lambda_mse: float = 1.0,        # Increased from 0.1 for stability
+        lambda_kld: float = 0.0001,     # Decreased from 0.001 (with annealing)
     ):
         """Initialize trainer.
 
@@ -39,9 +39,9 @@ class VAETrainer:
             input_dim: Input embedding dimension (768 for GTR)
             latent_dim: VAE latent dimension (32)
             device: Device to use
-            lambda_cosine: Weight for cosine loss (priority)
-            lambda_mse: Weight for MSE loss
-            lambda_kld: Weight for KL divergence
+            lambda_cosine: Weight for cosine loss (priority, default 10.0)
+            lambda_mse: Weight for MSE loss (default 1.0)
+            lambda_kld: Weight for KL divergence (default 0.0001, with annealing)
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
@@ -50,10 +50,13 @@ class VAETrainer:
             latent_dim=latent_dim,
         ).to(self.device)
 
+        # Store lambda_kld for annealing
+        self.lambda_kld = lambda_kld
+
         self.loss_fn = VAELoss(
             lambda_cosine=lambda_cosine,
             lambda_mse=lambda_mse,
-            lambda_kld=lambda_kld,
+            lambda_kld=lambda_kld,  # Will be overridden during training with annealing
         )
 
         self.best_state: Optional[Dict] = None
@@ -133,6 +136,12 @@ class VAETrainer:
         patience_counter = 0
 
         for epoch in range(epochs):
+            # KLD Annealing: gradually increase KLD weight during first half
+            # This allows the model to first focus on reconstruction, then regularization
+            annealing_factor = min(1.0, epoch / (epochs * 0.5))
+            current_kld_weight = self.lambda_kld * annealing_factor
+            self.loss_fn.lambda_kld = current_kld_weight
+
             # Training
             self.vae.train()
             train_losses = []

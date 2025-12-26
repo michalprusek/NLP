@@ -16,13 +16,12 @@ from robust_vec2text.encoder import GTRPromptEncoder
 
 @dataclass
 class InversionResult:
-    """Result of Vec2Text inversion with cycle consistency."""
+    """Result of Vec2Text inversion."""
 
     text: str
     target_embedding: torch.Tensor
     realized_embedding: torch.Tensor
     cosine_similarity: float
-    passed_threshold: bool
 
 
 class RobustInference:
@@ -33,10 +32,9 @@ class RobustInference:
         2. Gradient-based EI optimization
         3. Decode latent to target embedding
         4. Vec2Text invert to candidate text
-        5. Cycle consistency check
+        5. Return result with cosine score
 
-    No fallback strategy - returns result with cosine score.
-    Caller can filter based on threshold.
+    Always uses Vec2Text output (no threshold filtering).
     """
 
     def __init__(
@@ -45,7 +43,6 @@ class RobustInference:
         gp_trainer: GPTrainer,
         gtr: GTRPromptEncoder,
         device: str = "cuda",
-        cosine_threshold: float = 0.95,
     ):
         """Initialize inference pipeline.
 
@@ -54,13 +51,11 @@ class RobustInference:
             gp_trainer: Trained GP trainer
             gtr: GTR encoder
             device: Device to use
-            cosine_threshold: Threshold for cycle consistency
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.vae = vae.to(self.device)
         self.gp_trainer = gp_trainer
         self.gtr = gtr
-        self.cosine_threshold = cosine_threshold
 
         # Vec2Text will be loaded lazily
         self._vec2text_corrector = None
@@ -290,13 +285,13 @@ class RobustInference:
         num_steps: int = 50,
         beam_width: int = 8,
     ) -> InversionResult:
-        """Invert latent with cycle consistency check.
+        """Invert latent via Vec2Text.
 
         Pipeline:
             1. Decode latent -> target_embedding
             2. Vec2Text invert -> candidate_text
             3. GTR encode candidate_text -> realized_embedding
-            4. Check cosine(target, realized) > threshold
+            4. Compute cosine similarity (no threshold filtering)
 
         Args:
             latent: Latent vector (32,)
@@ -326,7 +321,6 @@ class RobustInference:
             target_embedding=target_emb,
             realized_embedding=realized_emb,
             cosine_similarity=cosine,
-            passed_threshold=cosine >= self.cosine_threshold,
         )
 
     def full_pipeline(
@@ -382,6 +376,5 @@ class RobustInference:
         if verbose:
             print(f"  Candidate: {result.text[:80]}...")
             print(f"  Cosine similarity: {result.cosine_similarity:.4f}")
-            print(f"  Passed threshold ({self.cosine_threshold}): {result.passed_threshold}")
 
         return result

@@ -143,7 +143,10 @@ def main():
     # Vec2Text
     parser.add_argument("--v2t-steps", type=int, default=50, help="Vec2Text steps")
     parser.add_argument("--v2t-beam", type=int, default=8, help="Vec2Text beam width")
-    parser.add_argument("--cosine-threshold", type=float, default=0.95, help="Cycle consistency threshold")
+
+    # APE Data Augmentation
+    parser.add_argument("--ape-instructions", type=int, default=1000, help="Number of APE-generated instructions")
+    parser.add_argument("--skip-ape", action="store_true", help="Skip APE generation (use original instructions only)")
 
     # Output
     parser.add_argument(
@@ -185,9 +188,35 @@ def main():
     validation_data = load_validation(args.validation)
 
     log(f"\nLoaded data:")
-    log(f"  Instructions: {len(instructions)}")
+    log(f"  Original instructions: {len(instructions)}")
     log(f"  Exemplars: {len(exemplars)}")
     log(f"  Validation: {len(validation_data)} samples")
+
+    # APE Data Augmentation
+    if not args.skip_ape:
+        log("\n" + "=" * 60)
+        log("Generating Instructions via APE Forward Pass")
+        log("=" * 60)
+
+        from robust_vec2text.ape_generator import APEInstructionGenerator
+
+        ape_generator = APEInstructionGenerator(
+            model=args.model,
+            backend=args.backend,
+        )
+
+        ape_instructions = ape_generator.generate_instructions(
+            validation_data=validation_data,
+            num_instructions=args.ape_instructions,
+            verbose=True,
+        )
+
+        # Combine with original instructions
+        all_instructions = list(set(instructions + ape_instructions))
+        log(f"Total unique instructions: {len(all_instructions)}")
+    else:
+        log("\nSkipping APE generation (--skip-ape)")
+        all_instructions = instructions
 
     # Initialize optimizer
     log("\n" + "=" * 60)
@@ -195,7 +224,7 @@ def main():
     log("=" * 60)
 
     optimizer = RobustHbBoPs(
-        instructions=instructions,
+        instructions=all_instructions,
         exemplars=exemplars,
         device="cuda",
         latent_dim=args.latent_dim,
@@ -251,7 +280,6 @@ def main():
         gp_trainer=optimizer.get_gp_trainer(),
         gtr=optimizer.gtr,
         device="cuda",
-        cosine_threshold=args.cosine_threshold,
     )
 
     # Get best latent
@@ -276,7 +304,6 @@ def main():
     log(f"\nOptimized instruction:")
     log(f"  Text: {result.text}")
     log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
-    log(f"  Passed threshold: {result.passed_threshold}")
 
     # Evaluate novel prompt
     log("\n" + "=" * 60)
@@ -315,7 +342,6 @@ def main():
         "optimized": {
             "instruction": result.text,
             "cosine_similarity": result.cosine_similarity,
-            "passed_threshold": result.passed_threshold,
             "full_prompt": novel_prompt,
             "error_rate": novel_error,
         },

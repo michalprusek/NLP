@@ -5,7 +5,7 @@ This module implements a robust prompt optimization system that:
 - Prioritizes cosine similarity loss for Vec2Text compatibility
 - Uses simplified GP without FeatureExtractor
 - Implements gradient-based EI optimization
-- Includes cycle consistency checks for Vec2Text inversion
+- APE forward pass for data augmentation (1000+ instructions)
 """
 
 from robust_vec2text.vae import InstructionVAE, VAELoss
@@ -14,6 +14,7 @@ from robust_vec2text.training import VAETrainer
 from robust_vec2text.optimizer import RobustHbBoPs, GridPrompt
 from robust_vec2text.inference import RobustInference, InversionResult
 from robust_vec2text.encoder import GTRPromptEncoder
+from robust_vec2text.ape_generator import APEInstructionGenerator
 
 __all__ = [
     # VAE
@@ -31,4 +32,6 @@ __all__ = [
     "InversionResult",
     # Encoder
     "GTRPromptEncoder",
+    # APE
+    "APEInstructionGenerator",
 ]
