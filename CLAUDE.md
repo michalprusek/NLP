@@ -79,24 +79,45 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 5
 - `results/`, `hbbops/results/`: Experiment outputs (gitignored)
 - `visualize/`: Analysis and comparison scripts
 
-## Best Practices
+### Vec2Text-HbBoPs (`vec2text_hbbops/`)
 
-### Skip HbBoPs - Use Pre-evaluated Grid
-For faster experimentation, always load top prompts from pre-evaluated grid instead of running full HbBoPs:
+**Latent space optimization with Vec2Text inversion** for generating novel prompts:
 
-```python
-# Load top 25 prompts from pre-evaluated grid
-grid_file = "datasets/hbbops/full_grid_combined.jsonl"
-# Contains 625 pre-evaluated (instruction, exemplar, error_rate) tuples
-# Sort by error_rate ascending and take top N
+- `GTRPromptEncoder`: SentenceTransformer GTR-T5-Base (768D, Vec2Text compatible)
+- `PromptAutoencoder`: Regularized AE (1536D → 10D → 1536D) with denoising, dropout, cosine loss
+- `HbBoPsVec2Text`: HbBoPs with GTR encoder and `load_from_grid()` support
+- `Vec2TextHbBoPsInference`: Complete pipeline with EI optimization and text inversion
+
+**Architecture:**
+```
+Prompt Text → GTR (768D×2) → AE Encoder → 10D → GP → EI optimization
+                                           ↓
+10D optimum → AE Decoder → 768D×2 → Vec2Text → Novel Prompt Text
 ```
 
-Use full HbBoPs only when explicitly requested. The pre-evaluated grid saves hours of LLM evaluation time.
+## Best Practices
 
-### VAE-HbBoPs Quick Mode
+### Default: Use Pre-evaluated Grid (No LLM Required)
+**Always load from grid unless explicitly running HbBoPs.** This is the default behavior:
+
 ```bash
-# Fast mode: Load top 25 from grid, train VAE+GP, optimize latent
-uv run python -m vae_hbbops.run_vae_hbbops --from-grid --top-k 25
+# Default mode: Load top-25 from grid, train AE+GP, optimize latent, Vec2Text invert
+uv run python -m vec2text_hbbops.run_vec2text_hbbops
+
+# Custom top-k
+uv run python -m vec2text_hbbops.run_vec2text_hbbops --top-k 50
+
+# Only if you need full HbBoPs with LLM evaluation:
+uv run python -m vec2text_hbbops.run_vec2text_hbbops --run-hyperband --model qwen
+```
+
+The pre-evaluated grid (`datasets/hbbops/full_grid_combined.jsonl`) contains 625 fully evaluated prompts.
+Loading top-25 and training GP takes seconds vs hours for full HbBoPs.
+
+### AE-Only Mode (No Vec2Text)
+```bash
+# Just train and evaluate autoencoder reconstruction quality
+uv run python -m vec2text_hbbops.run_vec2text_hbbops --ae-only
 ```
 
 ## Constraints
