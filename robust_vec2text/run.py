@@ -18,15 +18,56 @@ from robust_vec2text.inference import RobustInference
 
 
 def load_instructions(path: str) -> list:
-    """Load instructions from text file (one per line)."""
+    """Load instructions from text file.
+
+    Format: Lines starting with 'N. ' where N is instruction number.
+    Skips comments (#) and empty lines.
+    """
+    import re
+    instructions = []
     with open(path, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+        for line in f:
+            line = line.strip()
+            # Match lines starting with number and period: "1. Answer:"
+            match = re.match(r"^\d+\.\s*(.+)$", line)
+            if match:
+                instructions.append(match.group(1))
+    return instructions
 
 
 def load_exemplars(path: str) -> list:
-    """Load exemplars from text file (one per line)."""
+    """Load exemplars from text file.
+
+    Format: Blocks separated by '# Exemplar N' comments.
+    Each block contains multiple Q/A pairs.
+    """
     with open(path, "r") as f:
-        return [line.strip() for line in f if line.strip()]
+        content = f.read()
+
+    # Split by exemplar headers
+    blocks = []
+    current_block = []
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("# Exemplar"):
+            # Save previous block if exists
+            if current_block:
+                blocks.append("\n".join(current_block))
+            current_block = []
+        elif line.startswith("#"):
+            # Skip other comments
+            continue
+        else:
+            current_block.append(line)
+
+    # Don't forget last block
+    if current_block:
+        blocks.append("\n".join(current_block))
+
+    return blocks
 
 
 def load_validation(path: str) -> list:
@@ -67,7 +108,7 @@ def evaluate_prompt(
     # Generate all at once
     responses = client.generate_batch(
         prompts,
-        max_tokens=256,
+        max_tokens=512,
         temperature=0.0,
     )
 
@@ -149,6 +190,10 @@ def main():
     parser.add_argument("--ape-instructions", type=int, default=1000, help="Number of APE-generated instructions")
     parser.add_argument("--ape-cache", type=str, default="datasets/hbbops/ape_instructions_1000.json", help="Path to cache APE instructions")
     parser.add_argument("--skip-ape", action="store_true", help="Skip APE generation (use original instructions only)")
+
+    # Exemplar Selection
+    parser.add_argument("--select-exemplar", action="store_true", help="Use GP to select optimal exemplar")
+    parser.add_argument("--exemplar-top-k", type=int, default=5, help="Number of top exemplars to consider")
 
     # Output
     parser.add_argument(
@@ -240,7 +285,12 @@ def main():
     log("Loading Pre-evaluated Grid")
     log("=" * 60)
 
-    grid_prompts = optimizer.load_grid(args.grid_path, top_k=args.top_k)
+    # Always train HbBoPs GP (needed for EI optimization + optional exemplar selection)
+    grid_prompts = optimizer.load_grid(
+        args.grid_path,
+        top_k=args.top_k,
+        train_exemplar_gp=True,  # Always train - needed for EI optimization
+    )
 
     best_prompt = optimizer.best_grid_prompt
     log(f"\nBest from grid:")
@@ -260,29 +310,18 @@ def main():
         verbose=True,
     )
 
-    # Train GP
-    log("\n" + "=" * 60)
-    log("Training GP on Latent Space")
-    log("=" * 60)
-
-    gp_success = optimizer.train_gp(
-        max_epochs=args.gp_epochs,
-        lr=args.gp_lr,
-        verbose=True,
-    )
-
-    if not gp_success:
-        log("ERROR: GP training failed!")
-        sys.exit(1)
-
-    # Initialize inference
+    # Initialize inference (uses HbBoPs GP from load_grid, not separate LatentGP)
     log("\n" + "=" * 60)
     log("Initializing Inference Pipeline")
     log("=" * 60)
 
+    # Get best exemplar embedding for EI optimization
+    best_exemplar_emb = optimizer.exemplar_embeddings[best_prompt.exemplar_id]
+
     inference = RobustInference(
         vae=optimizer.get_vae(),
-        gp_trainer=optimizer.get_gp_trainer(),
+        exemplar_selector=optimizer.get_exemplar_selector(),
+        exemplar_emb=best_exemplar_emb,
         gtr=optimizer.gtr,
         device="cuda",
     )
@@ -310,21 +349,56 @@ def main():
     log(f"  Text: {result.text}")
     log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
 
-    # Free GPU memory before evaluation
-    log("\nClearing GPU memory for evaluation...")
+    # Free GPU memory before exemplar selection/evaluation
+    log("\nClearing GPU memory...")
     del inference
     import gc
     gc.collect()
     torch.cuda.empty_cache()
+
+    # Exemplar Selection using GP
+    selected_exemplar = best_prompt.exemplar  # Default: use grid best exemplar
+    selected_exemplar_id = best_prompt.exemplar_id
+    exemplar_predictions = []
+
+    if args.select_exemplar:
+        log("\n" + "=" * 60)
+        log("GP-Based Exemplar Selection")
+        log("=" * 60)
+
+        # Use pre-trained GP from optimizer (trained in load_grid)
+        selector = optimizer.get_exemplar_selector()
+
+        if selector.gp_model is not None:
+            # Select best exemplars for optimized instruction
+            log(f"\nSelecting top {args.exemplar_top_k} exemplars for optimized instruction...")
+            top_exemplars = selector.select_best_exemplar(
+                result.text,
+                top_k=args.exemplar_top_k,
+                verbose=True,
+            )
+
+            log(f"\nTop {args.exemplar_top_k} predicted exemplars:")
+            for ex_id, ex_text, pred_error, pred_std in top_exemplars:
+                log(f"  [{ex_id}] pred_error={pred_error:.4f} (±{pred_std:.4f}): {ex_text[:60]}...")
+                exemplar_predictions.append({
+                    "exemplar_id": ex_id,
+                    "predicted_error": pred_error,
+                    "predicted_std": pred_std,
+                })
+
+            # Use best predicted exemplar
+            selected_exemplar_id, selected_exemplar, _, _ = top_exemplars[0]
+            log(f"\nSelected exemplar ID: {selected_exemplar_id}")
 
     # Evaluate novel prompt
     log("\n" + "=" * 60)
     log("Evaluating Novel Prompt")
     log("=" * 60)
 
-    # Construct full prompt with fixed exemplar
-    novel_prompt = f"{result.text}\n\n{best_prompt.exemplar}"
-    log(f"Novel prompt (instruction + best exemplar):")
+    # Construct full prompt with selected exemplar
+    novel_prompt = f"{result.text}\n\n{selected_exemplar}"
+    log(f"Novel prompt (instruction + {'GP-selected' if args.select_exemplar else 'grid best'} exemplar):")
     log(f"  {novel_prompt[:200]}...")
 
     log(f"\nEvaluating on {len(validation_data)} validation samples...")
@@ -356,7 +430,10 @@ def main():
             "cosine_similarity": result.cosine_similarity,
             "full_prompt": novel_prompt,
             "error_rate": novel_error,
+            "selected_exemplar_id": selected_exemplar_id,
+            "exemplar_selection_enabled": args.select_exemplar,
         },
+        "exemplar_predictions": exemplar_predictions if args.select_exemplar else [],
         "improvement": best_prompt.error_rate - novel_error,
         "vae_best_cosine": optimizer.vae_trainer.best_cosine,
     }

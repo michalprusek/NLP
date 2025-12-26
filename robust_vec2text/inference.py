@@ -10,8 +10,8 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 
 from robust_vec2text.vae import InstructionVAE
-from robust_vec2text.gp import GPTrainer
 from robust_vec2text.encoder import GTRPromptEncoder
+from robust_vec2text.exemplar_selector import ExemplarSelector
 
 
 @dataclass
@@ -29,18 +29,19 @@ class RobustInference:
 
     Pipeline:
         1. Start from best known latent
-        2. Gradient-based EI optimization
+        2. Gradient-based EI optimization (using HbBoPs GP)
         3. Decode latent to target embedding
         4. Vec2Text invert to candidate text
         5. Return result with cosine score
 
-    Always uses Vec2Text output (no threshold filtering).
+    Uses HbBoPs-style GP for EI computation (same as hbbops_improved_2).
     """
 
     def __init__(
         self,
         vae: InstructionVAE,
-        gp_trainer: GPTrainer,
+        exemplar_selector: ExemplarSelector,
+        exemplar_emb: torch.Tensor,
         gtr: GTRPromptEncoder,
         device: str = "cuda",
     ):
@@ -48,13 +49,15 @@ class RobustInference:
 
         Args:
             vae: Trained VAE model
-            gp_trainer: Trained GP trainer
+            exemplar_selector: HbBoPs-style GP for error prediction
+            exemplar_emb: Fixed exemplar embedding for EI optimization (768,)
             gtr: GTR encoder
             device: Device to use
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.vae = vae.to(self.device)
-        self.gp_trainer = gp_trainer
+        self.exemplar_selector = exemplar_selector
+        self.exemplar_emb = exemplar_emb.to(self.device)
         self.gtr = gtr
 
         # Vec2Text will be loaded lazily
@@ -81,10 +84,6 @@ class RobustInference:
 
         print("Loading Vec2Text models...")
 
-        # Override max_length for longer sequences
-        MAX_SEQ_LENGTH = 128  # Increase from 32
-        MAX_LENGTH = 128      # Increase from 20
-
         # Load InversionModel
         inv_weights = hf_hub_download(
             "ielabgroup/vec2text_gtr-base-st_inversion", "model.safetensors"
@@ -92,9 +91,8 @@ class RobustInference:
         inv_config = InversionConfig.from_pretrained(
             "ielabgroup/vec2text_gtr-base-st_inversion"
         )
-        # Override length limits
-        inv_config.max_seq_length = MAX_SEQ_LENGTH
-        inv_config.max_length = MAX_LENGTH
+        # Override max_length in config (default is 20, too short)
+        inv_config.max_length = 256
         print(f"  Inversion config: max_seq_length={inv_config.max_seq_length}, max_length={inv_config.max_length}")
 
         inversion_model = InversionModel(inv_config)
@@ -108,9 +106,8 @@ class RobustInference:
         corr_config = InversionConfig.from_pretrained(
             "ielabgroup/vec2text_gtr-base-st_corrector"
         )
-        # Override length limits
-        corr_config.max_seq_length = MAX_SEQ_LENGTH
-        corr_config.max_length = MAX_LENGTH
+        # Override max_length in config (default is 20, too short)
+        corr_config.max_length = 256
         print(f"  Corrector config: max_seq_length={corr_config.max_seq_length}, max_length={corr_config.max_length}")
 
         corrector_model = CorrectorEncoderModel(corr_config)
@@ -187,6 +184,11 @@ class RobustInference:
     ) -> torch.Tensor:
         """Compute differentiable EI for gradient optimization.
 
+        Pipeline:
+            1. VAE decode: z (32D) → inst_emb (768D)
+            2. HbBoPs GP: (inst_emb, exemplar_emb) → predicted error
+            3. Compute EI from GP predictions
+
         Uses PyTorch distributions for differentiability.
         Directly calls GP model in eval mode but with gradients enabled.
 
@@ -200,24 +202,35 @@ class RobustInference:
         """
         import gpytorch
 
-        # Ensure z is on the right device and normalized like training data
+        # Ensure z is on the right device
         z = z.to(self.device)
 
-        # Normalize z using GP trainer's stored normalization params
-        z_norm = (z - self.gp_trainer.X_mean) / self.gp_trainer.X_std
+        # 1. Decode VAE latent to instruction embedding (differentiable)
+        inst_emb = self.vae.decode(z)  # (batch, 768)
 
-        # Get GP predictions with gradients (don't use no_grad)
-        self.gp_trainer.gp_model.eval()
-        self.gp_trainer.likelihood.eval()
+        # 2. Prepare GP input: concatenate [inst_emb || exemplar_emb]
+        batch_size = inst_emb.shape[0]
+        exemplar_emb = self.exemplar_emb.unsqueeze(0).expand(batch_size, -1)  # (batch, 768)
+        X = torch.cat([inst_emb, exemplar_emb], dim=1)  # (batch, 1536)
+
+        # Normalize using ExemplarSelector's stored params
+        selector = self.exemplar_selector
+        denominator = selector.X_max - selector.X_min
+        denominator = torch.where(denominator == 0, torch.ones_like(denominator), denominator)
+        X_norm = (X - selector.X_min) / denominator
+
+        # 3. Get GP predictions with gradients (don't use no_grad)
+        selector.gp_model.eval()
+        selector.likelihood.eval()
 
         with gpytorch.settings.fast_pred_var():
-            pred = self.gp_trainer.likelihood(self.gp_trainer.gp_model(z_norm))
+            pred = selector.likelihood(selector.gp_model(X_norm))
             mean_norm = pred.mean
             var_norm = pred.variance
 
         # Denormalize predictions
-        mean = mean_norm * self.gp_trainer.y_std + self.gp_trainer.y_mean
-        std = torch.sqrt(var_norm) * self.gp_trainer.y_std
+        mean = mean_norm * selector.y_std + selector.y_mean
+        std = torch.sqrt(var_norm) * selector.y_std
 
         # For minimization: EI = E[max(best_y - f(x) - xi, 0)]
         improvement = best_y - mean - xi

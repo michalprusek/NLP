@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 from robust_vec2text.encoder import GTRPromptEncoder
 from robust_vec2text.vae import InstructionVAE
-from robust_vec2text.gp import GPTrainer
 from robust_vec2text.training import VAETrainer
+from robust_vec2text.exemplar_selector import ExemplarSelector
 
 
 @dataclass
@@ -33,16 +33,15 @@ class RobustHbBoPs:
     Pipeline:
         1. Load instructions and exemplars
         2. Pre-compute GTR embeddings
-        3. Train VAE on instruction embeddings
-        4. Load top-k prompts from grid
-        5. Train GP on latent representations
-        6. Gradient-based optimization in latent space
-        7. Invert optimized latent via Vec2Text
+        3. Load top-k prompts from grid + train HbBoPs GP
+        4. Train VAE on instruction embeddings
+        5. Gradient-based EI optimization (VAE decode → GP predict)
+        6. Invert optimized embedding via Vec2Text
 
     Attributes:
         gtr: GTR encoder for embeddings
         vae_trainer: VAE trainer instance
-        gp_trainer: GP trainer instance
+        exemplar_selector: HbBoPs-style GP for error prediction
     """
 
     def __init__(
@@ -88,7 +87,9 @@ class RobustHbBoPs:
 
         # Initialize trainers (will be trained later)
         self.vae_trainer: Optional[VAETrainer] = None
-        self.gp_trainer: Optional[GPTrainer] = None
+
+        # Exemplar selector (HbBoPs-style GP on instruction+exemplar pairs)
+        self.exemplar_selector: Optional[ExemplarSelector] = None
 
         # Best results from grid
         self.best_grid_prompt: Optional[GridPrompt] = None
@@ -138,6 +139,7 @@ class RobustHbBoPs:
         self,
         grid_path: str,
         top_k: int = 25,
+        train_exemplar_gp: bool = False,
     ) -> List[GridPrompt]:
         """Load top-k prompts from pre-evaluated grid.
 
@@ -147,6 +149,7 @@ class RobustHbBoPs:
         Args:
             grid_path: Path to grid JSONL file
             top_k: Number of top prompts to load
+            train_exemplar_gp: If True, train HbBoPs-style GP for exemplar selection
 
         Returns:
             List of top-k GridPrompt objects
@@ -184,79 +187,41 @@ class RobustHbBoPs:
         print(f"  Best error rate: {self.best_grid_prompt.error_rate:.4f}")
         print(f"  Worst in top-k: {self.grid_prompts[-1].error_rate:.4f}")
 
+        # Train exemplar selector GP if requested
+        if train_exemplar_gp:
+            self._train_exemplar_gp(grid_path, top_k)
+
         return self.grid_prompts
 
-    def train_gp(
-        self,
-        max_epochs: int = 500,
-        lr: float = 0.01,
-        patience: int = 20,
-        verbose: bool = True,
-    ) -> bool:
-        """Train GP on latent representations from grid.
+    def _train_exemplar_gp(self, grid_path: str, top_k: int) -> None:
+        """Train HbBoPs-style GP for exemplar selection.
 
-        Requires VAE to be trained first.
-
-        Args:
-            max_epochs: Maximum training epochs
-            lr: Learning rate
-            patience: Early stopping patience
-            verbose: Print progress
-
-        Returns:
-            True if training succeeded
+        This GP operates on (instruction, exemplar) GTR embeddings
+        and can be used to predict error rates for any combination.
         """
-        if self.vae_trainer is None:
-            raise RuntimeError("VAE must be trained first. Call train_vae().")
+        print("\nTraining exemplar selection GP...")
 
-        if not self.grid_prompts:
-            raise RuntimeError("Grid must be loaded first. Call load_grid().")
-
-        vae = self.vae_trainer.get_vae()
-        vae.eval()
-
-        # Get latent representations for grid instructions
-        X_list = []
-        y_list = []
-
-        for prompt in self.grid_prompts:
-            # Get instruction embedding
-            if prompt.instruction_id in self.instruction_embeddings:
-                emb = self.instruction_embeddings[prompt.instruction_id]
-            else:
-                # Instruction not in cache - encode it
-                emb = self.gtr.encode_tensor(prompt.instruction).to(self.device)
-
-            # Get latent representation (mu only, no sampling)
-            with torch.no_grad():
-                latent = vae.get_latent(emb.unsqueeze(0)).squeeze(0)
-
-            X_list.append(latent)
-            y_list.append(prompt.error_rate)
-
-        X = torch.stack(X_list)
-        y = torch.tensor(y_list, device=self.device)
-
-        if verbose:
-            print(f"Training GP on {len(X)} latent points")
-            print(f"  Error rate range: {y.min():.4f} - {y.max():.4f}")
-
-        # Train GP
-        self.gp_trainer = GPTrainer(
-            latent_dim=self.latent_dim,
+        self.exemplar_selector = ExemplarSelector(
+            instructions=self.instructions,
+            exemplars=self.exemplars,
+            gtr=self.gtr,
             device=str(self.device),
         )
 
-        success = self.gp_trainer.train(
-            X=X,
-            y=y,
-            max_epochs=max_epochs,
-            lr=lr,
-            patience=patience,
-            verbose=verbose,
+        self.exemplar_selector.train_from_grid(
+            grid_path=grid_path,
+            top_k=top_k,
+            epochs=3000,
+            patience=10,
+            verbose=True,
         )
 
-        return success
+    def get_exemplar_selector(self) -> ExemplarSelector:
+        """Get trained exemplar selector."""
+        if self.exemplar_selector is None:
+            raise RuntimeError("Exemplar GP not trained. Call load_grid with train_exemplar_gp=True.")
+        return self.exemplar_selector
+
 
     def get_best_latent(self) -> torch.Tensor:
         """Get latent representation of best instruction from grid.
@@ -285,12 +250,6 @@ class RobustHbBoPs:
         if self.vae_trainer is None:
             raise RuntimeError("VAE not trained.")
         return self.vae_trainer.get_vae()
-
-    def get_gp_trainer(self) -> GPTrainer:
-        """Get trained GP trainer."""
-        if self.gp_trainer is None:
-            raise RuntimeError("GP not trained.")
-        return self.gp_trainer
 
     def save_checkpoint(self, path: str):
         """Save VAE checkpoint."""

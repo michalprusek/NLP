@@ -120,6 +120,29 @@ Loading top-25 and training GP takes seconds vs hours for full HbBoPs.
 uv run python -m vec2text_hbbops.run_vec2text_hbbops --ae-only
 ```
 
+### Robust Vec2Text (`robust_vec2text/`)
+
+**VAE-based instruction optimization with GP-guided exemplar selection:**
+
+```bash
+# Full pipeline with exemplar selection
+uv run python -m robust_vec2text.run --select-exemplar --top-k 25
+
+# Skip APE generation (faster, uses only original 25 instructions)
+uv run python -m robust_vec2text.run --skip-ape --select-exemplar
+```
+
+**Architecture:**
+- `InstructionVAE`: 768D GTR → 32D latent → 768D (cosine-focused loss)
+- `LatentGP`: GP on 32D VAE latent for instruction optimization
+- `ExemplarSelector`: HbBoPs-style GP for exemplar selection (trains on top-k from grid)
+
+**Key Design Decisions:**
+- Uses GTR encoder (not BERT) for consistency with Vec2Text
+- **Single GP training**: ExemplarSelector GP trains once in `load_grid()` on top-k prompts, then reused for selection
+- APE data augmentation generates 1000 instructions for better VAE training
+- Vec2Text max_length increased to 128 tokens for complete instructions
+
 ## Constraints
 
 - vLLM requires CUDA GPU; Claude API requires `ANTHROPIC_API_KEY`
