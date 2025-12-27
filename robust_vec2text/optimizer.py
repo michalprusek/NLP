@@ -198,6 +198,10 @@ class RobustHbBoPs:
 
         This GP operates on (instruction, exemplar) GTR embeddings
         and can be used to predict error rates for any combination.
+
+        NOTE: This trains on ORIGINAL embeddings. For EI optimization,
+        use train_exemplar_gp_on_decoded() which trains on VAE-decoded
+        embeddings to match the distribution during gradient optimization.
         """
         print("\nTraining exemplar selection GP...")
 
@@ -214,6 +218,79 @@ class RobustHbBoPs:
             epochs=3000,
             patience=10,
             verbose=True,
+        )
+
+    def train_exemplar_gp_on_decoded(
+        self,
+        grid_path: str,
+        top_k: int = 25,
+        epochs: int = 3000,
+        patience: int = 10,
+        verbose: bool = True,
+    ) -> None:
+        """Train GP on VAE-decoded instruction embeddings.
+
+        This is the key fix for EI=0 problem. By training GP on decoded
+        embeddings, we ensure it operates in the same distribution as
+        the gradient-based EI optimization.
+
+        Reference: COWBOYS paper (Return of the Latent Space COWBOYS)
+        https://arxiv.org/abs/2507.03910
+
+        Pipeline:
+            1. For each instruction in grid:
+               - latent = VAE.encode(GTR.encode(instruction))
+               - decoded_emb = VAE.decode(latent)
+            2. Train GP on (decoded_emb, exemplar_emb) pairs
+
+        Args:
+            grid_path: Path to grid JSONL file
+            top_k: Number of top prompts to use for training
+            epochs: GP training epochs
+            patience: Early stopping patience
+            verbose: Print progress
+        """
+        if self.vae_trainer is None:
+            raise RuntimeError("VAE must be trained before training GP on decoded embeddings.")
+
+        print("\nComputing VAE-decoded instruction embeddings...")
+        vae = self.get_vae()
+        vae.eval()
+
+        # Compute decoded embeddings for each instruction
+        decoded_instruction_embeddings: Dict[int, torch.Tensor] = {}
+        with torch.no_grad():
+            for inst_id, orig_emb in self.instruction_embeddings.items():
+                latent = vae.get_latent(orig_emb.unsqueeze(0))
+                decoded_emb = vae.decode(latent).squeeze(0)
+                decoded_instruction_embeddings[inst_id] = decoded_emb
+
+                if verbose and inst_id < 3:
+                    cosine = torch.nn.functional.cosine_similarity(
+                        orig_emb.unsqueeze(0), decoded_emb.unsqueeze(0)
+                    ).item()
+                    print(f"  Instruction {inst_id}: orig→decoded cosine = {cosine:.4f}")
+
+        print(f"  Computed {len(decoded_instruction_embeddings)} decoded embeddings")
+
+        # Initialize exemplar selector
+        print("\nTraining GP on decoded embeddings...")
+        self.exemplar_selector = ExemplarSelector(
+            instructions=self.instructions,
+            exemplars=self.exemplars,
+            gtr=self.gtr,
+            device=str(self.device),
+        )
+
+        # Train with decoded embeddings
+        self.exemplar_selector.train_with_decoded_embeddings(
+            decoded_instruction_embeddings=decoded_instruction_embeddings,
+            exemplar_embeddings=self.exemplar_embeddings,
+            grid_path=grid_path,
+            top_k=top_k,
+            epochs=epochs,
+            patience=patience,
+            verbose=verbose,
         )
 
     def get_exemplar_selector(self) -> ExemplarSelector:

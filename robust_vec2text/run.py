@@ -179,8 +179,9 @@ def main():
     parser.add_argument("--gp-lr", type=float, default=0.01, help="GP learning rate")
 
     # Gradient optimization
-    parser.add_argument("--opt-steps", type=int, default=50, help="Gradient optimization steps")
+    parser.add_argument("--opt-steps", type=int, default=500, help="Gradient optimization steps")
     parser.add_argument("--opt-lr", type=float, default=0.1, help="Gradient optimization LR")
+    parser.add_argument("--opt-patience", type=int, default=10, help="Gradient optimization early stopping patience")
 
     # Vec2Text
     parser.add_argument("--v2t-steps", type=int, default=50, help="Vec2Text steps")
@@ -280,16 +281,15 @@ def main():
         latent_dim=args.latent_dim,
     )
 
-    # Load grid
+    # Load grid (without training GP yet - we need VAE first)
     log("\n" + "=" * 60)
     log("Loading Pre-evaluated Grid")
     log("=" * 60)
 
-    # Always train HbBoPs GP (needed for EI optimization + optional exemplar selection)
     grid_prompts = optimizer.load_grid(
         args.grid_path,
         top_k=args.top_k,
-        train_exemplar_gp=True,  # Always train - needed for EI optimization
+        train_exemplar_gp=False,  # Don't train GP on original embeddings
     )
 
     best_prompt = optimizer.best_grid_prompt
@@ -298,7 +298,7 @@ def main():
     log(f"  Exemplar ID: {best_prompt.exemplar_id}")
     log(f"  Error rate: {best_prompt.error_rate:.4f}")
 
-    # Train VAE
+    # Train VAE FIRST (needed before GP training on decoded embeddings)
     log("\n" + "=" * 60)
     log("Training VAE on Instruction Embeddings")
     log("=" * 60)
@@ -307,6 +307,20 @@ def main():
         epochs=args.vae_epochs,
         lr=args.vae_lr,
         patience=args.vae_patience,
+        verbose=True,
+    )
+
+    # Train GP on VAE-decoded embeddings (COWBOYS approach)
+    # This fixes EI=0 by ensuring GP operates in same distribution as EI optimization
+    log("\n" + "=" * 60)
+    log("Training GP on VAE-Decoded Embeddings (COWBOYS)")
+    log("=" * 60)
+
+    optimizer.train_exemplar_gp_on_decoded(
+        grid_path=args.grid_path,
+        top_k=args.top_k,
+        epochs=args.gp_epochs,
+        patience=10,
         verbose=True,
     )
 
@@ -340,6 +354,7 @@ def main():
         best_y=best_prompt.error_rate,
         n_opt_steps=args.opt_steps,
         opt_lr=args.opt_lr,
+        opt_patience=args.opt_patience,
         v2t_steps=args.v2t_steps,
         v2t_beam=args.v2t_beam,
         verbose=True,

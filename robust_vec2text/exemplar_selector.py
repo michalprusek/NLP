@@ -399,3 +399,145 @@ class ExemplarSelector:
 
         predictions.sort(key=lambda x: x[2])
         return predictions[:top_k]
+
+    def train_with_decoded_embeddings(
+        self,
+        decoded_instruction_embeddings: Dict[int, torch.Tensor],
+        exemplar_embeddings: Dict[int, torch.Tensor],
+        grid_path: str,
+        top_k: int = 25,
+        epochs: int = 3000,
+        lr: float = 0.01,
+        patience: int = 10,
+        verbose: bool = True,
+    ) -> bool:
+        """Train GP using VAE-decoded instruction embeddings.
+
+        This is the key fix for EI=0 problem. By training on decoded
+        embeddings, the GP operates in the same distribution as the
+        gradient-based EI optimization.
+
+        Reference: COWBOYS paper (Return of the Latent Space COWBOYS)
+
+        Args:
+            decoded_instruction_embeddings: Dict mapping inst_id → VAE-decoded embedding
+            exemplar_embeddings: Dict mapping ex_id → original GTR embedding
+            grid_path: Path to grid JSONL file
+            top_k: Number of top prompts to use (sorted by error rate)
+            epochs: Maximum training epochs
+            lr: Learning rate
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if training succeeded
+        """
+        if verbose:
+            print(f"Loading grid data from {grid_path}...")
+
+        # Load grid data
+        grid_data = []
+        with open(grid_path, "r") as f:
+            for line in f:
+                grid_data.append(json.loads(line))
+
+        # Sort by error rate and take top-k
+        grid_data.sort(key=lambda x: x["error_rate"])
+        grid_data = grid_data[:top_k]
+
+        if verbose:
+            print(f"  Using top {top_k} prompts (error range: {grid_data[0]['error_rate']:.4f} - {grid_data[-1]['error_rate']:.4f})")
+            print(f"  Training on VAE-DECODED instruction embeddings")
+
+        # Prepare training tensors using DECODED embeddings
+        X_inst_list = []
+        X_ex_list = []
+        y_list = []
+
+        for entry in grid_data:
+            inst_id = entry["instruction_id"]
+            ex_id = entry["exemplar_id"]
+            error_rate = entry["error_rate"]
+
+            # Use DECODED instruction embedding (key difference!)
+            X_inst_list.append(decoded_instruction_embeddings[inst_id].to(self.device))
+            X_ex_list.append(exemplar_embeddings[ex_id].to(self.device))
+            y_list.append(error_rate)
+
+        X_inst = torch.stack(X_inst_list).to(self.device)
+        X_ex = torch.stack(X_ex_list).to(self.device)
+        y = torch.tensor(y_list, dtype=torch.float32, device=self.device)
+
+        # Concatenate for GP input: [inst_768 || ex_768]
+        X = torch.cat([X_inst, X_ex], dim=1)  # (N, 1536)
+
+        if verbose:
+            print(f"  Training data shape: X={X.shape}, y={y.shape}")
+            print(f"  Error rate range: [{y.min():.4f}, {y.max():.4f}]")
+
+        # Unit cube normalization for inputs
+        self.X_min = X.min(dim=0)[0]
+        self.X_max = X.max(dim=0)[0]
+        denominator = self.X_max - self.X_min
+        denominator[denominator == 0] = 1.0  # Avoid division by zero
+        X_norm = (X - self.X_min) / denominator
+
+        # Z-score standardization for outputs
+        self.y_mean = y.mean()
+        self.y_std = y.std() + 1e-6
+        y_norm = (y - self.y_mean) / self.y_std
+
+        # Initialize GP
+        self.feature_extractor = FeatureExtractor(input_dim=768).to(self.device)
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+        self.gp_model = DeepKernelGP(
+            X_norm, y_norm, self.likelihood, self.feature_extractor
+        ).to(self.device)
+
+        # Training
+        self.gp_model.train()
+        self.likelihood.train()
+
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=lr)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
+
+        best_loss = float("inf")
+        patience_counter = 0
+
+        if verbose:
+            print("Training GP on decoded embeddings...")
+
+        with gpytorch.settings.cholesky_jitter(1e-4):
+            for epoch in range(epochs):
+                try:
+                    optimizer.zero_grad()
+                    output = self.gp_model(X_norm)
+                    loss = -mll(output, y_norm)
+                    loss.backward()
+                    optimizer.step()
+
+                    if loss.item() < best_loss:
+                        best_loss = loss.item()
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+
+                    if patience_counter >= patience:
+                        if verbose:
+                            print(f"  Early stopping at epoch {epoch + 1}")
+                        break
+
+                    if verbose and (epoch + 1) % 100 == 0:
+                        print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
+
+                except RuntimeError as e:
+                    if "cholesky" in str(e).lower():
+                        if verbose:
+                            print(f"  Cholesky error at epoch {epoch + 1}")
+                        return False
+                    raise
+
+        if verbose:
+            print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
+
+        return True

@@ -122,8 +122,9 @@ class RobustInference:
         self,
         initial_latent: torch.Tensor,
         best_y: float,
-        n_steps: int = 50,
+        n_steps: int = 500,
         lr: float = 0.1,
+        patience: int = 10,
         xi: float = 0.01,
         verbose: bool = True,
     ) -> torch.Tensor:
@@ -134,8 +135,9 @@ class RobustInference:
         Args:
             initial_latent: Starting latent vector (32,)
             best_y: Best observed error rate (for EI)
-            n_steps: Optimization steps
+            n_steps: Maximum optimization steps
             lr: Learning rate
+            patience: Early stopping patience (stop if no improvement for N steps)
             xi: EI exploration parameter
             verbose: Print progress
 
@@ -150,6 +152,7 @@ class RobustInference:
 
         best_ei = float("-inf")
         best_z = z.clone().detach()
+        patience_counter = 0
 
         for step in range(n_steps):
             optimizer.zero_grad()
@@ -163,13 +166,22 @@ class RobustInference:
             loss.backward()
             optimizer.step()
 
-            # Track best
+            # Track best with early stopping
             if ei.item() > best_ei:
                 best_ei = ei.item()
                 best_z = z.clone().detach()
+                patience_counter = 0
+            else:
+                patience_counter += 1
 
-            if verbose and (step + 1) % 10 == 0:
+            if verbose and (step + 1) % 50 == 0:
                 print(f"  Step {step+1}: EI = {ei.item():.6f}")
+
+            # Early stopping
+            if patience_counter >= patience:
+                if verbose:
+                    print(f"  Early stopping at step {step+1} (no improvement for {patience} steps)")
+                break
 
         if verbose:
             print(f"  Best EI: {best_ei:.6f}")
@@ -245,7 +257,8 @@ class RobustInference:
         pdf = torch.exp(normal.log_prob(Z))
 
         ei = improvement * cdf + std_safe * pdf
-        ei = torch.clamp(ei, min=0)  # EI is non-negative
+        # NOTE: Removed clamp to allow gradients to flow even when EI < 0
+        # This gives the optimizer signal to move away from bad regions
 
         return ei.squeeze()
 
@@ -354,8 +367,9 @@ class RobustInference:
         self,
         initial_latent: torch.Tensor,
         best_y: float,
-        n_opt_steps: int = 50,
+        n_opt_steps: int = 500,
         opt_lr: float = 0.1,
+        opt_patience: int = 10,
         v2t_steps: int = 50,
         v2t_beam: int = 8,
         verbose: bool = True,
@@ -365,8 +379,9 @@ class RobustInference:
         Args:
             initial_latent: Starting latent (from best grid instruction)
             best_y: Best observed error rate
-            n_opt_steps: Gradient optimization steps
+            n_opt_steps: Maximum gradient optimization steps
             opt_lr: Optimization learning rate
+            opt_patience: Early stopping patience
             v2t_steps: Vec2Text steps
             v2t_beam: Vec2Text beam width
             verbose: Print progress
@@ -385,6 +400,7 @@ class RobustInference:
             best_y=best_y,
             n_steps=n_opt_steps,
             lr=opt_lr,
+            patience=opt_patience,
             verbose=verbose,
         )
 
