@@ -65,57 +65,55 @@ class RobustInference:
         self._vec2text_model = None
 
     def _load_vec2text(self):
-        """Lazy load Vec2Text models.
+        """Lazy load Vec2Text InversionModel.
+
+        Uses vec2text/gtr-512-noise-0.00001 for longer sequence support (max_seq_length=512).
+        Single-step generation without corrector.
 
         Uses manual loading with safetensors to avoid meta tensor issues.
-        Models:
-            - ielabgroup/vec2text_gtr-base-st_inversion
-            - ielabgroup/vec2text_gtr-base-st_corrector
         """
-        if self._vec2text_corrector is not None:
+        if self._vec2text_model is not None:
             return
 
-        import vec2text
         from safetensors.torch import load_file
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download, snapshot_download
         from vec2text.models.config import InversionConfig
         from vec2text.models.inversion import InversionModel
-        from vec2text.models.corrector_encoder import CorrectorEncoderModel
 
-        print("Loading Vec2Text models...")
+        print("Loading Vec2Text InversionModel (gtr-512-noise-0.00001)...")
 
-        # Load InversionModel
-        inv_weights = hf_hub_download(
-            "ielabgroup/vec2text_gtr-base-st_inversion", "model.safetensors"
-        )
-        inv_config = InversionConfig.from_pretrained(
-            "ielabgroup/vec2text_gtr-base-st_inversion"
-        )
-        # Override max_length in config (default is 20, too short)
-        inv_config.max_length = 256
-        print(f"  Inversion config: max_seq_length={inv_config.max_seq_length}, max_length={inv_config.max_length}")
+        # Download model files
+        model_dir = snapshot_download("vec2text/gtr-512-noise-0.00001")
 
-        inversion_model = InversionModel(inv_config)
-        inversion_model.load_state_dict(load_file(inv_weights), strict=False)
-        inversion_model = inversion_model.to(self.device).eval()
+        # Load config
+        config = InversionConfig.from_pretrained(model_dir)
+        print(f"  Config: max_seq_length={config.max_seq_length}")
 
-        # Load CorrectorEncoderModel
-        corr_weights = hf_hub_download(
-            "ielabgroup/vec2text_gtr-base-st_corrector", "model.safetensors"
-        )
-        corr_config = InversionConfig.from_pretrained(
-            "ielabgroup/vec2text_gtr-base-st_corrector"
-        )
-        # Override max_length in config (default is 20, too short)
-        corr_config.max_length = 256
-        print(f"  Corrector config: max_seq_length={corr_config.max_seq_length}, max_length={corr_config.max_length}")
+        # Create model and load weights manually
+        self._vec2text_model = InversionModel(config)
 
-        corrector_model = CorrectorEncoderModel(corr_config)
-        corrector_model.load_state_dict(load_file(corr_weights), strict=False)
-        corrector_model = corrector_model.to(self.device).eval()
+        # Load sharded safetensors weights
+        import os
+        import json
 
-        # Create corrector pipeline
-        self._vec2text_corrector = vec2text.load_corrector(inversion_model, corrector_model)
+        index_path = os.path.join(model_dir, "model.safetensors.index.json")
+        with open(index_path) as f:
+            index = json.load(f)
+
+        # Get unique shard files
+        shard_files = set(index["weight_map"].values())
+
+        # Load all shards and merge
+        state_dict = {}
+        for shard_file in shard_files:
+            shard_path = os.path.join(model_dir, shard_file)
+            shard_dict = load_file(shard_path)
+            state_dict.update(shard_dict)
+
+        # Load state dict
+        self._vec2text_model.load_state_dict(state_dict, strict=False)
+        self._vec2text_model = self._vec2text_model.to(self.device).eval()
+
         print(f"  Vec2Text loaded on {self.device}")
 
     def optimize_latent_gradient(
@@ -284,46 +282,51 @@ class RobustInference:
     def invert_embedding(
         self,
         target_embedding: torch.Tensor,
-        num_steps: int = 50,
-        beam_width: int = 8,
+        num_beams: int = 8,
+        max_length: int = 512,
     ) -> str:
-        """Invert embedding to text via Vec2Text.
+        """Invert embedding to text via Vec2Text InversionModel.
+
+        Uses single-step generation (no corrector refinement).
 
         Args:
             target_embedding: Target embedding (768,)
-            num_steps: Vec2Text correction steps
-            beam_width: Beam search width
+            num_beams: Beam search width
+            max_length: Maximum output length
 
         Returns:
             Reconstructed text
         """
         self._load_vec2text()
 
-        import vec2text
-
-        # Ensure correct shape
+        # Ensure correct shape (batch, 768)
         if target_embedding.dim() == 1:
             target_embedding = target_embedding.unsqueeze(0)
-
-        # Move to correct device
         target_embedding = target_embedding.to(self.device)
 
-        # Vec2Text inversion
+        # Generate text using InversionModel
         with torch.no_grad():
-            result = vec2text.invert_embeddings(
-                embeddings=target_embedding,
-                corrector=self._vec2text_corrector,
-                num_steps=num_steps,
-                sequence_beam_width=beam_width,
+            output_ids = self._vec2text_model.generate(
+                inputs={
+                    "frozen_embeddings": target_embedding,
+                },
+                generation_kwargs={
+                    "num_beams": num_beams,
+                    "max_length": max_length,
+                },
             )
 
-        return result[0] if result else ""
+        # Decode tokens to text
+        tokenizer = self._vec2text_model.tokenizer
+        result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+        return result
 
     def invert_with_safety(
         self,
         latent: torch.Tensor,
-        num_steps: int = 50,
-        beam_width: int = 8,
+        num_beams: int = 8,
+        max_length: int = 512,
     ) -> InversionResult:
         """Invert latent via Vec2Text.
 
@@ -335,8 +338,8 @@ class RobustInference:
 
         Args:
             latent: Latent vector (32,)
-            num_steps: Vec2Text steps
-            beam_width: Beam width
+            num_beams: Beam search width
+            max_length: Maximum output length
 
         Returns:
             InversionResult with text, embeddings, and cosine score
@@ -345,7 +348,7 @@ class RobustInference:
         target_emb = self.decode_latent(latent)
 
         # 2. Invert via Vec2Text
-        candidate_text = self.invert_embedding(target_emb, num_steps, beam_width)
+        candidate_text = self.invert_embedding(target_emb, num_beams, max_length)
 
         # 3. Re-encode with GTR
         realized_emb = self.gtr.encode_tensor(candidate_text).to(self.device)
@@ -370,8 +373,8 @@ class RobustInference:
         n_opt_steps: int = 500,
         opt_lr: float = 0.1,
         opt_patience: int = 10,
-        v2t_steps: int = 50,
-        v2t_beam: int = 8,
+        v2t_beams: int = 8,
+        v2t_max_length: int = 512,
         verbose: bool = True,
     ) -> InversionResult:
         """Run full optimization and inversion pipeline.
@@ -382,8 +385,8 @@ class RobustInference:
             n_opt_steps: Maximum gradient optimization steps
             opt_lr: Optimization learning rate
             opt_patience: Early stopping patience
-            v2t_steps: Vec2Text steps
-            v2t_beam: Vec2Text beam width
+            v2t_beams: Vec2Text beam search width
+            v2t_max_length: Vec2Text maximum output length
             verbose: Print progress
 
         Returns:
@@ -412,8 +415,8 @@ class RobustInference:
         # Invert with cycle consistency
         result = self.invert_with_safety(
             latent=optimized_latent,
-            num_steps=v2t_steps,
-            beam_width=v2t_beam,
+            num_beams=v2t_beams,
+            max_length=v2t_max_length,
         )
 
         if verbose:

@@ -184,8 +184,8 @@ def main():
     parser.add_argument("--opt-patience", type=int, default=10, help="Gradient optimization early stopping patience")
 
     # Vec2Text
-    parser.add_argument("--v2t-steps", type=int, default=50, help="Vec2Text steps")
     parser.add_argument("--v2t-beam", type=int, default=8, help="Vec2Text beam width")
+    parser.add_argument("--v2t-max-length", type=int, default=512, help="Vec2Text max output length")
 
     # APE Data Augmentation
     parser.add_argument("--ape-instructions", type=int, default=1000, help="Number of APE-generated instructions")
@@ -355,8 +355,8 @@ def main():
         n_opt_steps=args.opt_steps,
         opt_lr=args.opt_lr,
         opt_patience=args.opt_patience,
-        v2t_steps=args.v2t_steps,
-        v2t_beam=args.v2t_beam,
+        v2t_beams=args.v2t_beam,
+        v2t_max_length=args.v2t_max_length,
         verbose=True,
     )
 

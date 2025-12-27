@@ -12,7 +12,7 @@ from typing import List, Optional, Union
 class GTRPromptEncoder:
     """Encode prompts using GTR-T5-Base with mean pooling.
 
-    Compatible with Vec2Text inversion models (ielabgroup/vec2text_gtr-base-st_*).
+    Compatible with Vec2Text inversion models (vec2text/gtr-512-noise-0.00001).
     Uses SentenceTransformer internally for guaranteed compatibility.
 
     Key differences from BERT PromptEncoder:
