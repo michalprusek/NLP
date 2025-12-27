@@ -15,6 +15,7 @@ import torch
 
 from robust_vec2text.optimizer import RobustHbBoPs
 from robust_vec2text.inference import RobustInference
+from robust_vec2text.visualize_ei import visualize_ei_landscape, get_training_latents
 
 
 def load_instructions(path: str) -> list:
@@ -186,6 +187,11 @@ def main():
     # Vec2Text
     parser.add_argument("--v2t-beam", type=int, default=8, help="Vec2Text beam width")
     parser.add_argument("--v2t-max-length", type=int, default=512, help="Vec2Text max output length")
+    parser.add_argument("--v2t-no-repeat-ngram", type=int, default=3, help="Block repeating n-grams (0 to disable)")
+    parser.add_argument("--v2t-repetition-penalty", type=float, default=1.2, help="Repetition penalty (1.0 = no penalty)")
+
+    # Iterative optimization
+    parser.add_argument("--iterations", type=int, default=1, help="Number of optimization iterations")
 
     # APE Data Augmentation
     parser.add_argument("--ape-instructions", type=int, default=1000, help="Number of APE-generated instructions")
@@ -344,90 +350,133 @@ def main():
     best_latent = optimizer.get_best_latent()
     log(f"Best latent norm: {best_latent.norm().item():.4f}")
 
-    # Run optimization
+    # Iterative optimization loop
     log("\n" + "=" * 60)
-    log("Running Gradient-Based Optimization")
+    log(f"Starting Iterative Optimization ({args.iterations} iterations)")
     log("=" * 60)
 
-    result = inference.full_pipeline(
-        initial_latent=best_latent,
-        best_y=best_prompt.error_rate,
-        n_opt_steps=args.opt_steps,
-        opt_lr=args.opt_lr,
-        opt_patience=args.opt_patience,
-        v2t_beams=args.v2t_beam,
-        v2t_max_length=args.v2t_max_length,
-        verbose=True,
-    )
+    # Track best across iterations
+    best_error = best_prompt.error_rate
+    best_instruction = best_prompt.instruction
+    best_exemplar_id = best_prompt.exemplar_id
+    current_latent = best_latent.clone()
 
-    log(f"\nOptimized instruction:")
-    log(f"  Text: {result.text}")
-    log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
+    # Store iteration history
+    iteration_history = []
 
-    # Free GPU memory before exemplar selection/evaluation
-    log("\nClearing GPU memory...")
-    del inference
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()
+    for iteration in range(args.iterations):
+        log(f"\n{'='*60}")
+        log(f"Iteration {iteration + 1}/{args.iterations}")
+        log(f"{'='*60}")
+        log(f"Current best error: {best_error:.4f}")
 
-    # Exemplar Selection using GP
-    selected_exemplar = best_prompt.exemplar  # Default: use grid best exemplar
-    selected_exemplar_id = best_prompt.exemplar_id
-    exemplar_predictions = []
+        # 1. Run optimization pipeline
+        log("\n--- EI Optimization & Vec2Text Inversion ---")
+        result = inference.full_pipeline(
+            initial_latent=current_latent,
+            best_y=best_error,
+            n_opt_steps=args.opt_steps,
+            opt_lr=args.opt_lr,
+            opt_patience=args.opt_patience,
+            v2t_beams=args.v2t_beam,
+            v2t_max_length=args.v2t_max_length,
+            v2t_no_repeat_ngram_size=args.v2t_no_repeat_ngram,
+            v2t_repetition_penalty=args.v2t_repetition_penalty,
+            verbose=False,
+        )
 
-    if args.select_exemplar:
-        log("\n" + "=" * 60)
-        log("GP-Based Exemplar Selection")
-        log("=" * 60)
+        log(f"  Generated: {result.text[:80]}...")
+        log(f"  Cosine similarity: {result.cosine_similarity:.4f}")
 
-        # Use pre-trained GP from optimizer (trained in load_grid)
-        selector = optimizer.get_exemplar_selector()
-
-        if selector.gp_model is not None:
-            # Select best exemplars for optimized instruction
-            log(f"\nSelecting top {args.exemplar_top_k} exemplars for optimized instruction...")
-            top_exemplars = selector.select_best_exemplar(
-                result.text,
-                top_k=args.exemplar_top_k,
-                verbose=True,
+        # 2. Visualize EI landscape BEFORE evaluation
+        #    (shows the optimization target and re-embedded point)
+        log("\n--- Visualizing EI Landscape ---")
+        try:
+            training_latents, training_errors = get_training_latents(
+                vae=optimizer.get_vae(),
+                exemplar_selector=optimizer.exemplar_selector,
+                device=optimizer.device,
             )
+            visualize_ei_landscape(
+                vae=optimizer.get_vae(),
+                exemplar_selector=optimizer.exemplar_selector,
+                exemplar_emb=optimizer.exemplar_embeddings[best_exemplar_id],
+                training_latents=training_latents,
+                training_errors=training_errors,
+                optimized_latent=result.optimized_latent,
+                reembedded_latent=result.reembedded_latent,
+                best_y=best_error,
+                iteration=iteration + 1,
+                output_dir=str(Path(__file__).parent / "visualizations"),
+                device=optimizer.device,
+            )
+        except Exception as e:
+            log(f"  Warning: Visualization failed: {e}")
 
-            log(f"\nTop {args.exemplar_top_k} predicted exemplars:")
-            for ex_id, ex_text, pred_error, pred_std in top_exemplars:
-                log(f"  [{ex_id}] pred_error={pred_error:.4f} (±{pred_std:.4f}): {ex_text[:60]}...")
-                exemplar_predictions.append({
-                    "exemplar_id": ex_id,
-                    "predicted_error": pred_error,
-                    "predicted_std": pred_std,
-                })
+        # 3. Evaluate novel prompt
+        log("\n--- Evaluating ---")
+        novel_prompt = f"{result.text}\n\n{exemplars[best_exemplar_id]}"
+        novel_error = evaluate_prompt(
+            novel_prompt,
+            validation_data,
+            args.model,
+            args.backend,
+        )
 
-            # Use best predicted exemplar
-            selected_exemplar_id, selected_exemplar, _, _ = top_exemplars[0]
-            log(f"\nSelected exemplar ID: {selected_exemplar_id}")
+        log(f"  Error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
 
-    # Evaluate novel prompt
+        # 4. Get decoded embedding for GP
+        decoded_emb = optimizer.get_decoded_embedding(result.text)
+        exemplar_emb = optimizer.exemplar_embeddings[best_exemplar_id]
+
+        # 5. Add to GP and retrain
+        log("\n--- Updating GP ---")
+        optimizer.exemplar_selector.add_observation_and_retrain(
+            decoded_inst_emb=decoded_emb,
+            exemplar_emb=exemplar_emb,
+            error_rate=novel_error,
+            epochs=100,
+            verbose=False,
+        )
+        log(f"  GP updated with new observation (total samples: {len(optimizer.exemplar_selector.y_train)})")
+
+        # 6. Update best if improved
+        improved = novel_error < best_error
+        if improved:
+            improvement = best_error - novel_error
+            best_error = novel_error
+            best_instruction = result.text
+            log(f"  ★ New best! Improvement: {improvement:.4f}")
+
+        # 7. Store iteration history
+        iteration_history.append({
+            "iteration": iteration + 1,
+            "instruction": result.text,
+            "cosine_similarity": result.cosine_similarity,
+            "error_rate": novel_error,
+            "improved": improved,
+            "best_error_so_far": best_error,
+        })
+
+        # 8. Update latent for next iteration (use VAE encoding of new instruction)
+        with torch.no_grad():
+            new_inst_emb = optimizer.gtr.encode_tensor(result.text).to(optimizer.device)
+            current_latent = optimizer.get_vae().get_latent(new_inst_emb.unsqueeze(0)).squeeze(0)
+
+    # Final summary
     log("\n" + "=" * 60)
-    log("Evaluating Novel Prompt")
+    log(f"Optimization Complete ({args.iterations} iterations)")
     log("=" * 60)
+    log(f"Initial best error (grid): {best_prompt.error_rate:.4f}")
+    log(f"Final best error: {best_error:.4f}")
+    log(f"Total improvement: {best_prompt.error_rate - best_error:.4f}")
+    log(f"Best instruction: {best_instruction[:100]}...")
 
-    # Construct full prompt with selected exemplar
-    novel_prompt = f"{result.text}\n\n{selected_exemplar}"
-    log(f"Novel prompt (instruction + {'GP-selected' if args.select_exemplar else 'grid best'} exemplar):")
-    log(f"  {novel_prompt[:200]}...")
-
-    log(f"\nEvaluating on {len(validation_data)} validation samples...")
-
-    novel_error = evaluate_prompt(
-        novel_prompt,
-        validation_data,
-        args.model,
-        args.backend,
-    )
-
-    log(f"Novel prompt error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
-    log(f"Grid best error rate: {best_prompt.error_rate:.4f}")
-    log(f"Improvement: {best_prompt.error_rate - novel_error:.4f}")
+    # Use best instruction for final result
+    selected_exemplar = exemplars[best_exemplar_id]
+    selected_exemplar_id = best_exemplar_id
+    novel_prompt = f"{best_instruction}\n\n{selected_exemplar}"
+    novel_error = best_error
 
     # Save results
     results: Dict[str, Any] = {
@@ -441,15 +490,13 @@ def main():
             "error_rate": best_prompt.error_rate,
         },
         "optimized": {
-            "instruction": result.text,
-            "cosine_similarity": result.cosine_similarity,
+            "instruction": best_instruction,
             "full_prompt": novel_prompt,
-            "error_rate": novel_error,
-            "selected_exemplar_id": selected_exemplar_id,
-            "exemplar_selection_enabled": args.select_exemplar,
+            "error_rate": best_error,
+            "exemplar_id": best_exemplar_id,
         },
-        "exemplar_predictions": exemplar_predictions if args.select_exemplar else [],
-        "improvement": best_prompt.error_rate - novel_error,
+        "iteration_history": iteration_history,
+        "improvement": best_prompt.error_rate - best_error,
         "vae_best_cosine": optimizer.vae_trainer.best_cosine,
     }
 

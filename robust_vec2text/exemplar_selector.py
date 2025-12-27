@@ -11,6 +11,7 @@ import json
 import torch
 import torch.nn as nn
 import gpytorch
+from botorch.models.gpytorch import GPyTorchModel
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
 
@@ -48,18 +49,24 @@ class FeatureExtractor(nn.Module):
     def forward(
         self, instruction_emb: torch.Tensor, exemplar_emb: torch.Tensor
     ) -> torch.Tensor:
+        # Handle both 2D and 3D inputs (BoTorch passes 3D during posterior)
         inst_features = self.instruction_encoder(instruction_emb)
         ex_features = self.exemplar_encoder(exemplar_emb)
-        combined = torch.cat([inst_features, ex_features], dim=1)
+        combined = torch.cat([inst_features, ex_features], dim=-1)  # concat on last dim
         return self.joint_encoder(combined)
 
 
-class DeepKernelGP(gpytorch.models.ExactGP):
+class DeepKernelGP(gpytorch.models.ExactGP, GPyTorchModel):
     """Gaussian Process with structural-aware deep kernel.
 
     Uses ARD Matérn 5/2 kernel on 10-dim latent features.
     Input: [instruction_768 || exemplar_768] = 1536D
+
+    Inherits from GPyTorchModel for BoTorch compatibility
+    (enables LogExpectedImprovement and other acquisition functions).
     """
+
+    _num_outputs = 1  # Required for BoTorch
 
     def __init__(
         self,
@@ -69,7 +76,9 @@ class DeepKernelGP(gpytorch.models.ExactGP):
         feature_extractor: FeatureExtractor,
         input_dim: int = 768,
     ):
-        super().__init__(train_x, train_y, likelihood)
+        # train_y must be (N,) not (N, 1) for ExactGP
+        train_y_squeezed = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
+        super().__init__(train_x, train_y_squeezed, likelihood)
         self.mean_module = gpytorch.means.ZeroMean()
         self.covar_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(
@@ -84,8 +93,16 @@ class DeepKernelGP(gpytorch.models.ExactGP):
 
     def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultivariateNormal:
         # Split concatenated embeddings [inst_768 || ex_768]
-        instruction_emb = x[:, :self.input_dim]
-        exemplar_emb = x[:, self.input_dim:]
+        # Handle both 2D (batch, 1536) and 3D (batch, n, 1536) inputs
+        # BoTorch passes 3D tensors during posterior computation
+        if x.dim() == 3:
+            # Shape: (batch, n, 1536) -> split on last dim
+            instruction_emb = x[..., :self.input_dim]  # (..., 768)
+            exemplar_emb = x[..., self.input_dim:]     # (..., 768)
+        else:
+            # Shape: (batch, 1536) -> split on last dim
+            instruction_emb = x[:, :self.input_dim]
+            exemplar_emb = x[:, self.input_dim:]
         latent = self.feature_extractor(instruction_emb, exemplar_emb)
         return gpytorch.distributions.MultivariateNormal(
             self.mean_module(latent), self.covar_module(latent)
@@ -132,6 +149,10 @@ class ExemplarSelector:
         self.gp_model: Optional[DeepKernelGP] = None
         self.likelihood: Optional[gpytorch.likelihoods.GaussianLikelihood] = None
         self.feature_extractor: Optional[FeatureExtractor] = None
+
+        # Training data (stored for incremental updates)
+        self.X_train: Optional[torch.Tensor] = None  # (N, 1536)
+        self.y_train: Optional[torch.Tensor] = None  # (N,)
 
         # Normalization parameters
         self.X_min: Optional[torch.Tensor] = None
@@ -471,9 +492,42 @@ class ExemplarSelector:
         # Concatenate for GP input: [inst_768 || ex_768]
         X = torch.cat([X_inst, X_ex], dim=1)  # (N, 1536)
 
+        # Store raw training data for incremental updates
+        self.X_train = X.clone()
+        self.y_train = y.clone()
+
         if verbose:
             print(f"  Training data shape: X={X.shape}, y={y.shape}")
             print(f"  Error rate range: [{y.min():.4f}, {y.max():.4f}]")
+
+        # Train GP on stored data
+        return self._train_gp(epochs=epochs, lr=lr, patience=patience, verbose=verbose)
+
+    def _train_gp(
+        self,
+        epochs: int = 500,
+        lr: float = 0.01,
+        patience: int = 10,
+        verbose: bool = False,
+    ) -> bool:
+        """Internal method to train GP on stored X_train and y_train.
+
+        Recomputes normalization and reinitializes GP model.
+
+        Args:
+            epochs: Maximum training epochs
+            lr: Learning rate
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if training succeeded
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("No training data. Call train_with_decoded_embeddings first.")
+
+        X = self.X_train
+        y = self.y_train
 
         # Unit cube normalization for inputs
         self.X_min = X.min(dim=0)[0]
@@ -541,3 +595,52 @@ class ExemplarSelector:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
 
         return True
+
+    def add_observation_and_retrain(
+        self,
+        decoded_inst_emb: torch.Tensor,
+        exemplar_emb: torch.Tensor,
+        error_rate: float,
+        epochs: int = 100,
+        verbose: bool = False,
+    ) -> bool:
+        """Add new observation and retrain GP.
+
+        Appends new data point to existing training data,
+        recomputes normalization, and retrains GP.
+
+        Args:
+            decoded_inst_emb: VAE-decoded instruction embedding (768,)
+            exemplar_emb: Exemplar embedding (768,)
+            error_rate: Evaluated error rate
+            epochs: GP training epochs
+            verbose: Print progress
+
+        Returns:
+            True if retraining succeeded
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("No training data. Call train_with_decoded_embeddings first.")
+
+        # Ensure correct shapes and device
+        if decoded_inst_emb.dim() == 2:
+            decoded_inst_emb = decoded_inst_emb.squeeze(0)
+        if exemplar_emb.dim() == 2:
+            exemplar_emb = exemplar_emb.squeeze(0)
+
+        decoded_inst_emb = decoded_inst_emb.to(self.device)
+        exemplar_emb = exemplar_emb.to(self.device)
+
+        # Create new data point: [inst_768 || ex_768]
+        new_X = torch.cat([decoded_inst_emb, exemplar_emb]).unsqueeze(0)  # (1, 1536)
+        new_y = torch.tensor([error_rate], device=self.device)  # (1,)
+
+        # Append to training data
+        self.X_train = torch.cat([self.X_train, new_X], dim=0)
+        self.y_train = torch.cat([self.y_train, new_y], dim=0)
+
+        if verbose:
+            print(f"  Added observation: error={error_rate:.4f}, total samples={len(self.y_train)}")
+
+        # Retrain GP with updated data
+        return self._train_gp(epochs=epochs, patience=10, verbose=verbose)

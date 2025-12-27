@@ -1,0 +1,74 @@
+{
+  "timestamp": "20251227_013702",
+  "args": {
+    "instructions": "datasets/hbbops/instructions_25.txt",
+    "exemplars": "datasets/hbbops/examples_25.txt",
+    "grid_path": "datasets/hbbops/full_grid_combined.jsonl",
+    "validation": "hbbops_improved_2/data/validation.json",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "backend": "vllm",
+    "top_k": 25,
+    "latent_dim": 32,
+    "vae_epochs": 200,
+    "vae_lr": 0.001,
+    "vae_patience": 30,
+    "gp_epochs": 500,
+    "gp_lr": 0.01,
+    "opt_steps": 500,
+    "opt_lr": 0.1,
+    "opt_patience": 10,
+    "v2t_beam": 8,
+    "v2t_max_length": 512,
+    "ape_instructions": 1000,
+    "ape_cache": "datasets/hbbops/ape_instructions_1000.json",
+    "skip_ape": true,
+    "select_exemplar": true,
+    "exemplar_top_k": 5,
+    "output_dir": "robust_vec2text/results",
+    "debug": false
+  },
+  "grid_best": {
+    "instruction_id": 21,
+    "exemplar_id": 9,
+    "instruction": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar": "Q: Mary's sheep can run 12 feet per second, and her sheepdog can run 20 feet per second. A sheep standing 160 feet away from the sheep dog bolts, and the dog runs after it. How many seconds does it take the dog to catch the sheep?\nA: First find how much faster the dog is than the sheep: 20 feet/second - 12 feet/second = <<20-12=8>>8 feet/second\nQ: Hilary is shucking corn from ears that grew on her farm. She gets four ears of corn per stalk, and she has 108 stalks growing. Half the ears of corn have 500 kernels of corn and the other half have 100 more. How many kernels of corn does Hilary have to shuck?\nA: She has 108 * 4 = <<108*4=432>>432 ears of corn to shuck.\nQ: In a classroom, there are blue chairs, green chairs, and white chairs. There are 10 blue chairs. The green chairs are 3 times as many as the blue chairs, and there are 13 fewer white chairs than the green and blue chairs combined. How many chairs are there in a classroom?\nA: There are 10 x 3 = <<10*3=30>>30 green chairs.\nQ: Two pieces of bread are needed for one regular sandwich. 3 pieces of bread are needed for a double meat sandwich. How many pieces of bread are needed for 14 regular sandwiches and 12 double meat sandwiches?\nA: Regular = 2 * 14 = <<2*14=28>>28 pieces\nQ: Jack needs to put his shoes on, then help both his toddlers tie their shoes. If it takes Jack 4 minutes to put his shoes on, and three minutes longer to help each toddler with their shoes, how long does it take them to get ready?\nA: First figure out how long it takes to help one toddler: 4 minutes + 3 minutes = <<4+3=7>>7 minutes\n================================================================================",
+    "error_rate": 0.11751326762699014
+  },
+  "optimized": {
+    "instruction": "Problem Solved. The Mathematician's Number. TERM OUTLINE. Return to the equation as a Hundredth of an Integer. Proceed to the nearest integer. Then proceed to the next integer.",
+    "cosine_similarity": 0.8286606073379517,
+    "full_prompt": "Problem Solved. The Mathematician's Number. TERM OUTLINE. Return to the equation as a Hundredth of an Integer. Proceed to the nearest integer. Then proceed to the next integer.\n\nQ: Mary's sheep can run 12 feet per second, and her sheepdog can run 20 feet per second. A sheep standing 160 feet away from the sheep dog bolts, and the dog runs after it. How many seconds does it take the dog to catch the sheep?\nA: First find how much faster the dog is than the sheep: 20 feet/second - 12 feet/second = <<20-12=8>>8 feet/second\nQ: Hilary is shucking corn from ears that grew on her farm. She gets four ears of corn per stalk, and she has 108 stalks growing. Half the ears of corn have 500 kernels of corn and the other half have 100 more. How many kernels of corn does Hilary have to shuck?\nA: She has 108 * 4 = <<108*4=432>>432 ears of corn to shuck.\nQ: In a classroom, there are blue chairs, green chairs, and white chairs. There are 10 blue chairs. The green chairs are 3 times as many as the blue chairs, and there are 13 fewer white chairs than the green and blue chairs combined. How many chairs are there in a classroom?\nA: There are 10 x 3 = <<10*3=30>>30 green chairs.\nQ: Two pieces of bread are needed for one regular sandwich. 3 pieces of bread are needed for a double meat sandwich. How many pieces of bread are needed for 14 regular sandwiches and 12 double meat sandwiches?\nA: Regular = 2 * 14 = <<2*14=28>>28 pieces\nQ: Jack needs to put his shoes on, then help both his toddlers tie their shoes. If it takes Jack 4 minutes to put his shoes on, and three minutes longer to help each toddler with their shoes, how long does it take them to get ready?\nA: First figure out how long it takes to help one toddler: 4 minutes + 3 minutes = <<4+3=7>>7 minutes\n================================================================================",
+    "error_rate": 0.11902956785443519,
+    "selected_exemplar_id": 9,
+    "exemplar_selection_enabled": true
+  },
+  "exemplar_predictions": [
+    {
+      "exemplar_id": 9,
+      "predicted_error": 0.11549116042414198,
+      "predicted_std": 0.014767355064568832
+    },
+    {
+      "exemplar_id": 15,
+      "predicted_error": 0.11572197288146668,
+      "predicted_std": 0.011678256637868145
+    },
+    {
+      "exemplar_id": 22,
+      "predicted_error": 0.11973198674511565,
+      "predicted_std": 0.009158904736956686
+    },
+    {
+      "exemplar_id": 12,
+      "predicted_error": 0.12042329835520604,
+      "predicted_std": 0.01567026300205221
+    },
+    {
+      "exemplar_id": 16,
+      "predicted_error": 0.12170706717353141,
+      "predicted_std": 0.00864807464663997
+    }
+  ],
+  "improvement": -0.0015163002274450471,
+  "vae_best_cosine": 0.7884246110916138
+}

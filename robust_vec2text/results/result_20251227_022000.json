@@ -1,0 +1,448 @@
+{
+  "timestamp": "20251227_022000",
+  "args": {
+    "instructions": "datasets/hbbops/instructions_25.txt",
+    "exemplars": "datasets/hbbops/examples_25.txt",
+    "grid_path": "datasets/hbbops/full_grid_combined.jsonl",
+    "validation": "hbbops_improved_2/data/validation.json",
+    "model": "Qwen/Qwen2.5-7B-Instruct",
+    "backend": "vllm",
+    "top_k": 25,
+    "latent_dim": 32,
+    "vae_epochs": 200,
+    "vae_lr": 0.001,
+    "vae_patience": 30,
+    "gp_epochs": 500,
+    "gp_lr": 0.01,
+    "opt_steps": 500,
+    "opt_lr": 0.1,
+    "opt_patience": 10,
+    "v2t_beam": 8,
+    "v2t_max_length": 512,
+    "iterations": 50,
+    "ape_instructions": 1000,
+    "ape_cache": "datasets/hbbops/ape_instructions_1000.json",
+    "skip_ape": true,
+    "select_exemplar": false,
+    "exemplar_top_k": 5,
+    "output_dir": "robust_vec2text/results",
+    "debug": false
+  },
+  "grid_best": {
+    "instruction_id": 21,
+    "exemplar_id": 9,
+    "instruction": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar": "Q: Mary's sheep can run 12 feet per second, and her sheepdog can run 20 feet per second. A sheep standing 160 feet away from the sheep dog bolts, and the dog runs after it. How many seconds does it take the dog to catch the sheep?\nA: First find how much faster the dog is than the sheep: 20 feet/second - 12 feet/second = <<20-12=8>>8 feet/second\nQ: Hilary is shucking corn from ears that grew on her farm. She gets four ears of corn per stalk, and she has 108 stalks growing. Half the ears of corn have 500 kernels of corn and the other half have 100 more. How many kernels of corn does Hilary have to shuck?\nA: She has 108 * 4 = <<108*4=432>>432 ears of corn to shuck.\nQ: In a classroom, there are blue chairs, green chairs, and white chairs. There are 10 blue chairs. The green chairs are 3 times as many as the blue chairs, and there are 13 fewer white chairs than the green and blue chairs combined. How many chairs are there in a classroom?\nA: There are 10 x 3 = <<10*3=30>>30 green chairs.\nQ: Two pieces of bread are needed for one regular sandwich. 3 pieces of bread are needed for a double meat sandwich. How many pieces of bread are needed for 14 regular sandwiches and 12 double meat sandwiches?\nA: Regular = 2 * 14 = <<2*14=28>>28 pieces\nQ: Jack needs to put his shoes on, then help both his toddlers tie their shoes. If it takes Jack 4 minutes to put his shoes on, and three minutes longer to help each toddler with their shoes, how long does it take them to get ready?\nA: First figure out how long it takes to help one toddler: 4 minutes + 3 minutes = <<4+3=7>>7 minutes\n================================================================================",
+    "error_rate": 0.11751326762699014
+  },
+  "optimized": {
+    "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can't find the answer to this math problem, please let us know and we'll get back to you as soon as we can. The final answer should look like this: Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew!",
+    "full_prompt": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can't find the answer to this math problem, please let us know and we'll get back to you as soon as we can. The final answer should look like this: Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew!\n\nQ: Mary's sheep can run 12 feet per second, and her sheepdog can run 20 feet per second. A sheep standing 160 feet away from the sheep dog bolts, and the dog runs after it. How many seconds does it take the dog to catch the sheep?\nA: First find how much faster the dog is than the sheep: 20 feet/second - 12 feet/second = <<20-12=8>>8 feet/second\nQ: Hilary is shucking corn from ears that grew on her farm. She gets four ears of corn per stalk, and she has 108 stalks growing. Half the ears of corn have 500 kernels of corn and the other half have 100 more. How many kernels of corn does Hilary have to shuck?\nA: She has 108 * 4 = <<108*4=432>>432 ears of corn to shuck.\nQ: In a classroom, there are blue chairs, green chairs, and white chairs. There are 10 blue chairs. The green chairs are 3 times as many as the blue chairs, and there are 13 fewer white chairs than the green and blue chairs combined. How many chairs are there in a classroom?\nA: There are 10 x 3 = <<10*3=30>>30 green chairs.\nQ: Two pieces of bread are needed for one regular sandwich. 3 pieces of bread are needed for a double meat sandwich. How many pieces of bread are needed for 14 regular sandwiches and 12 double meat sandwiches?\nA: Regular = 2 * 14 = <<2*14=28>>28 pieces\nQ: Jack needs to put his shoes on, then help both his toddlers tie their shoes. If it takes Jack 4 minutes to put his shoes on, and three minutes longer to help each toddler with their shoes, how long does it take them to get ready?\nA: First figure out how long it takes to help one toddler: 4 minutes + 3 minutes = <<4+3=7>>7 minutes\n================================================================================",
+    "error_rate": 0.09552691432903715,
+    "exemplar_id": 9
+  },
+  "iteration_history": [
+    {
+      "iteration": 1,
+      "instruction": "But if you're a victim of this problem, you're not alone. You're confronted with the problem, which is the result of the intersection of the enumeration of the numbers and the enumeration of the equation, which returns the answer to the question, UNDERSTAND.",
+      "cosine_similarity": 0.7964527606964111,
+      "error_rate": 0.12509476876421532,
+      "improved": false,
+      "best_error_so_far": 0.11751326762699014
+    },
+    {
+      "iteration": 2,
+      "instruction": "Problem: The answer. Problem: The answer. Problem: The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer.",
+      "cosine_similarity": 0.8196609020233154,
+      "error_rate": 0.11220621683093257,
+      "improved": true,
+      "best_error_so_far": 0.11220621683093257
+    },
+    {
+      "iteration": 3,
+      "instruction": "The answer is the number. The answer is the number. The answer is the number. The answer is the number. The answer is the number. The answer is the number. The answer is the number. The answer is the number. Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems ...",
+      "cosine_similarity": 0.8445303440093994,
+      "error_rate": 0.10614101592115244,
+      "improved": true,
+      "best_error_so_far": 0.10614101592115244
+    },
+    {
+      "iteration": 4,
+      "instruction": "You are here: Home \u00bb Math Answers \u00bb Math Answers \u00bb Math Answers \u00bb Math Answers \u00bb Math Answers \u00bb Math Answers \u00bb Math Answers \u00bb What is the math problem? Find the answer to the math problem.",
+      "cosine_similarity": 0.7677286267280579,
+      "error_rate": 0.1258529188779378,
+      "improved": false,
+      "best_error_so_far": 0.10614101592115244
+    },
+    {
+      "iteration": 5,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Now that you have figured out the answer to the problem, let's take a moment to think about what the answer would look like. The answer to the problem would be ... Read Answers Now that you have figured out the answer to the problem, let's take a moment to think about what the answer would look like. ... Read Answers Now that you have figured out the answer to the problem, let's solve the problem.",
+      "cosine_similarity": 0.8552402257919312,
+      "error_rate": 0.11599696739954513,
+      "improved": false,
+      "best_error_so_far": 0.10614101592115244
+    },
+    {
+      "iteration": 6,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.8624308109283447,
+      "error_rate": 0.1182714177407127,
+      "improved": false,
+      "best_error_so_far": 0.10614101592115244
+    },
+    {
+      "iteration": 7,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.8625040054321289,
+      "error_rate": 0.1182714177407127,
+      "improved": false,
+      "best_error_so_far": 0.10614101592115244
+    },
+    {
+      "iteration": 8,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can't find the answer to this math problem, please let us know and we'll get back to you as soon as we can. The final answer should look like this: Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew!",
+      "cosine_similarity": 0.8775277137756348,
+      "error_rate": 0.09552691432903715,
+      "improved": true,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 9,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem.",
+      "cosine_similarity": 0.8219075202941895,
+      "error_rate": 0.12206216830932526,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 10,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can solve this math problem and see if you can solve this math problem in a few simple steps. If you can solve this math problem in a few simple steps, please let us know in the comments below. The last time we looked at the numbers, we came up with the following answer: ...........................................................................................................................................................................................",
+      "cosine_similarity": 0.8672993779182434,
+      "error_rate": 0.12964366944655037,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 11,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the problem. If you can find the answer to the problem, let's see if you can find the answer to the problem. The last time we looked at the mathematicians, we came up with the following answer: ...Read more.",
+      "cosine_similarity": 0.8554857969284058,
+      "error_rate": 0.12282031842304775,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 12,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can come up with a solution to this math problem. If you can come up with a solution to this math problem, please let me know. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question. Please read the answer to the last question.",
+      "cosine_similarity": 0.8468227386474609,
+      "error_rate": 0.1175132676269901,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 13,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the problem. If you can find the answer to the problem, please let us know in the comments below and we'll get back to you as soon as we can. Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Mathematical Answers to the Problem.",
+      "cosine_similarity": 0.8389329314231873,
+      "error_rate": 0.11372251705837755,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 14,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can come up with a solution to this math problem. If you can come up with a solution to this math problem, please let me know. I'd love to hear from you! The last time we looked at the numbers, we looked at the numbers. The last time we looked at the numbers, we looked at the numbers. The last time we looked at the numbers, we looked at the numbers. The last time we looked at the numbers, we looked at the numbers. The last time we looked at the numbers, we looked at the numbers.",
+      "cosine_similarity": 0.8318064212799072,
+      "error_rate": 0.12130401819560277,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 15,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can find the answer to this math problem, please let us know and we'll do our best to make it as easy as possible for you to solve. The last time we looked at this math problem, we came up with the following answer: The last time we looked at this math problem, we came up with the following answer: ...",
+      "cosine_similarity": 0.8599501848220825,
+      "error_rate": 0.11372251705837755,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 16,
+      "instruction": "You are here. Home \u00bb Mathematics \u00bb Problems & Solutions \u00bb What do you think is the answer? Find the following: 1 A large, uncounted number. 2 A large, uncounted number. 3 A large, uncounted number. 4 A large, uncounted number. 5 A large, uncounted number. 6 The PATCH.",
+      "cosine_similarity": 0.8050349354743958,
+      "error_rate": 0.1273692191053829,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 17,
+      "instruction": "Please try again later. Problem: The answer to the problem is the number ... Read More. Problem: The answer to the problem is the number ... Read More. Problem: The answer to the problem is the number ... Read More. Multiply the number ... Read More. Multiply the number ... Read More.",
+      "cosine_similarity": 0.8610914349555969,
+      "error_rate": 0.10689916603487493,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 18,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem.",
+      "cosine_similarity": 0.8219823837280273,
+      "error_rate": 0.11675511751326761,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 19,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem and see if you can solve this math problem.",
+      "cosine_similarity": 0.8220680952072144,
+      "error_rate": 0.11675511751326761,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 20,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, you've come to the right place. I'm sure you'll find the answer to the math problem in a few minutes. ...Read more.",
+      "cosine_similarity": 0.8354651927947998,
+      "error_rate": 0.11675511751326761,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 21,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.8623814582824707,
+      "error_rate": 0.1182714177407127,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 22,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.8623894453048706,
+      "error_rate": 0.1182714177407127,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 23,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer should look like this: Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew! Phew!",
+      "cosine_similarity": 0.8799434900283813,
+      "error_rate": 0.1008339651250948,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 24,
+      "instruction": ". . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . Come to the answer to the math problem that remains unanswered. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .",
+      "cosine_similarity": 0.7763878107070923,
+      "error_rate": 0.1175132676269901,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 25,
+      "instruction": "You are here: Home / Problem Solving / Problem Solving / Problem Solving / Problem Solving / Problem Solving / Problem Solving / Problem Solving / Problem Solving / Problem Solving ... The answer to this math problem is that the ...",
+      "cosine_similarity": 0.824425995349884,
+      "error_rate": 0.11448066717210004,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 26,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can come up with a simple answer to the math problem. If you can come up with a simple answer to the math problem, you've come up with a simple answer to the math problem. Look at the numbers above and you'll see that they are not rounded to the nearest whole number. ...Read more.",
+      "cosine_similarity": 0.8574292659759521,
+      "error_rate": 0.11448066717210004,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 27,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can't find the answer to the math problem, please let us know and we'll do our best to help you find the answer to the math problem as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.851098358631134,
+      "error_rate": 0.12054586808188017,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 28,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can solve this math problem and see if you can solve this math problem in a few minutes. We'll see if you can solve this math problem and see if you can solve this math problem in a few minutes. The final answer should be: ...Read more.",
+      "cosine_similarity": 0.8511250019073486,
+      "error_rate": 0.11144806671720997,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 29,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The last time we looked at the math problem, we came up with the following answers:",
+      "cosine_similarity": 0.859399676322937,
+      "error_rate": 0.12206216830932526,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 30,
+      "instruction": "The answer is \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 The answer is \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 \u00e2 !",
+      "cosine_similarity": 0.7733784914016724,
+      "error_rate": 0.09704321455648224,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 31,
+      "instruction": "The answer is the answer to the problem. The answer to the problem is the answer to the problem. The answer to the problem is the answer to the problem. The answer to the problem is the answer to the problem. The answer to the problem is the answer to the problem. Mathematical Problem Solving:                                                                                                                                                        .",
+      "cosine_similarity": 0.8213579654693604,
+      "error_rate": 0.1091736163760425,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 32,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can find the answer to this math problem, please let us know. Please check back in a few days to see if you can find the answer to this math problem. The final answer is ... Read Answer.",
+      "cosine_similarity": 0.8519605398178101,
+      "error_rate": 0.12054586808188017,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 33,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the problem. If you can find the answer to the problem, please let us know in the comments below and we'll get back to you as soon as we can. The last time we looked at the mathematicians, we came up with the following answer: The last time we looked at the mathematicians, we came up with the following answer:",
+      "cosine_similarity": 0.8621398210525513,
+      "error_rate": 0.11448066717210004,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 34,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the math problem. If you can find the answer to the math problem, please let us know in the comments below and we'll get back to you as soon as we can. The final answer should look like this: 6*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12*12.",
+      "cosine_similarity": 0.8526435494422913,
+      "error_rate": 0.12509476876421532,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 35,
+      "instruction": "The answer is: The problem is: The answer is: The answer is: The answer is: The answer is: The answer is: The answer is: The answer is: The answer is: The answer is: The answer is: Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems - Mathematical Problems ...",
+      "cosine_similarity": 0.8411442637443542,
+      "error_rate": 0.1091736163760425,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 36,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can come up with a simple answer to this math problem. If you can come up with a simple answer to this math problem, you've come up with a simple answer to this math problem. Look at the numbers above and you'll see that they are not rounded to the nearest whole number.",
+      "cosine_similarity": 0.8542701005935669,
+      "error_rate": 0.11599696739954513,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 37,
+      "instruction": "The Problem. The Answer. The Answer. The Problem. The Answer. The Problem. The Answer. The Problem. The Mathematical Answer. The Mathematical Answer. The Mathematical Answer. The Mathematical Answer. The Mathematical Answer. Let's start by looking at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers. Let's look at a few numbers.",
+      "cosine_similarity": 0.8610636591911316,
+      "error_rate": 0.12357846853677024,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 38,
+      "instruction": "Please try again later. Please try again later. Please try again later. Please try again later. ANSWER: The problem is to find the sum of all the numbers in the equation. EXPECT: The problem is to find the sum of all the numbers in the equation. EXPECT: The problem is to find the sum of all the numbers in the equation. EXPECT: The problem is to find the sum of all the numbers in the equation.",
+      "cosine_similarity": 0.8395393490791321,
+      "error_rate": 0.11902956785443519,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 39,
+      "instruction": "Find the answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. The answer to the problem. Mathematical Numbers.                                                                                                                                                                                                                     ",
+      "cosine_similarity": 0.8363393545150757,
+      "error_rate": 0.11220621683093257,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 40,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to this math problem. If you can find the answer to this math problem, please let us know. We'll get back to you as soon as we get back to you. The final answer should be ... Read Answers.",
+      "cosine_similarity": 0.8610810041427612,
+      "error_rate": 0.11144806671720997,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 41,
+      "instruction": "The Math Problem. The Math Problem. The Math Problem. The Math Problem. The Math Problem. The Math Problem. The Math Problem. Let's find the answer to the math problem. If you can't find the answer to the math problem, you've come to the right place. We'll look at the answer to the math problem in a moment. The answer is ... Read Answer.",
+      "cosine_similarity": 0.8345298767089844,
+      "error_rate": 0.1281273692191054,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 42,
+      "instruction": "The Answer: The Problem is the spherical, irrational, non-quantifiable number that I see, hear, smell, see, and believe. If you don't know the answer, please send me an e-mail and I'll get back to you as soon as I can. I'll get back to you as soon as I can. ...Read more. 1 More. 2 More. 3 Better. 4 Better. 5 Better. 6 Better. 7 Better. 8 Better. 9 Better. 10 Better. 11 Better. 12 Better. 13 Better. 14 Better. 15 Better. 16 Better. 17 Better. 18 Better. 19 Better. 20 Better. 21 Better. 22 Better.",
+      "cosine_similarity": 0.8213037252426147,
+      "error_rate": 0.11523881728582264,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 43,
+      "instruction": "The Math Problem. The Math Problem. Let's find the answer to the math problem. If you're not sure what the answer is to the math problem, please let us know and we'll do our best to solve it for you. The Math Problem. The answer to the math problem is a staggering number. Look at the numbers above and you'll see how many times we've rounded to the nearest whole number. ...Read more.",
+      "cosine_similarity": 0.8568954467773438,
+      "error_rate": 0.1273692191053829,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 44,
+      "instruction": "The Number that you have come up with is a PIN. The Number that you have come up with is a PIN. Answer the following problem: The arithmetic 'contain'. The 'sqrt'. The 'sqrt'. The 'sqrt'. The 'sqrt'. The 'sqrt'. The 'sqrt'. The 'sqrt'.",
+      "cosine_similarity": 0.8222094774246216,
+      "error_rate": 0.1091736163760425,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 45,
+      "instruction": "Math Problems & Answers. Math Problems & Answers. Math Problems & Answers. Let's see if you can come up with a solution to the math problem. The answer is a number, not a number. If you can come up with a solution to the math problem, let's see if you can come up with a solution to the math problem. Let's see if you can come up with a solution to the math problem.",
+      "cosine_similarity": 0.8494470715522766,
+      "error_rate": 0.11372251705837755,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 46,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if you can find the answer to the problem. If you can't find the answer to the problem, please let us know and we'll do our best to help you find the answer to the problem as soon as we can. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.8598452806472778,
+      "error_rate": 0.11902956785443519,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 47,
+      "instruction": "Problem: The Number. Problem: The Number. Problem: The Number. Problem: The Number. Let's see if we can find the answer to the problem. If we can find the answer to the problem, let's see if we can find the answer to the problem. If we can find the answer to the problem, let's see if we can find the answer to the problem. The final answer is ... Read Answers.",
+      "cosine_similarity": 0.869295597076416,
+      "error_rate": 0.1182714177407127,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 48,
+      "instruction": "br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br />br /> ...",
+      "cosine_similarity": 0.6866123676300049,
+      "error_rate": 0.11144806671720997,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 49,
+      "instruction": "Then, if you are unable to find the answer to the problem, solve the problem. Then, if you are unable to find the answer to the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem, solve the problem.",
+      "cosine_similarity": 0.7929427623748779,
+      "error_rate": 0.11372251705837755,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    },
+    {
+      "iteration": 50,
+      "instruction": "The Problem. The Answer. The Answer. The Problem. The Answer. The Answer. The Problem. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer. The answer.",
+      "cosine_similarity": 0.796132504940033,
+      "error_rate": 0.1091736163760425,
+      "improved": false,
+      "best_error_so_far": 0.09552691432903715
+    }
+  ],
+  "improvement": 0.021986353297952996,
+  "vae_best_cosine": 0.7929676175117493
+}

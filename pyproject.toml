@@ -2,14 +2,15 @@
 name = "nlp"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.9,<3.14"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "accelerate>=1.10.1",
     "anthropic>=0.71.0",
     "bokeh>=3.4.3",
+    "botorch>=0.14.0",
     "catboost>=1.2.0",
     "datasets>=4.2.0",
-    "gpytorch>=1.13",
+    "gpytorch>=1.14.2",
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",
     "ngboost>=0.5.1",

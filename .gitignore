@@ -146,6 +146,7 @@ dmypy.json
 
 # Visualization outputs
 visualizations/output/
+robust_vec2text/visualizations/
 
 # CatBoost training info
 catboost_info/

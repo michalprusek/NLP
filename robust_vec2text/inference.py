@@ -6,6 +6,8 @@ No fallback - returns results with cosine score for filtering.
 
 import torch
 import torch.nn.functional as F
+import gpytorch
+from botorch.acquisition.analytic import LogExpectedImprovement
 from typing import Tuple, Optional
 from dataclasses import dataclass
 
@@ -22,6 +24,8 @@ class InversionResult:
     target_embedding: torch.Tensor
     realized_embedding: torch.Tensor
     cosine_similarity: float
+    optimized_latent: torch.Tensor = None  # 32D latent before Vec2Text inversion
+    reembedded_latent: torch.Tensor = None  # 32D latent from re-encoded text (cycle consistency)
 
 
 class RobustInference:
@@ -124,11 +128,13 @@ class RobustInference:
         lr: float = 0.1,
         patience: int = 10,
         xi: float = 0.01,
+        use_log_ei: bool = True,
         verbose: bool = True,
     ) -> torch.Tensor:
         """Gradient-based EI optimization in latent space.
 
         Uses autodiff through GP to maximize Expected Improvement.
+        Supports both standard EI and LogEI (BoTorch) for gradient stability.
 
         Args:
             initial_latent: Starting latent vector (32,)
@@ -136,7 +142,9 @@ class RobustInference:
             n_steps: Maximum optimization steps
             lr: Learning rate
             patience: Early stopping patience (stop if no improvement for N steps)
-            xi: EI exploration parameter
+            xi: EI exploration parameter (only used with standard EI)
+            use_log_ei: If True, use BoTorch LogEI (recommended for gradient stability).
+                        If False, use standard EI (may have vanishing gradients).
             verbose: Print progress
 
         Returns:
@@ -148,32 +156,43 @@ class RobustInference:
 
         optimizer = torch.optim.Adam([z], lr=lr)
 
-        best_ei = float("-inf")
+        best_ei_value = float("-inf")
         best_z = z.clone().detach()
         patience_counter = 0
+
+        if verbose and use_log_ei:
+            print("  Using BoTorch LogEI (gradient-stable)")
 
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Compute EI (we want to maximize it)
-            ei = self._compute_ei_differentiable(z.unsqueeze(0), best_y, xi)
-
-            # Negative for minimization
-            loss = -ei
+            if use_log_ei:
+                # Use BoTorch LogEI (gradient-stable)
+                log_ei = self._compute_log_ei_botorch(z.unsqueeze(0), best_y)
+                loss = -log_ei  # Maximize LogEI
+                current_ei = torch.exp(log_ei).item()  # Convert to EI for tracking
+            else:
+                # Original EI (may have vanishing gradients)
+                ei = self._compute_ei_differentiable(z.unsqueeze(0), best_y, xi)
+                loss = -ei
+                current_ei = ei.item()
 
             loss.backward()
             optimizer.step()
 
             # Track best with early stopping
-            if ei.item() > best_ei:
-                best_ei = ei.item()
+            if current_ei > best_ei_value:
+                best_ei_value = current_ei
                 best_z = z.clone().detach()
                 patience_counter = 0
             else:
                 patience_counter += 1
 
             if verbose and (step + 1) % 50 == 0:
-                print(f"  Step {step+1}: EI = {ei.item():.6f}")
+                if use_log_ei:
+                    print(f"  Step {step+1}: EI = {current_ei:.6f} (log={log_ei.item():.2f})")
+                else:
+                    print(f"  Step {step+1}: EI = {current_ei:.6f}")
 
             # Early stopping
             if patience_counter >= patience:
@@ -182,7 +201,7 @@ class RobustInference:
                 break
 
         if verbose:
-            print(f"  Best EI: {best_ei:.6f}")
+            print(f"  Best EI: {best_ei_value:.6f}")
 
         return best_z
 
@@ -260,6 +279,74 @@ class RobustInference:
 
         return ei.squeeze()
 
+    def _compute_log_ei_botorch(
+        self,
+        z: torch.Tensor,
+        best_y: float,
+    ) -> torch.Tensor:
+        """Compute LogEI using BoTorch for gradient-stable optimization.
+
+        Uses BoTorch's LogExpectedImprovement which implements numerically
+        stable log-space EI from Ament et al. 2023 (NeurIPS).
+
+        Key benefit: Gradients remain non-zero even when EI values are
+        extremely small (far from optimum), solving the vanishing gradient
+        problem in standard EI optimization.
+
+        Pipeline:
+            1. VAE decode: z (32D) → inst_emb (768D)
+            2. Prepare GP input: [inst_emb || exemplar_emb] (1536D)
+            3. Normalize and use BoTorch LogExpectedImprovement
+
+        Args:
+            z: Latent points (batch, 32)
+            best_y: Best observed error rate (for minimization)
+
+        Returns:
+            LogEI values (batch,) - log of Expected Improvement
+        """
+        # Ensure z is on the right device
+        z = z.to(self.device)
+
+        # 1. Decode VAE latent to instruction embedding (differentiable)
+        inst_emb = self.vae.decode(z)  # (batch, 768)
+
+        # 2. Prepare GP input: concatenate [inst_emb || exemplar_emb]
+        batch_size = inst_emb.shape[0]
+        exemplar_emb = self.exemplar_emb.unsqueeze(0).expand(batch_size, -1)  # (batch, 768)
+        X = torch.cat([inst_emb, exemplar_emb], dim=1)  # (batch, 1536)
+
+        # Normalize using ExemplarSelector's stored params
+        selector = self.exemplar_selector
+        denominator = selector.X_max - selector.X_min
+        denominator = torch.where(denominator == 0, torch.ones_like(denominator), denominator)
+        X_norm = (X - selector.X_min) / denominator
+
+        # 3. Add batch dimension for BoTorch: (batch, 1, 1536)
+        # BoTorch expects shape (batch_shape, q, d) where q=1 for single point
+        X_botorch = X_norm.unsqueeze(-2)
+
+        # Set GP to eval mode (but keep gradients enabled)
+        selector.gp_model.eval()
+        selector.likelihood.eval()
+
+        # Create LogEI acquisition function
+        # Note: BoTorch assumes MAXIMIZATION, but we have error rates (lower is better)
+        # Solution: Negate best_f so that lowest error becomes "highest" value
+        # Also need to account for GP normalization
+        best_y_norm = (best_y - selector.y_mean.item()) / selector.y_std.item()
+
+        log_ei_acqf = LogExpectedImprovement(
+            model=selector.gp_model,
+            best_f=-best_y_norm,  # Negate for maximization convention
+        )
+
+        # Evaluate LogEI with gradients
+        with gpytorch.settings.fast_pred_var():
+            log_ei = log_ei_acqf(X_botorch)
+
+        return log_ei.squeeze()
+
     def decode_latent(self, z: torch.Tensor) -> torch.Tensor:
         """Decode latent to target embedding.
 
@@ -284,6 +371,8 @@ class RobustInference:
         target_embedding: torch.Tensor,
         num_beams: int = 8,
         max_length: int = 512,
+        no_repeat_ngram_size: int = 3,
+        repetition_penalty: float = 1.2,
     ) -> str:
         """Invert embedding to text via Vec2Text InversionModel.
 
@@ -293,6 +382,8 @@ class RobustInference:
             target_embedding: Target embedding (768,)
             num_beams: Beam search width
             max_length: Maximum output length
+            no_repeat_ngram_size: Block repeating n-grams of this size (0 to disable)
+            repetition_penalty: Penalize repeated tokens (1.0 = no penalty)
 
         Returns:
             Reconstructed text
@@ -304,16 +395,23 @@ class RobustInference:
             target_embedding = target_embedding.unsqueeze(0)
         target_embedding = target_embedding.to(self.device)
 
+        # Build generation kwargs with anti-repetition parameters
+        gen_kwargs = {
+            "num_beams": num_beams,
+            "max_length": max_length,
+        }
+        if no_repeat_ngram_size > 0:
+            gen_kwargs["no_repeat_ngram_size"] = no_repeat_ngram_size
+        if repetition_penalty != 1.0:
+            gen_kwargs["repetition_penalty"] = repetition_penalty
+
         # Generate text using InversionModel
         with torch.no_grad():
             output_ids = self._vec2text_model.generate(
                 inputs={
                     "frozen_embeddings": target_embedding,
                 },
-                generation_kwargs={
-                    "num_beams": num_beams,
-                    "max_length": max_length,
-                },
+                generation_kwargs=gen_kwargs,
             )
 
         # Decode tokens to text
@@ -327,6 +425,8 @@ class RobustInference:
         latent: torch.Tensor,
         num_beams: int = 8,
         max_length: int = 512,
+        no_repeat_ngram_size: int = 3,
+        repetition_penalty: float = 1.2,
     ) -> InversionResult:
         """Invert latent via Vec2Text.
 
@@ -334,26 +434,35 @@ class RobustInference:
             1. Decode latent -> target_embedding
             2. Vec2Text invert -> candidate_text
             3. GTR encode candidate_text -> realized_embedding
-            4. Compute cosine similarity (no threshold filtering)
+            4. VAE encode realized_embedding -> reembedded_latent (cycle consistency)
+            5. Compute cosine similarity (no threshold filtering)
 
         Args:
             latent: Latent vector (32,)
             num_beams: Beam search width
             max_length: Maximum output length
+            no_repeat_ngram_size: Block repeating n-grams of this size (0 to disable)
+            repetition_penalty: Penalize repeated tokens (1.0 = no penalty)
 
         Returns:
-            InversionResult with text, embeddings, and cosine score
+            InversionResult with text, embeddings, latents, and cosine score
         """
         # 1. Decode latent to target embedding
         target_emb = self.decode_latent(latent)
 
         # 2. Invert via Vec2Text
-        candidate_text = self.invert_embedding(target_emb, num_beams, max_length)
+        candidate_text = self.invert_embedding(
+            target_emb, num_beams, max_length, no_repeat_ngram_size, repetition_penalty
+        )
 
         # 3. Re-encode with GTR
         realized_emb = self.gtr.encode_tensor(candidate_text).to(self.device)
 
-        # 4. Compute cosine similarity
+        # 4. Compute re-embedded latent (cycle consistency check)
+        with torch.no_grad():
+            reembedded_latent = self.vae.get_latent(realized_emb.unsqueeze(0)).squeeze(0)
+
+        # 5. Compute cosine similarity
         cosine = F.cosine_similarity(
             target_emb.unsqueeze(0),
             realized_emb.unsqueeze(0),
@@ -364,6 +473,8 @@ class RobustInference:
             target_embedding=target_emb,
             realized_embedding=realized_emb,
             cosine_similarity=cosine,
+            optimized_latent=latent.clone().detach(),
+            reembedded_latent=reembedded_latent,
         )
 
     def full_pipeline(
@@ -373,8 +484,11 @@ class RobustInference:
         n_opt_steps: int = 500,
         opt_lr: float = 0.1,
         opt_patience: int = 10,
+        use_log_ei: bool = True,
         v2t_beams: int = 8,
         v2t_max_length: int = 512,
+        v2t_no_repeat_ngram_size: int = 3,
+        v2t_repetition_penalty: float = 1.2,
         verbose: bool = True,
     ) -> InversionResult:
         """Run full optimization and inversion pipeline.
@@ -385,8 +499,11 @@ class RobustInference:
             n_opt_steps: Maximum gradient optimization steps
             opt_lr: Optimization learning rate
             opt_patience: Early stopping patience
+            use_log_ei: If True, use BoTorch LogEI (recommended). If False, use standard EI.
             v2t_beams: Vec2Text beam search width
             v2t_max_length: Vec2Text maximum output length
+            v2t_no_repeat_ngram_size: Block repeating n-grams (0 to disable)
+            v2t_repetition_penalty: Penalize repeated tokens (1.0 = no penalty)
             verbose: Print progress
 
         Returns:
@@ -404,6 +521,7 @@ class RobustInference:
             n_steps=n_opt_steps,
             lr=opt_lr,
             patience=opt_patience,
+            use_log_ei=use_log_ei,
             verbose=verbose,
         )
 
@@ -417,6 +535,8 @@ class RobustInference:
             latent=optimized_latent,
             num_beams=v2t_beams,
             max_length=v2t_max_length,
+            no_repeat_ngram_size=v2t_no_repeat_ngram_size,
+            repetition_penalty=v2t_repetition_penalty,
         )
 
         if verbose:

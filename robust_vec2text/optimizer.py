@@ -328,6 +328,34 @@ class RobustHbBoPs:
             raise RuntimeError("VAE not trained.")
         return self.vae_trainer.get_vae()
 
+    def get_decoded_embedding(self, instruction_text: str) -> torch.Tensor:
+        """Encode instruction and decode through VAE.
+
+        Returns embedding in VAE-decoded distribution for GP compatibility.
+        This ensures new observations are in the same space as GP training data.
+
+        Args:
+            instruction_text: Instruction text to encode
+
+        Returns:
+            VAE-decoded embedding tensor of shape (768,)
+        """
+        if self.vae_trainer is None:
+            raise RuntimeError("VAE not trained.")
+
+        vae = self.vae_trainer.get_vae()
+        vae.eval()
+
+        # Encode with GTR
+        inst_emb = self.gtr.encode_tensor(instruction_text).to(self.device)
+
+        # Get VAE latent and decode
+        with torch.no_grad():
+            latent = vae.get_latent(inst_emb.unsqueeze(0))
+            decoded = vae.decode(latent).squeeze(0)
+
+        return decoded  # (768,)
+
     def save_checkpoint(self, path: str):
         """Save VAE checkpoint."""
         if self.vae_trainer is not None:
