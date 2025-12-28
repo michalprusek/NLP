@@ -179,8 +179,8 @@ def evaluate_prompt(
     for item in validation_data:
         question = item["question"]
         expected = item["answer"]
-        # Instruction-only format: just instruction + Q/A
-        full_prompt = f"{prompt}\n\nQ: {question}\nA:"
+        # Q_end format (OPRO paper): instruction AFTER question
+        full_prompt = f"Q: {question}\n{prompt}\nA:"
         prompts.append(full_prompt)
         expected_answers.append(expected)
 
@@ -252,10 +252,12 @@ def main():
     # Iterations
     parser.add_argument("--iterations", type=int, default=10, help="Number of optimization iterations")
 
-    # APE Data Augmentation
+    # APE Data Augmentation (now uses DiversityInstructionGenerator)
     parser.add_argument("--ape-instructions", type=int, default=1000)
-    parser.add_argument("--ape-cache", type=str, default="/home/prusek/NLP/datasets/cowboys/ape_instructions_1000.json")
+    parser.add_argument("--ape-cache", type=str, default="/home/prusek/NLP/datasets/cowboys/diverse_instructions_1000.json")
     parser.add_argument("--skip-ape", action="store_true")
+    parser.add_argument("--regenerate-ape", action="store_true",
+                        help="Force regeneration of diverse instructions (ignores cache)")
 
     # Output
     parser.add_argument("--output-dir", type=str, default="generation/cowboys_vec2text/results")
