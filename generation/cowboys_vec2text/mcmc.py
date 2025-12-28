@@ -90,10 +90,14 @@ class NegatedGPModelWrapper(torch.nn.Module):
         from botorch.posteriors.gpytorch import GPyTorchPosterior
 
         self.gp_model.eval()
-        with gpytorch.settings.fast_pred_var():
+        with gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-3):
             pred = self.gp_model(X.squeeze(-2) if X.dim() > 2 else X)
+            # Add jitter to covariance matrix for numerical stability
+            cov = pred.covariance_matrix
+            jitter = 1e-4 * torch.eye(cov.size(-1), device=cov.device, dtype=cov.dtype)
+            cov_stable = cov + jitter
             negated_dist = gpytorch.distributions.MultivariateNormal(
-                -pred.mean, pred.covariance_matrix
+                -pred.mean, cov_stable
             )
         return GPyTorchPosterior(negated_dist)
 
@@ -194,7 +198,7 @@ class pCNSampler:
             best_f=-best_y_norm,  # Negated for minimization
         )
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+        with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-3):
             log_ei = log_ei_acqf(X_botorch)
 
         return log_ei.squeeze()

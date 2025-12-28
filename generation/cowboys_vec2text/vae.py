@@ -169,6 +169,73 @@ class InstructionVAE(nn.Module):
         re_encoded = self.get_latent(decoded)  # 768D -> z'
         return F.mse_loss(re_encoded, z)
 
+    def invert_decoder(
+        self,
+        target_embedding: torch.Tensor,
+        n_steps: int = 500,
+        lr: float = 0.1,
+        early_stop_threshold: float = 1e-4,
+    ) -> torch.Tensor:
+        """Find z_inv such that decode(z_inv) ≈ target_embedding.
+
+        Uses gradient descent to minimize ||decode(z) - target||^2 + cosine loss.
+        This implements the InvBO-style inversion for creating aligned GP training
+        samples, reducing the prediction gap.
+
+        The key insight (from InvBO paper) is that using the encoder introduces
+        misalignment: encoder(x) → z, but decode(z) != x. By inverting the decoder
+        directly, we find z_inv where decode(z_inv) ≈ x, creating aligned triplets.
+
+        Args:
+            target_embedding: GTR embedding (768,) to reconstruct
+            n_steps: Max optimization steps
+            lr: Learning rate for Adam optimizer
+            early_stop_threshold: Stop if loss change < threshold
+
+        Returns:
+            z_inv: Inverted latent (32,) that reconstructs target_embedding
+        """
+        device = target_embedding.device
+
+        # Initialize from encoder (warm start) - much faster than random init
+        with torch.no_grad():
+            if target_embedding.dim() == 1:
+                z_init = self.get_latent(target_embedding.unsqueeze(0)).squeeze(0)
+            else:
+                z_init = self.get_latent(target_embedding).squeeze(0)
+
+        # Clone and require gradients
+        z = z_init.clone().requires_grad_(True)
+        optimizer = torch.optim.Adam([z], lr=lr)
+
+        # Ensure target is 1D for loss computation and clone to avoid inference tensor issues
+        target = target_embedding.squeeze() if target_embedding.dim() > 1 else target_embedding
+        target = target.clone().detach()  # Clone to allow backward pass
+
+        prev_loss = float('inf')
+        for step in range(n_steps):
+            optimizer.zero_grad()
+
+            # Decode current z
+            decoded = self.decode(z.unsqueeze(0)).squeeze(0)
+
+            # Combined loss: MSE + weighted cosine (match VAE training priorities)
+            mse_loss = F.mse_loss(decoded, target)
+            cosine_loss = 1 - F.cosine_similarity(
+                decoded.unsqueeze(0), target.unsqueeze(0)
+            ).squeeze()
+            loss = mse_loss + 10 * cosine_loss  # Weight cosine heavily (like VAE training)
+
+            loss.backward()
+            optimizer.step()
+
+            # Early stopping if converged
+            if abs(prev_loss - loss.item()) < early_stop_threshold:
+                break
+            prev_loss = loss.item()
+
+        return z.detach()
+
 
 class WeightedVAELoss(nn.Module):
     """VAE loss with per-sample weighting and cycle-consistency support.

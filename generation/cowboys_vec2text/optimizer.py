@@ -244,6 +244,7 @@ class CowboysOptimizer:
         epochs: int = 3000,
         patience: int = 10,
         verbose: bool = True,
+        use_invbo_alignment: bool = True,
     ) -> None:
         """Train GP on VAE-decoded instruction embeddings.
 
@@ -251,32 +252,48 @@ class CowboysOptimizer:
         ensures it operates in the same distribution as the MCMC
         sampling.
 
+        With use_invbo_alignment=True (default), we use InvBO-style decoder
+        inversion to create aligned embeddings where decode(z_inv) ≈ GTR(text).
+        This reduces the prediction gap from the very first iteration.
+
         Args:
             grid_path: Path to grid JSONL file
             top_k: Number of top prompts to use
             epochs: GP training epochs
             patience: Early stopping patience
             verbose: Print progress
+            use_invbo_alignment: If True, use decoder inversion for aligned embeddings
         """
         if self.vae_trainer is None:
             raise RuntimeError("VAE must be trained before training GP on decoded embeddings.")
 
         print("\nComputing VAE-decoded instruction embeddings...")
+        if use_invbo_alignment:
+            print("  Using InvBO-style decoder inversion for alignment")
         vae = self.get_vae()
         vae.eval()
 
         decoded_instruction_embeddings: Dict[int, torch.Tensor] = {}
-        with torch.no_grad():
-            for inst_id, orig_emb in self.instruction_embeddings.items():
-                latent = vae.get_latent(orig_emb.unsqueeze(0))
-                decoded_emb = vae.decode(latent).squeeze(0)
-                decoded_instruction_embeddings[inst_id] = decoded_emb
 
-                if verbose and inst_id < 3:
-                    cosine = torch.nn.functional.cosine_similarity(
-                        orig_emb.unsqueeze(0), decoded_emb.unsqueeze(0)
-                    ).item()
-                    print(f"  Instruction {inst_id}: orig→decoded cosine = {cosine:.4f}")
+        for inst_id, orig_emb in self.instruction_embeddings.items():
+            if use_invbo_alignment:
+                # InvBO: invert decoder to find z where decode(z) ≈ orig_emb
+                z_inv = vae.invert_decoder(orig_emb)
+                with torch.no_grad():
+                    decoded_emb = vae.decode(z_inv.unsqueeze(0)).squeeze(0)
+            else:
+                # Original: encode then decode (has reconstruction error)
+                with torch.no_grad():
+                    latent = vae.get_latent(orig_emb.unsqueeze(0))
+                    decoded_emb = vae.decode(latent).squeeze(0)
+
+            decoded_instruction_embeddings[inst_id] = decoded_emb
+
+            if verbose and inst_id < 3:
+                cosine = torch.nn.functional.cosine_similarity(
+                    orig_emb.unsqueeze(0), decoded_emb.unsqueeze(0)
+                ).item()
+                print(f"  Instruction {inst_id}: orig→decoded cosine = {cosine:.4f}")
 
         print(f"  Computed {len(decoded_instruction_embeddings)} decoded embeddings")
 
