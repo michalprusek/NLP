@@ -644,3 +644,465 @@ class ExemplarSelector:
 
         # Retrain GP with updated data
         return self._train_gp(epochs=epochs, patience=10, verbose=verbose)
+
+
+# =============================================================================
+# INSTRUCTION-ONLY CLASSES (for COWBOYS without exemplars)
+# =============================================================================
+
+
+class InstructionOnlyFeatureExtractor(nn.Module):
+    """Single-branch feature extractor for instruction-only GP.
+
+    Architecture:
+    - Single encoder: Lin(768, 64) -> ReLU -> Lin(64, 32) -> ReLU
+    - Projection: Lin(32, 10)
+
+    Input: 768D GTR embedding
+    Output: 10D latent for GP kernel
+    """
+
+    def __init__(self, input_dim: int = 768):
+        super().__init__()
+        self.instruction_encoder = nn.Sequential(
+            nn.Linear(input_dim, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU()
+        )
+        self.projection = nn.Sequential(
+            nn.Linear(32, 10)
+        )
+
+    def forward(self, instruction_emb: torch.Tensor) -> torch.Tensor:
+        """Forward pass through single-branch encoder.
+
+        Args:
+            instruction_emb: Instruction embedding (batch, 768) or (batch, n, 768)
+
+        Returns:
+            Latent features (batch, 10) or (batch, n, 10)
+        """
+        features = self.instruction_encoder(instruction_emb)
+        return self.projection(features)
+
+
+class InstructionOnlyGP(gpytorch.models.ExactGP, GPyTorchModel):
+    """Gaussian Process with single-branch deep kernel for instruction-only optimization.
+
+    Input: instruction_768 (768D)
+    Uses ARD Matern 5/2 kernel on 10-dim latent features.
+
+    Inherits from GPyTorchModel for BoTorch compatibility
+    (enables LogExpectedImprovement and other acquisition functions).
+    """
+
+    _num_outputs = 1  # Required for BoTorch
+
+    def __init__(
+        self,
+        train_x: torch.Tensor,
+        train_y: torch.Tensor,
+        likelihood: gpytorch.likelihoods.Likelihood,
+        feature_extractor: InstructionOnlyFeatureExtractor,
+    ):
+        # train_y must be (N,) not (N, 1) for ExactGP
+        train_y_squeezed = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
+        super().__init__(train_x, train_y_squeezed, likelihood)
+        self.mean_module = gpytorch.means.ZeroMean()
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.MaternKernel(
+                nu=2.5,
+                ard_num_dims=10,
+                lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
+            ),
+            outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
+        )
+        self.feature_extractor = feature_extractor
+
+    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultivariateNormal:
+        """Forward pass through GP.
+
+        Args:
+            x: Instruction embedding (batch, 768) or (batch, n, 768)
+
+        Returns:
+            MultivariateNormal distribution
+        """
+        # Handle both 2D and 3D inputs (BoTorch passes 3D during posterior)
+        if x.dim() == 3:
+            # Shape: (batch, n, 768) - squeeze if n=1
+            x = x.squeeze(-2) if x.shape[-2] == 1 else x
+        latent = self.feature_extractor(x)
+        return gpytorch.distributions.MultivariateNormal(
+            self.mean_module(latent), self.covar_module(latent)
+        )
+
+
+class InstructionSelector:
+    """Select and optimize instructions using single-branch GP.
+
+    Trains a deep kernel GP on instruction embeddings only (no exemplars).
+    For COWBOYS instructions-only pipeline.
+    """
+
+    def __init__(
+        self,
+        instructions: List[str],
+        gtr: Optional[GTRPromptEncoder] = None,
+        device: str = "cuda",
+    ):
+        """Initialize selector.
+
+        Args:
+            instructions: List of all instructions (for embedding cache)
+            gtr: GTR encoder (will create one if not provided)
+            device: Device to use
+        """
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.instructions = instructions
+
+        # GTR encoder (same as Vec2Text)
+        self.gtr = gtr if gtr is not None else GTRPromptEncoder()
+
+        # Pre-compute embeddings
+        print("Pre-computing GTR embeddings for instructions...")
+        self.instruction_embeddings = self._encode_texts(instructions)
+        print(f"  Cached {len(self.instruction_embeddings)} instruction embeddings")
+
+        # GP components (initialized during training)
+        self.gp_model: Optional[InstructionOnlyGP] = None
+        self.likelihood: Optional[gpytorch.likelihoods.GaussianLikelihood] = None
+        self.feature_extractor: Optional[InstructionOnlyFeatureExtractor] = None
+
+        # Training data (stored for incremental updates)
+        self.X_train: Optional[torch.Tensor] = None  # (N, 768)
+        self.y_train: Optional[torch.Tensor] = None  # (N,)
+
+        # Normalization parameters
+        self.X_min: Optional[torch.Tensor] = None
+        self.X_max: Optional[torch.Tensor] = None
+        self.y_mean: Optional[torch.Tensor] = None
+        self.y_std: Optional[torch.Tensor] = None
+
+    def _encode_texts(self, texts: List[str]) -> Dict[int, torch.Tensor]:
+        """Encode texts to GTR embeddings."""
+        embeddings = {}
+        for idx, text in enumerate(texts):
+            emb = self.gtr.encode_tensor(text)
+            embeddings[idx] = emb.squeeze()
+        return embeddings
+
+    def train_from_grid(
+        self,
+        grid_path: str,
+        top_k: int = 25,
+        epochs: int = 3000,
+        lr: float = 0.01,
+        patience: int = 10,
+        verbose: bool = True,
+    ) -> bool:
+        """Train GP on top-k prompts from grid data.
+
+        Args:
+            grid_path: Path to grid JSONL file (instruction-only format)
+            top_k: Number of top prompts to use (sorted by error rate)
+            epochs: Maximum training epochs
+            lr: Learning rate
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if training succeeded
+        """
+        if verbose:
+            print(f"Loading grid data from {grid_path}...")
+
+        # Load grid data
+        grid_data = []
+        with open(grid_path, "r") as f:
+            for line in f:
+                grid_data.append(json.loads(line))
+
+        # Sort by error rate and take top-k
+        grid_data.sort(key=lambda x: x["error_rate"])
+        grid_data = grid_data[:top_k]
+
+        if verbose:
+            print(f"  Using top {top_k} prompts (error range: {grid_data[0]['error_rate']:.4f} - {grid_data[-1]['error_rate']:.4f})")
+            print(f"  Loaded {len(grid_data)} grid entries")
+
+        # Prepare training tensors (instruction-only, no exemplar)
+        X_inst_list = []
+        y_list = []
+
+        for entry in grid_data:
+            inst_id = entry["instruction_id"]
+            error_rate = entry["error_rate"]
+
+            X_inst_list.append(self.instruction_embeddings[inst_id])
+            y_list.append(error_rate)
+
+        X = torch.stack(X_inst_list).to(self.device)  # (N, 768)
+        y = torch.tensor(y_list, dtype=torch.float32, device=self.device)
+
+        # Store raw training data
+        self.X_train = X.clone()
+        self.y_train = y.clone()
+
+        if verbose:
+            print(f"  Training data shape: X={X.shape}, y={y.shape}")
+            print(f"  Error rate range: [{y.min():.4f}, {y.max():.4f}]")
+
+        # Train GP on stored data
+        return self._train_gp(epochs=epochs, lr=lr, patience=patience, verbose=verbose)
+
+    def train_with_decoded_embeddings(
+        self,
+        decoded_instruction_embeddings: Dict[int, torch.Tensor],
+        grid_path: str,
+        top_k: int = 25,
+        epochs: int = 3000,
+        lr: float = 0.01,
+        patience: int = 10,
+        verbose: bool = True,
+    ) -> bool:
+        """Train GP using VAE-decoded instruction embeddings.
+
+        This is the key fix for EI=0 problem. By training on decoded
+        embeddings, the GP operates in the same distribution as the
+        pCN MCMC optimization.
+
+        Args:
+            decoded_instruction_embeddings: Dict mapping inst_id → VAE-decoded embedding
+            grid_path: Path to grid JSONL file
+            top_k: Number of top prompts to use (sorted by error rate)
+            epochs: Maximum training epochs
+            lr: Learning rate
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if training succeeded
+        """
+        if verbose:
+            print(f"Loading grid data from {grid_path}...")
+
+        # Load grid data
+        grid_data = []
+        with open(grid_path, "r") as f:
+            for line in f:
+                grid_data.append(json.loads(line))
+
+        # Sort by error rate and take top-k
+        grid_data.sort(key=lambda x: x["error_rate"])
+        grid_data = grid_data[:top_k]
+
+        if verbose:
+            print(f"  Using top {top_k} prompts (error range: {grid_data[0]['error_rate']:.4f} - {grid_data[-1]['error_rate']:.4f})")
+            print(f"  Training on VAE-DECODED instruction embeddings")
+
+        # Prepare training tensors using DECODED embeddings
+        X_inst_list = []
+        y_list = []
+
+        for entry in grid_data:
+            inst_id = entry["instruction_id"]
+            error_rate = entry["error_rate"]
+
+            # Use DECODED instruction embedding (key difference!)
+            X_inst_list.append(decoded_instruction_embeddings[inst_id].to(self.device))
+            y_list.append(error_rate)
+
+        X = torch.stack(X_inst_list).to(self.device)  # (N, 768)
+        y = torch.tensor(y_list, dtype=torch.float32, device=self.device)
+
+        # Store raw training data for incremental updates
+        self.X_train = X.clone()
+        self.y_train = y.clone()
+
+        if verbose:
+            print(f"  Training data shape: X={X.shape}, y={y.shape}")
+            print(f"  Error rate range: [{y.min():.4f}, {y.max():.4f}]")
+
+        # Train GP on stored data
+        return self._train_gp(epochs=epochs, lr=lr, patience=patience, verbose=verbose)
+
+    def _train_gp(
+        self,
+        epochs: int = 500,
+        lr: float = 0.01,
+        patience: int = 10,
+        verbose: bool = False,
+    ) -> bool:
+        """Internal method to train GP on stored X_train and y_train.
+
+        Recomputes normalization and reinitializes GP model.
+
+        Args:
+            epochs: Maximum training epochs
+            lr: Learning rate
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if training succeeded
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("No training data. Call train_from_grid or train_with_decoded_embeddings first.")
+
+        X = self.X_train
+        y = self.y_train
+
+        # Unit cube normalization for inputs
+        self.X_min = X.min(dim=0)[0]
+        self.X_max = X.max(dim=0)[0]
+        denominator = self.X_max - self.X_min
+        denominator[denominator == 0] = 1.0  # Avoid division by zero
+        X_norm = (X - self.X_min) / denominator
+
+        # Z-score standardization for outputs
+        self.y_mean = y.mean()
+        self.y_std = y.std() + 1e-6
+        y_norm = (y - self.y_mean) / self.y_std
+
+        # Initialize GP with single-branch architecture
+        self.feature_extractor = InstructionOnlyFeatureExtractor(input_dim=768).to(self.device)
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+        self.gp_model = InstructionOnlyGP(
+            X_norm, y_norm, self.likelihood, self.feature_extractor
+        ).to(self.device)
+
+        # Training
+        self.gp_model.train()
+        self.likelihood.train()
+
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=lr)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
+
+        best_loss = float("inf")
+        patience_counter = 0
+
+        if verbose:
+            print("Training instruction-only GP...")
+
+        with gpytorch.settings.cholesky_jitter(1e-4):
+            for epoch in range(epochs):
+                try:
+                    optimizer.zero_grad()
+                    output = self.gp_model(X_norm)
+                    loss = -mll(output, y_norm)
+                    loss.backward()
+                    optimizer.step()
+
+                    if loss.item() < best_loss:
+                        best_loss = loss.item()
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+
+                    if patience_counter >= patience:
+                        if verbose:
+                            print(f"  Early stopping at epoch {epoch + 1}")
+                        break
+
+                    if verbose and (epoch + 1) % 100 == 0:
+                        print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
+
+                except RuntimeError as e:
+                    if "cholesky" in str(e).lower():
+                        if verbose:
+                            print(f"  Cholesky error at epoch {epoch + 1}")
+                        return False
+                    raise
+
+        if verbose:
+            print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
+
+        return True
+
+    def predict_error(
+        self,
+        instruction_emb: torch.Tensor,
+    ) -> Tuple[float, float]:
+        """Predict error rate for instruction.
+
+        Args:
+            instruction_emb: Instruction embedding (768,)
+
+        Returns:
+            Tuple of (mean, std) predictions
+        """
+        if self.gp_model is None:
+            raise RuntimeError("GP not trained. Call train_from_grid() first.")
+
+        # Ensure correct shape
+        if instruction_emb.dim() == 1:
+            instruction_emb = instruction_emb.unsqueeze(0)
+
+        # Move to device
+        instruction_emb = instruction_emb.to(self.device)
+
+        # Normalize
+        denominator = self.X_max - self.X_min
+        denominator[denominator == 0] = 1.0
+        X_norm = (instruction_emb - self.X_min) / denominator
+
+        # Predict
+        self.gp_model.eval()
+        self.likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            pred = self.likelihood(self.gp_model(X_norm))
+            mean_norm = pred.mean.item()
+            std_norm = pred.stddev.item()
+
+        # Denormalize
+        mean = mean_norm * self.y_std.item() + self.y_mean.item()
+        std = std_norm * self.y_std.item()
+
+        return mean, std
+
+    def add_observation_and_retrain(
+        self,
+        decoded_inst_emb: torch.Tensor,
+        error_rate: float,
+        epochs: int = 100,
+        patience: int = 10,
+        verbose: bool = False,
+    ) -> bool:
+        """Add new observation and retrain GP.
+
+        Appends new data point to existing training data,
+        recomputes normalization, and retrains GP.
+
+        Args:
+            decoded_inst_emb: VAE-decoded instruction embedding (768,)
+            error_rate: Evaluated error rate
+            epochs: GP training epochs
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if retraining succeeded
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("No training data. Call train_with_decoded_embeddings first.")
+
+        # Ensure correct shapes and device
+        if decoded_inst_emb.dim() == 2:
+            decoded_inst_emb = decoded_inst_emb.squeeze(0)
+
+        decoded_inst_emb = decoded_inst_emb.to(self.device)
+
+        # Create new data point: [inst_768]
+        new_X = decoded_inst_emb.unsqueeze(0)  # (1, 768)
+        new_y = torch.tensor([error_rate], device=self.device)  # (1,)
+
+        # Append to training data
+        self.X_train = torch.cat([self.X_train, new_X], dim=0)
+        self.y_train = torch.cat([self.y_train, new_y], dim=0)
+
+        if verbose:
+            print(f"  Added observation: error={error_rate:.4f}, total samples={len(self.y_train)}")
+
+        # Retrain GP with updated data
+        return self._train_gp(epochs=epochs, patience=patience, verbose=verbose)

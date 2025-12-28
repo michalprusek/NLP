@@ -2,6 +2,8 @@
 
 pCN MCMC optimization with Vec2Text inversion.
 Replaces gradient-based optimization with probabilistic sampling.
+
+This is the instruction-only version (no exemplars).
 """
 
 import torch
@@ -11,9 +13,11 @@ from dataclasses import dataclass
 
 from .vae import InstructionVAE
 from .encoder import GTRPromptEncoder
-from .exemplar_selector import ExemplarSelector
 from .mcmc import pCNSampler, MCMCConfig, MCMCResult
 from .trust_region import TrustRegionManager, TRConfig
+
+# Import instruction-only GP class
+from robust_vec2text.exemplar_selector import InstructionSelector
 
 
 @dataclass
@@ -41,6 +45,8 @@ class CowboysResult:
 class CowboysInference:
     """COWBOYS inference pipeline with pCN MCMC optimization.
 
+    This is the instruction-only version (no exemplars).
+
     Pipeline:
         1. Start from best known latent (anchor for trust region)
         2. Run pCN MCMC sampling within trust region
@@ -48,21 +54,16 @@ class CowboysInference:
         4. Invert to text via Vec2Text
         5. Return best candidate by LogEI score
 
-    Key differences from RobustInference:
-        - pCN MCMC instead of optimize_latent_gradient()
-        - Trust region constraints
-
     Attributes:
         vae: Trained VAE model
-        exemplar_selector: HbBoPs GP for error prediction
+        instruction_selector: InstructionSelector GP for error prediction
         mcmc_sampler: pCN MCMC sampler
     """
 
     def __init__(
         self,
         vae: InstructionVAE,
-        exemplar_selector: ExemplarSelector,
-        exemplar_emb: torch.Tensor,
+        instruction_selector: InstructionSelector,
         gtr: GTRPromptEncoder,
         device: str = "cuda",
     ):
@@ -70,22 +71,19 @@ class CowboysInference:
 
         Args:
             vae: Trained VAE model
-            exemplar_selector: HbBoPs-style GP for error prediction
-            exemplar_emb: Fixed exemplar embedding (768,)
+            instruction_selector: InstructionSelector GP for error prediction
             gtr: GTR encoder
             device: Device to use
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.vae = vae.to(self.device)
-        self.exemplar_selector = exemplar_selector
-        self.exemplar_emb = exemplar_emb.to(self.device)
+        self.instruction_selector = instruction_selector
         self.gtr = gtr
 
-        # Initialize pCN MCMC sampler
+        # Initialize pCN MCMC sampler (instruction-only, no exemplar_emb)
         self.mcmc_sampler = pCNSampler(
             vae=vae,
-            exemplar_selector=exemplar_selector,
-            exemplar_emb=exemplar_emb,
+            instruction_selector=instruction_selector,
             device=str(device),
         )
 

@@ -81,9 +81,11 @@ class WeightedVAETrainer:
         input_dim: int = 768,
         latent_dim: int = 32,
         device: str = "cuda",
-        lambda_cosine: float = 10.0,
+        lambda_cosine: float = 20.0,
         lambda_mse: float = 1.0,
-        lambda_kld: float = 0.0001,
+        lambda_kld: float = 0.0025,
+        lambda_cycle: float = 2.0,
+        kld_annealing_epochs: int = 500,
     ):
         """Initialize trainer.
 
@@ -91,9 +93,11 @@ class WeightedVAETrainer:
             input_dim: Input embedding dimension (768 for GTR)
             latent_dim: VAE latent dimension (32)
             device: Device to use
-            lambda_cosine: Weight for cosine loss (priority)
+            lambda_cosine: Weight for cosine loss (priority for GTR)
             lambda_mse: Weight for MSE loss
-            lambda_kld: Weight for KL divergence (with annealing)
+            lambda_kld: Target weight for KL divergence (with annealing)
+            lambda_cycle: Weight for cycle-consistency loss
+            kld_annealing_epochs: Epochs to anneal KLD from 0 to target (default: 500)
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
 
@@ -103,10 +107,13 @@ class WeightedVAETrainer:
         ).to(self.device)
 
         self.lambda_kld = lambda_kld
+        self.lambda_cycle = lambda_cycle
+        self.kld_annealing_epochs = kld_annealing_epochs
         self.loss_fn = WeightedVAELoss(
             lambda_cosine=lambda_cosine,
             lambda_mse=lambda_mse,
             lambda_kld=lambda_kld,
+            lambda_cycle=lambda_cycle,
         )
 
         self.best_state: Optional[Dict] = None
@@ -195,8 +202,8 @@ class WeightedVAETrainer:
         embeddings = embeddings.to(self.device)
         n_samples = len(embeddings)
 
-        # Store for future retraining
-        self.all_embeddings = [embeddings]
+        # Store for future retraining (always on CPU for consistency)
+        self.all_embeddings = [embeddings.cpu()]
         if error_rates is not None:
             self.all_error_rates = error_rates.tolist()
         else:
@@ -262,8 +269,13 @@ class WeightedVAETrainer:
         patience_counter = 0
 
         for epoch in range(epochs):
-            # KLD Annealing
-            annealing_factor = min(1.0, epoch / (epochs * 0.5))
+            # KLD Annealing: 0 -> target over kld_annealing_epochs, then hold
+            # Epoch 0-500: grows from 0 to lambda_kld
+            # Epoch 500+: holds at lambda_kld
+            if epoch < self.kld_annealing_epochs:
+                annealing_factor = epoch / self.kld_annealing_epochs
+            else:
+                annealing_factor = 1.0
             current_kld_weight = self.lambda_kld * annealing_factor
             self.loss_fn.lambda_kld = current_kld_weight
 
@@ -284,7 +296,14 @@ class WeightedVAETrainer:
                     # we'd need to track indices. For now, use uniform within batch.
                     pass
 
-                loss, components = self.loss_fn(batch, x_recon, mu, logvar, batch_weights)
+                # Compute cycle-consistency loss if enabled
+                cycle_loss = None
+                if self.lambda_cycle > 0:
+                    cycle_loss = self.vae.cycle_consistency_loss(mu)
+
+                loss, components = self.loss_fn(
+                    batch, x_recon, mu, logvar, batch_weights, cycle_loss
+                )
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1.0)
@@ -429,7 +448,15 @@ class WeightedVAETrainer:
                 optimizer.zero_grad()
 
                 x_recon, mu, logvar = self.vae(batch)
-                loss, components = self.loss_fn(batch, x_recon, mu, logvar)
+
+                # Compute cycle-consistency loss if enabled
+                cycle_loss = None
+                if self.lambda_cycle > 0:
+                    cycle_loss = self.vae.cycle_consistency_loss(mu)
+
+                loss, components = self.loss_fn(
+                    batch, x_recon, mu, logvar, None, cycle_loss
+                )
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1.0)
@@ -482,7 +509,13 @@ class WeightedVAETrainer:
 
         with torch.no_grad():
             x_recon, mu, logvar = self.vae(data)
-            _, components = self.loss_fn(data, x_recon, mu, logvar)
+
+            # Compute cycle-consistency loss if enabled
+            cycle_loss = None
+            if self.lambda_cycle > 0:
+                cycle_loss = self.vae.cycle_consistency_loss(mu)
+
+            _, components = self.loss_fn(data, x_recon, mu, logvar, None, cycle_loss)
 
         return components["total"], components["cosine_sim_mean"]
 

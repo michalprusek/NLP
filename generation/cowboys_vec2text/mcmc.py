@@ -4,6 +4,8 @@ Implements the core COWBOYS algorithm for latent space optimization.
 Replaces gradient-based optimization with probabilistic sampling that
 respects the VAE's Gaussian prior while exploring high-EI regions.
 
+This is the instruction-only version (no exemplars).
+
 Key insight: pCN proposals preserve N(0,I) as the stationary distribution,
 making them ideal for VAE latent spaces where the prior is Gaussian.
 
@@ -18,7 +20,7 @@ from typing import List, Tuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .vae import InstructionVAE
-    from .exemplar_selector import ExemplarSelector
+    from robust_vec2text.exemplar_selector import InstructionSelector
     from .trust_region import TrustRegionManager
 
 
@@ -99,6 +101,8 @@ class NegatedGPModelWrapper(torch.nn.Module):
 class pCNSampler:
     """Preconditioned Crank-Nicolson MCMC for latent space optimization.
 
+    This is the instruction-only version (no exemplars).
+
     Implements the pCN proposal:
         z_new = sqrt(1 - beta^2) * z_old + beta * epsilon,  epsilon ~ N(0, I)
 
@@ -118,22 +122,19 @@ class pCNSampler:
     def __init__(
         self,
         vae: "InstructionVAE",
-        exemplar_selector: "ExemplarSelector",
-        exemplar_emb: torch.Tensor,
+        instruction_selector: "InstructionSelector",
         device: str = "cuda",
     ):
         """Initialize pCN sampler.
 
         Args:
             vae: Trained VAE for decoding latents to embeddings
-            exemplar_selector: HbBoPs GP for error prediction
-            exemplar_emb: Fixed exemplar embedding (768,)
+            instruction_selector: InstructionSelector GP for error prediction
             device: Computation device
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.vae = vae.to(self.device)
-        self.exemplar_selector = exemplar_selector
-        self.exemplar_emb = exemplar_emb.to(self.device)
+        self.instruction_selector = instruction_selector
 
         # Cache for normalization parameters
         self._log_ei_acqf = None
@@ -147,9 +148,7 @@ class pCNSampler:
         """Compute log Expected Improvement for latent point.
 
         Pipeline:
-            z (32D) -> VAE decode -> inst_emb (768D)
-            [inst_emb || exemplar_emb] -> GP -> predictions
-            predictions -> LogEI
+            z (32D) -> VAE decode -> inst_emb (768D) -> GP -> predictions -> LogEI
 
         Uses BoTorch LogExpectedImprovement for numerical stability.
 
@@ -169,19 +168,17 @@ class pCNSampler:
         with torch.no_grad():
             inst_emb = self.vae.decode(z)  # (batch, 768)
 
-        # 2. Prepare GP input
-        batch_size = inst_emb.shape[0]
-        exemplar_emb = self.exemplar_emb.unsqueeze(0).expand(batch_size, -1)
-        X = torch.cat([inst_emb, exemplar_emb], dim=1)  # (batch, 1536)
+        # 2. Prepare GP input - instruction only (768D, not 1536D)
+        X = inst_emb  # (batch, 768)
 
-        # Normalize using ExemplarSelector's stored params
-        selector = self.exemplar_selector
+        # Normalize using InstructionSelector's stored params
+        selector = self.instruction_selector
         denominator = selector.X_max - selector.X_min
         denominator = torch.where(denominator == 0, torch.ones_like(denominator), denominator)
         X_norm = (X - selector.X_min) / denominator
 
         # 3. BoTorch LogEI computation
-        X_botorch = X_norm.unsqueeze(-2)  # (batch, 1, 1536)
+        X_botorch = X_norm.unsqueeze(-2)  # (batch, 1, 768)
 
         selector.gp_model.eval()
         selector.likelihood.eval()

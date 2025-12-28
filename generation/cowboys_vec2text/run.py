@@ -2,6 +2,7 @@
 """COWBOYS Vec2Text CLI.
 
 pCN MCMC optimization with trust regions and weighted retraining.
+This is the instruction-only version (no exemplars).
 """
 
 import argparse
@@ -9,15 +10,123 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Callable
 
 import torch
+import torch.nn.functional as F
+import numpy as np
 
 from .optimizer import CowboysOptimizer
 from .inference import CowboysInference
 from .mcmc import MCMCConfig
 from .trust_region import TRConfig
 from .training import RetrainConfig
+
+
+def evaluate_vae_quality(
+    vae,
+    embeddings: torch.Tensor,
+    device: str = "cuda",
+    log_fn: Callable[[str], None] = print,
+) -> Dict[str, float]:
+    """Evaluate VAE reconstruction quality with detailed metrics.
+
+    Args:
+        vae: Trained InstructionVAE model
+        embeddings: Input embeddings to evaluate (N, 768)
+        device: Device to use
+        log_fn: Logging function
+
+    Returns:
+        Dictionary of quality metrics
+    """
+    vae.eval()
+    embeddings = embeddings.to(device)
+
+    with torch.no_grad():
+        # Forward pass
+        x_recon, mu, logvar = vae(embeddings)
+
+        # Compute latent codes
+        z = vae.get_latent(embeddings)
+
+        # 1. Reconstruction quality metrics
+        # Cosine similarity (most important for Vec2Text)
+        cos_sim = F.cosine_similarity(embeddings, x_recon, dim=1)
+        cos_mean = cos_sim.mean().item()
+        cos_std = cos_sim.std().item()
+        cos_min = cos_sim.min().item()
+        cos_max = cos_sim.max().item()
+
+        # MSE reconstruction error
+        mse = F.mse_loss(x_recon, embeddings, reduction='none').mean(dim=1)
+        mse_mean = mse.mean().item()
+        mse_std = mse.std().item()
+
+        # L2 reconstruction error (normalized)
+        l2_error = torch.norm(x_recon - embeddings, dim=1) / torch.norm(embeddings, dim=1)
+        l2_mean = l2_error.mean().item()
+
+        # 2. Latent space statistics
+        latent_norm = torch.norm(z, dim=1)
+        latent_norm_mean = latent_norm.mean().item()
+        latent_norm_std = latent_norm.std().item()
+
+        # Latent dimension variances
+        latent_var = z.var(dim=0)
+        latent_var_mean = latent_var.mean().item()
+        latent_var_min = latent_var.min().item()
+        latent_var_max = latent_var.max().item()
+
+        # Active dimensions (variance > 0.01)
+        active_dims = (latent_var > 0.01).sum().item()
+
+        # 3. KL divergence (regularization term)
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        kld_mean = kld.mean().item()
+        kld_std = kld.std().item()
+
+        # 4. Posterior collapse check
+        # If KL is very low and variance is near zero, posterior may have collapsed
+        posterior_collapsed = (kld_mean < 0.1) and (latent_var_mean < 0.1)
+
+    metrics = {
+        "cosine_mean": cos_mean,
+        "cosine_std": cos_std,
+        "cosine_min": cos_min,
+        "cosine_max": cos_max,
+        "mse_mean": mse_mean,
+        "mse_std": mse_std,
+        "l2_relative_error": l2_mean,
+        "latent_norm_mean": latent_norm_mean,
+        "latent_norm_std": latent_norm_std,
+        "latent_var_mean": latent_var_mean,
+        "latent_var_min": latent_var_min,
+        "latent_var_max": latent_var_max,
+        "active_dims": active_dims,
+        "kld_mean": kld_mean,
+        "kld_std": kld_std,
+        "posterior_collapsed": posterior_collapsed,
+    }
+
+    # Log results
+    log_fn("\n--- VAE Quality Metrics ---")
+    log_fn(f"Reconstruction (Cosine Similarity):")
+    log_fn(f"  Mean: {cos_mean:.4f} | Std: {cos_std:.4f} | Min: {cos_min:.4f} | Max: {cos_max:.4f}")
+    log_fn(f"Reconstruction (MSE):")
+    log_fn(f"  Mean: {mse_mean:.6f} | Std: {mse_std:.6f}")
+    log_fn(f"  Relative L2 Error: {l2_mean:.4f}")
+    log_fn(f"Latent Space:")
+    log_fn(f"  Norm: mean={latent_norm_mean:.4f}, std={latent_norm_std:.4f}")
+    log_fn(f"  Variance per dim: mean={latent_var_mean:.4f}, min={latent_var_min:.4f}, max={latent_var_max:.4f}")
+    log_fn(f"  Active dimensions (var>0.01): {int(active_dims)}/{z.shape[1]}")
+    log_fn(f"KL Divergence:")
+    log_fn(f"  Mean: {kld_mean:.4f} | Std: {kld_std:.4f}")
+    if posterior_collapsed:
+        log_fn("  Warning: Possible posterior collapse detected!")
+    log_fn("----------------------------")
+
+    return metrics
 
 
 def load_instructions(path: str) -> List[str]:
@@ -29,40 +138,13 @@ def load_instructions(path: str) -> List[str]:
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
+            # Skip empty lines and comments
+            if not line or line.startswith("#"):
+                continue
             match = re.match(r"^\d+\.\s*(.+)$", line)
             if match:
                 instructions.append(match.group(1))
     return instructions
-
-
-def load_exemplars(path: str) -> List[str]:
-    """Load exemplars from text file.
-
-    Format: Blocks separated by '# Exemplar N' comments.
-    """
-    with open(path, "r") as f:
-        content = f.read()
-
-    blocks = []
-    current_block = []
-
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("# Exemplar"):
-            if current_block:
-                blocks.append("\n".join(current_block))
-            current_block = []
-        elif line.startswith("#"):
-            continue
-        else:
-            current_block.append(line)
-
-    if current_block:
-        blocks.append("\n".join(current_block))
-
-    return blocks
 
 
 def load_validation(path: str) -> List[Dict]:
@@ -76,12 +158,20 @@ def evaluate_prompt(
     validation_data: List[Dict],
     model: str,
     backend: str = "vllm",
+    client=None,
 ) -> float:
-    """Evaluate prompt on validation set. Returns error rate."""
+    """Evaluate prompt on validation set. Returns error rate.
+
+    For instruction-only mode, prompt is just the instruction.
+
+    Args:
+        client: Optional pre-initialized LLM client to reuse (saves GPU memory).
+    """
     from src.llm_client import create_llm_client
     from src.gsm8k_evaluator import extract_answer, compare_numbers
 
-    client = create_llm_client(model, backend)
+    if client is None:
+        client = create_llm_client(model, backend)
 
     prompts = []
     expected_answers = []
@@ -89,7 +179,8 @@ def evaluate_prompt(
     for item in validation_data:
         question = item["question"]
         expected = item["answer"]
-        full_prompt = f"{prompt}\n\nQ: {question}\nA:"
+        # Q_end format (OPRO paper): instruction AFTER question
+        full_prompt = f"Q: {question}\n{prompt}\nA:"
         prompts.append(full_prompt)
         expected_answers.append(expected)
 
@@ -110,19 +201,18 @@ def evaluate_prompt(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="COWBOYS Vec2Text Optimization")
+    parser = argparse.ArgumentParser(description="COWBOYS Vec2Text Optimization (Instruction-Only)")
 
-    # Data paths
-    parser.add_argument("--instructions", type=str, default="datasets/hbbops/instructions_25.txt")
-    parser.add_argument("--exemplars", type=str, default="datasets/hbbops/examples_25.txt")
-    parser.add_argument("--grid-path", type=str, default="datasets/hbbops/full_grid_combined.jsonl")
+    # Data paths (instruction-only, no exemplars)
+    parser.add_argument("--instructions", type=str, default="datasets/cowboys/instructions_100.txt")
+    parser.add_argument("--grid-path", type=str, default="/home/prusek/NLP/datasets/cowboys/grid_100_qend.jsonl")
     parser.add_argument("--validation", type=str, default="hbbops_improved_2/data/validation.json")
 
     # Model
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct")
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "openai", "deepinfra"])
 
-    # MCMC parameters (NEW)
+    # MCMC parameters
     parser.add_argument("--mcmc-steps", type=int, default=500, help="MCMC steps per chain")
     parser.add_argument("--mcmc-beta", type=float, default=0.1, help="pCN step size")
     parser.add_argument("--mcmc-chains", type=int, default=5, help="Number of MCMC chains")
@@ -130,27 +220,29 @@ def main():
     parser.add_argument("--mcmc-thinning", type=int, default=10, help="MCMC thinning factor")
     parser.add_argument("--mcmc-adapt-beta", action="store_true", default=True, help="Adapt beta during warmup")
 
-    # Trust region parameters (NEW)
+    # Trust region parameters (disabled by default)
     parser.add_argument("--tr-initial", type=float, default=1.0, help="Initial trust region radius")
     parser.add_argument("--tr-min", type=float, default=0.1, help="Minimum trust region radius")
     parser.add_argument("--tr-max", type=float, default=5.0, help="Maximum trust region radius")
     parser.add_argument("--tr-expand", type=float, default=2.0, help="Trust region expand factor")
     parser.add_argument("--tr-contract", type=float, default=0.5, help="Trust region contract factor")
-    parser.add_argument("--no-trust-region", action="store_true", help="Disable trust region")
+    parser.add_argument("--trust-region", action="store_true", help="Enable trust region (disabled by default)")
 
-    # Weighted retraining parameters (NEW)
+    # Weighted retraining parameters
     parser.add_argument("--retrain-interval", type=int, default=10, help="Retrain VAE every N iterations")
     parser.add_argument("--retrain-method", type=str, default="rank", choices=["rank", "exponential"])
     parser.add_argument("--retrain-epochs", type=int, default=50, help="Retraining epochs")
     parser.add_argument("--no-retrain", action="store_true", help="Disable weighted retraining")
 
-    # VAE, GP, Vec2Text parameters (same as robust_vec2text)
+    # VAE, GP, Vec2Text parameters
     parser.add_argument("--top-k", type=int, default=25)
     parser.add_argument("--latent-dim", type=int, default=32)
-    parser.add_argument("--vae-epochs", type=int, default=200)
+    parser.add_argument("--vae-epochs", type=int, default=3000)
     parser.add_argument("--vae-lr", type=float, default=0.001)
     parser.add_argument("--vae-patience", type=int, default=30)
-    parser.add_argument("--gp-epochs", type=int, default=500)
+    parser.add_argument("--vae-cycle-weight", type=float, default=2.0,
+                        help="Weight for cycle-consistency loss ||E(D(z)) - z||^2 (default: 2.0)")
+    parser.add_argument("--gp-epochs", type=int, default=3000)
     parser.add_argument("--v2t-beam", type=int, default=8)
     parser.add_argument("--v2t-max-length", type=int, default=512)
     parser.add_argument("--v2t-no-repeat-ngram", type=int, default=3)
@@ -160,14 +252,20 @@ def main():
     # Iterations
     parser.add_argument("--iterations", type=int, default=10, help="Number of optimization iterations")
 
-    # APE Data Augmentation
+    # APE Data Augmentation (now uses DiversityInstructionGenerator)
     parser.add_argument("--ape-instructions", type=int, default=1000)
-    parser.add_argument("--ape-cache", type=str, default="datasets/hbbops/ape_instructions_1000.json")
+    parser.add_argument("--ape-cache", type=str, default="/home/prusek/NLP/datasets/cowboys/diverse_instructions_1000.json")
     parser.add_argument("--skip-ape", action="store_true")
+    parser.add_argument("--regenerate-ape", action="store_true",
+                        help="Force regeneration of diverse instructions (ignores cache)")
 
     # Output
     parser.add_argument("--output-dir", type=str, default="generation/cowboys_vec2text/results")
     parser.add_argument("--debug", action="store_true")
+
+    # Visualization
+    parser.add_argument("--visualize", action="store_true",
+                        help="Generate EI landscape visualization after each iteration")
 
     args = parser.parse_args()
 
@@ -209,22 +307,21 @@ def main():
             f.write(msg + "\n")
 
     log("=" * 60)
-    log("COWBOYS Vec2Text Optimization")
+    log("COWBOYS Vec2Text Optimization (Instruction-Only)")
     log("=" * 60)
     log(f"Timestamp: {timestamp}")
     log(f"Key settings:")
     log(f"  MCMC: {args.mcmc_chains} chains x {args.mcmc_steps} steps, beta={args.mcmc_beta}")
-    log(f"  Trust Region: {'disabled' if args.no_trust_region else f'radius={args.tr_initial}'}")
+    log(f"  Trust Region: {'enabled, radius=' + str(args.tr_initial) if args.trust_region else 'disabled'}")
     log(f"  Retraining: {'disabled' if args.no_retrain else f'every {args.retrain_interval} iters, method={args.retrain_method}'}")
+    log(f"  VAE losses: cosine=20, mse=1, kld=0.0025 (annealed), cycle={args.vae_cycle_weight}")
 
-    # Load data
+    # Load data (instruction-only, no exemplars)
     instructions = load_instructions(args.instructions)
-    exemplars = load_exemplars(args.exemplars)
     validation_data = load_validation(args.validation)
 
     log(f"\nLoaded data:")
-    log(f"  Original instructions: {len(instructions)}")
-    log(f"  Exemplars: {len(exemplars)}")
+    log(f"  Instructions: {len(instructions)}")
     log(f"  Validation: {len(validation_data)} samples")
 
     # APE Data Augmentation
@@ -249,18 +346,24 @@ def main():
 
         all_instructions = list(set(instructions + ape_instructions))
         log(f"Total unique instructions: {len(all_instructions)}")
+
+        # Release APE generator to free GPU memory before evaluation
+        del ape_generator
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        log("Released APE generator GPU memory")
     else:
         log("\nSkipping APE generation (--skip-ape)")
         all_instructions = instructions
 
-    # Initialize optimizer
+    # Initialize optimizer (instruction-only, no exemplars)
     log("\n" + "=" * 60)
-    log("Initializing COWBOYS Optimizer")
+    log("Initializing COWBOYS Optimizer (Instruction-Only)")
     log("=" * 60)
 
     optimizer = CowboysOptimizer(
         instructions=all_instructions,
-        exemplars=exemplars,
         device="cuda",
         latent_dim=args.latent_dim,
     )
@@ -273,13 +376,13 @@ def main():
     grid_prompts = optimizer.load_grid(
         args.grid_path,
         top_k=args.top_k,
-        train_exemplar_gp=False,
+        train_instruction_gp=False,
     )
 
     best_prompt = optimizer.best_grid_prompt
     log(f"\nBest from grid:")
     log(f"  Instruction ID: {best_prompt.instruction_id}")
-    log(f"  Exemplar ID: {best_prompt.exemplar_id}")
+    log(f"  Instruction: {best_prompt.instruction}")
     log(f"  Error rate: {best_prompt.error_rate:.4f}")
 
     # Train VAE
@@ -291,15 +394,30 @@ def main():
         epochs=args.vae_epochs,
         lr=args.vae_lr,
         patience=args.vae_patience,
+        lambda_cycle=args.vae_cycle_weight,
         verbose=True,
+    )
+
+    # Evaluate VAE quality
+    log("\n" + "=" * 60)
+    log("Evaluating VAE Quality")
+    log("=" * 60)
+
+    # Get all instruction embeddings for evaluation
+    all_inst_embs = torch.stack(list(optimizer.instruction_embeddings.values()))
+    vae_metrics = evaluate_vae_quality(
+        vae=optimizer.get_vae(),
+        embeddings=all_inst_embs,
+        device="cuda",
+        log_fn=log,
     )
 
     # Train GP on decoded embeddings (COWBOYS fix)
     log("\n" + "=" * 60)
-    log("Training GP on VAE-Decoded Embeddings (COWBOYS)")
+    log("Training Instruction GP on VAE-Decoded Embeddings")
     log("=" * 60)
 
-    optimizer.train_exemplar_gp_on_decoded(
+    optimizer.train_instruction_gp_on_decoded(
         grid_path=args.grid_path,
         top_k=args.top_k,
         epochs=args.gp_epochs,
@@ -307,24 +425,21 @@ def main():
         verbose=True,
     )
 
-    # Initialize inference
+    # Initialize inference (instruction-only, no exemplar_emb)
     log("\n" + "=" * 60)
     log("Initializing COWBOYS Inference Pipeline")
     log("=" * 60)
 
-    best_exemplar_emb = optimizer.exemplar_embeddings[best_prompt.exemplar_id]
-
     inference = CowboysInference(
         vae=optimizer.get_vae(),
-        exemplar_selector=optimizer.get_exemplar_selector(),
-        exemplar_emb=best_exemplar_emb,
+        instruction_selector=optimizer.get_instruction_selector(),
         gtr=optimizer.gtr,
         device="cuda",
     )
 
-    # Initialize trust region
+    # Initialize trust region (disabled by default)
     trust_region = None
-    if not args.no_trust_region:
+    if args.trust_region:
         log("Initializing Trust Region...")
         trust_region = optimizer.initialize_trust_region(config=tr_config)
         log(f"  Initial radius: {trust_region.radius:.4f}")
@@ -338,9 +453,13 @@ def main():
     log(f"Starting COWBOYS Optimization ({args.iterations} iterations)")
     log("=" * 60)
 
+    # Create evaluation client once (reused for all iterations)
+    from src.llm_client import create_llm_client
+    eval_client = create_llm_client(args.model, args.backend)
+    log("Initialized evaluation LLM client")
+
     best_error = best_prompt.error_rate
     best_instruction = best_prompt.instruction
-    best_exemplar_id = best_prompt.exemplar_id
     current_latent = best_latent.clone()
 
     iteration_history = []
@@ -379,14 +498,42 @@ def main():
         log(f"  Cosine: {best_result.cosine_similarity:.4f}, LogEI: {best_result.log_ei:.4f}")
         log(f"  MCMC samples: {len(result.mcmc_result.candidates)}, accept_rate: {result.mcmc_result.accept_rate:.3f}")
 
-        # 3. Evaluate novel prompt
+        # EI Landscape Visualization
+        viz_metrics = None
+        if args.visualize:
+            from .visualize import visualize_ei_landscape
+            viz_path = output_dir / f"ei_landscape_iter_{iteration + 1}.png"
+            try:
+                viz_metrics = visualize_ei_landscape(
+                    inference=inference,
+                    center_latent=best_result.optimized_latent,
+                    realized_text=best_result.text,
+                    best_y=best_error,
+                    trajectory_latents=result.mcmc_result.candidates,
+                    trust_region=trust_region,
+                    save_path=str(viz_path),
+                )
+                log(f"  Visualization saved: {viz_path}")
+                log(f"    Inversion gap (32D): {viz_metrics['inversion_gap_32d']:.4f}")
+                log(f"    LogEI at z_opt: {viz_metrics['log_ei_at_opt']:.4f}")
+                log(f"    LogEI at z_realized: {viz_metrics['log_ei_at_realized']:.4f}")
+            except Exception as e:
+                log(f"  Warning: Visualization failed: {e}")
+
+        # 3. Evaluate novel instruction (instruction-only, no exemplar)
         log("\n--- Evaluating ---")
-        novel_prompt = f"{best_result.text}\n\n{exemplars[best_exemplar_id]}"
+        novel_instruction = best_result.text
+
+        # DEBUG: Log the exact prompt being evaluated
+        log(f"  Evaluating instruction:")
+        log(f"    {novel_instruction}")
+
         novel_error = evaluate_prompt(
-            novel_prompt,
+            novel_instruction,
             validation_data,
             args.model,
             args.backend,
+            client=eval_client,
         )
 
         log(f"  Error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
@@ -396,18 +543,18 @@ def main():
         decoded_emb = optimizer.get_decoded_embedding(best_result.text)
         inst_emb = optimizer.gtr.encode_tensor(best_result.text).to(optimizer.device)
 
-        optimizer.exemplar_selector.add_observation_and_retrain(
+        optimizer.instruction_selector.add_observation_and_retrain(
             decoded_inst_emb=decoded_emb,
-            exemplar_emb=best_exemplar_emb,
             error_rate=novel_error,
-            epochs=100,
+            epochs=3000,
+            patience=10,
             verbose=False,
         )
 
         # Also add to optimizer for VAE retraining
         optimizer.add_observation(best_result.text, inst_emb, novel_error)
 
-        log(f"  GP updated (total samples: {len(optimizer.exemplar_selector.y_train)})")
+        log(f"  GP updated (total samples: {len(optimizer.instruction_selector.y_train)})")
 
         # 5. Update trust region
         if trust_region:
@@ -427,7 +574,7 @@ def main():
             log(f"  New best! Improvement: {improvement:.4f}")
 
         # 7. Store iteration history
-        iteration_history.append({
+        iter_record = {
             "iteration": iteration + 1,
             "instruction": best_result.text,
             "cosine_similarity": best_result.cosine_similarity,
@@ -437,7 +584,13 @@ def main():
             "best_error_so_far": best_error,
             "mcmc_accept_rate": result.mcmc_result.accept_rate,
             "trust_region_radius": trust_region.radius if trust_region else None,
-        })
+        }
+        # Add visualization metrics if available
+        if viz_metrics is not None:
+            iter_record["inversion_gap_32d"] = viz_metrics.get("inversion_gap_32d")
+            iter_record["log_ei_at_opt"] = viz_metrics.get("log_ei_at_opt")
+            iter_record["log_ei_at_realized"] = viz_metrics.get("log_ei_at_realized")
+        iteration_history.append(iter_record)
 
         # 8. Update latent for next iteration
         with torch.no_grad():
@@ -457,27 +610,24 @@ def main():
     log(f"Total improvement: {best_prompt.error_rate - best_error:.4f}")
     log(f"Best instruction:\n{best_instruction}")
 
-    # Save results
+    # Save results (instruction-only format)
     results: Dict[str, Any] = {
         "timestamp": timestamp,
-        "method": "COWBOYS",
+        "method": "COWBOYS (instruction-only)",
         "args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "grid_best": {
             "instruction_id": best_prompt.instruction_id,
-            "exemplar_id": best_prompt.exemplar_id,
             "instruction": best_prompt.instruction,
-            "exemplar": best_prompt.exemplar,
             "error_rate": best_prompt.error_rate,
         },
         "optimized": {
             "instruction": best_instruction,
-            "full_prompt": f"{best_instruction}\n\n{exemplars[best_exemplar_id]}",
             "error_rate": best_error,
-            "exemplar_id": best_exemplar_id,
         },
         "iteration_history": iteration_history,
         "improvement": best_prompt.error_rate - best_error,
         "vae_best_cosine": optimizer.vae_trainer.best_cosine,
+        "vae_quality_metrics": vae_metrics,
     }
 
     with open(result_path, "w") as f:

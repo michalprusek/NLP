@@ -1,7 +1,9 @@
-"""COWBOYS Optimizer.
+"""COWBOYS Optimizer (Instruction-Only Version).
 
 Main optimization pipeline using pCN MCMC with trust regions
 and weighted VAE retraining.
+
+This version works with instructions only (no exemplars).
 
 Extends RobustHbBoPs with:
 - Weighted VAE retraining
@@ -18,27 +20,29 @@ from dataclasses import dataclass
 from .encoder import GTRPromptEncoder
 from .vae import InstructionVAE
 from .training import WeightedVAETrainer, RetrainConfig
-from .exemplar_selector import ExemplarSelector
 from .trust_region import TrustRegionManager, TRConfig
+
+# Import instruction-only GP classes
+from robust_vec2text.exemplar_selector import InstructionSelector
 
 
 @dataclass
 class GridPrompt:
-    """A prompt from the pre-evaluated grid."""
+    """A prompt from the pre-evaluated grid (instruction-only)."""
 
     instruction_id: int
-    exemplar_id: int
     instruction: str
-    exemplar: str
     error_rate: float
 
 
 class CowboysOptimizer:
     """COWBOYS optimizer: pCN MCMC with trust regions and weighted retraining.
 
+    This is the instruction-only version (no exemplars).
+
     Pipeline:
-        1. Load instructions and exemplars, pre-compute GTR embeddings
-        2. Load top-k prompts from grid + train HbBoPs GP
+        1. Load instructions, pre-compute GTR embeddings
+        2. Load top-k prompts from grid + train instruction GP
         3. Train VAE on instruction embeddings
         4. Run iterative optimization:
            a. pCN MCMC sampling within trust region
@@ -48,22 +52,16 @@ class CowboysOptimizer:
            e. Update trust region
            f. Periodically retrain VAE with weighted samples
 
-    Key differences from RobustHbBoPs:
-        - pCN MCMC instead of gradient ascent
-        - Trust region management
-        - Weighted VAE retraining
-
     Attributes:
         gtr: GTR encoder for embeddings
         vae_trainer: WeightedVAETrainer instance
-        exemplar_selector: HbBoPs-style GP for error prediction
+        instruction_selector: InstructionSelector GP for error prediction
         trust_region: Optional TrustRegionManager
     """
 
     def __init__(
         self,
         instructions: List[str],
-        exemplars: List[str],
         device: str = "cuda",
         latent_dim: int = 32,
     ):
@@ -71,7 +69,6 @@ class CowboysOptimizer:
 
         Args:
             instructions: List of instruction texts
-            exemplars: List of exemplar texts
             device: Device to use
             latent_dim: VAE latent dimension
         """
@@ -79,7 +76,6 @@ class CowboysOptimizer:
         self.latent_dim = latent_dim
 
         self.instructions = instructions
-        self.exemplars = exemplars
 
         # Initialize encoder
         print("Initializing GTR encoder...")
@@ -92,18 +88,11 @@ class CowboysOptimizer:
             emb = self.gtr.encode_tensor(inst)
             self.instruction_embeddings[i] = emb.to(self.device)
 
-        print("Pre-computing exemplar embeddings...")
-        self.exemplar_embeddings: Dict[int, torch.Tensor] = {}
-        for i, ex in enumerate(exemplars):
-            emb = self.gtr.encode_tensor(ex)
-            self.exemplar_embeddings[i] = emb.to(self.device)
-
         print(f"  Cached {len(self.instruction_embeddings)} instruction embeddings")
-        print(f"  Cached {len(self.exemplar_embeddings)} exemplar embeddings")
 
         # Initialize trainers
         self.vae_trainer: Optional[WeightedVAETrainer] = None
-        self.exemplar_selector: Optional[ExemplarSelector] = None
+        self.instruction_selector: Optional[InstructionSelector] = None
 
         # Best results from grid
         self.best_grid_prompt: Optional[GridPrompt] = None
@@ -121,6 +110,7 @@ class CowboysOptimizer:
         batch_size: int = 32,
         lr: float = 0.001,
         patience: int = 30,
+        lambda_cycle: float = 0.0,
         verbose: bool = True,
     ) -> Dict[str, List[float]]:
         """Train VAE on instruction embeddings.
@@ -130,6 +120,7 @@ class CowboysOptimizer:
             batch_size: Batch size
             lr: Learning rate
             patience: Early stopping patience
+            lambda_cycle: Weight for cycle-consistency loss (default: 0.0)
             verbose: Print progress
 
         Returns:
@@ -156,7 +147,11 @@ class CowboysOptimizer:
             input_dim=768,
             latent_dim=self.latent_dim,
             device=str(self.device),
+            lambda_cycle=lambda_cycle,
         )
+
+        if verbose:
+            print(f"VAE loss weights: cosine=20, mse=1, kld=0.0025 (annealed 0-500 epochs), cycle={lambda_cycle}")
 
         history = self.vae_trainer.train(
             embeddings=embeddings,
@@ -174,14 +169,14 @@ class CowboysOptimizer:
         self,
         grid_path: str,
         top_k: int = 25,
-        train_exemplar_gp: bool = False,
+        train_instruction_gp: bool = False,
     ) -> List[GridPrompt]:
         """Load top-k prompts from pre-evaluated grid.
 
         Args:
-            grid_path: Path to grid JSONL file
+            grid_path: Path to grid JSONL file (instruction-only format)
             top_k: Number of top prompts to load
-            train_exemplar_gp: If True, train HbBoPs-style GP
+            train_instruction_gp: If True, train instruction GP
 
         Returns:
             List of top-k GridPrompt objects
@@ -192,17 +187,19 @@ class CowboysOptimizer:
             for line in f:
                 data = json.loads(line)
                 inst_id = data["instruction_id"]
-                ex_id = data["exemplar_id"]
 
-                instruction = self.instructions[inst_id] if inst_id < len(self.instructions) else ""
-                exemplar = self.exemplars[ex_id] if ex_id < len(self.exemplars) else ""
+                # Get instruction text (from data if available, else from list)
+                if "instruction_text" in data:
+                    instruction = data["instruction_text"]
+                elif inst_id < len(self.instructions):
+                    instruction = self.instructions[inst_id]
+                else:
+                    instruction = ""
 
                 grid_prompts.append(
                     GridPrompt(
                         instruction_id=inst_id,
-                        exemplar_id=ex_id,
                         instruction=instruction,
-                        exemplar=exemplar,
                         error_rate=data["error_rate"],
                     )
                 )
@@ -217,23 +214,22 @@ class CowboysOptimizer:
         print(f"  Best error rate: {self.best_grid_prompt.error_rate:.4f}")
         print(f"  Worst in top-k: {self.grid_prompts[-1].error_rate:.4f}")
 
-        if train_exemplar_gp:
-            self._train_exemplar_gp(grid_path, top_k)
+        if train_instruction_gp:
+            self._train_instruction_gp(grid_path, top_k)
 
         return self.grid_prompts
 
-    def _train_exemplar_gp(self, grid_path: str, top_k: int) -> None:
-        """Train HbBoPs-style GP for exemplar selection."""
-        print("\nTraining exemplar selection GP...")
+    def _train_instruction_gp(self, grid_path: str, top_k: int) -> None:
+        """Train instruction-only GP."""
+        print("\nTraining instruction selection GP...")
 
-        self.exemplar_selector = ExemplarSelector(
+        self.instruction_selector = InstructionSelector(
             instructions=self.instructions,
-            exemplars=self.exemplars,
             gtr=self.gtr,
             device=str(self.device),
         )
 
-        self.exemplar_selector.train_from_grid(
+        self.instruction_selector.train_from_grid(
             grid_path=grid_path,
             top_k=top_k,
             epochs=3000,
@@ -241,7 +237,7 @@ class CowboysOptimizer:
             verbose=True,
         )
 
-    def train_exemplar_gp_on_decoded(
+    def train_instruction_gp_on_decoded(
         self,
         grid_path: str,
         top_k: int = 25,
@@ -284,17 +280,15 @@ class CowboysOptimizer:
 
         print(f"  Computed {len(decoded_instruction_embeddings)} decoded embeddings")
 
-        print("\nTraining GP on decoded embeddings...")
-        self.exemplar_selector = ExemplarSelector(
+        print("\nTraining instruction-only GP on decoded embeddings...")
+        self.instruction_selector = InstructionSelector(
             instructions=self.instructions,
-            exemplars=self.exemplars,
             gtr=self.gtr,
             device=str(self.device),
         )
 
-        self.exemplar_selector.train_with_decoded_embeddings(
+        self.instruction_selector.train_with_decoded_embeddings(
             decoded_instruction_embeddings=decoded_instruction_embeddings,
-            exemplar_embeddings=self.exemplar_embeddings,
             grid_path=grid_path,
             top_k=top_k,
             epochs=epochs,
@@ -413,11 +407,11 @@ class CowboysOptimizer:
             raise RuntimeError("VAE not trained.")
         return self.vae_trainer.get_vae()
 
-    def get_exemplar_selector(self) -> ExemplarSelector:
-        """Get trained exemplar selector."""
-        if self.exemplar_selector is None:
-            raise RuntimeError("Exemplar GP not trained.")
-        return self.exemplar_selector
+    def get_instruction_selector(self) -> InstructionSelector:
+        """Get trained instruction selector."""
+        if self.instruction_selector is None:
+            raise RuntimeError("Instruction GP not trained.")
+        return self.instruction_selector
 
     def get_decoded_embedding(self, instruction_text: str) -> torch.Tensor:
         """Encode instruction and decode through VAE.
@@ -443,16 +437,6 @@ class CowboysOptimizer:
             decoded = vae.decode(latent).squeeze(0)
 
         return decoded
-
-    def get_best_exemplar_id(self) -> int:
-        """Get exemplar ID from best grid prompt.
-
-        Returns:
-            Exemplar ID of best performing prompt
-        """
-        if self.best_grid_prompt is None:
-            raise RuntimeError("Grid must be loaded first.")
-        return self.best_grid_prompt.exemplar_id
 
     def save_checkpoint(self, path: str):
         """Save VAE checkpoint."""
