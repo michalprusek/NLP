@@ -375,7 +375,7 @@ def main():
         )
 
         best_result = result.best_result
-        log(f"\n  Generated: {best_result.text[:80]}...")
+        log(f"\n  Generated:\n{best_result.text}")
         log(f"  Cosine: {best_result.cosine_similarity:.4f}, LogEI: {best_result.log_ei:.4f}")
         log(f"  MCMC samples: {len(result.mcmc_result.candidates)}, accept_rate: {result.mcmc_result.accept_rate:.3f}")
 
@@ -455,7 +455,7 @@ def main():
     log(f"Initial best error (grid): {best_prompt.error_rate:.4f}")
     log(f"Final best error: {best_error:.4f}")
     log(f"Total improvement: {best_prompt.error_rate - best_error:.4f}")
-    log(f"Best instruction: {best_instruction[:100]}...")
+    log(f"Best instruction:\n{best_instruction}")
 
     # Save results
     results: Dict[str, Any] = {

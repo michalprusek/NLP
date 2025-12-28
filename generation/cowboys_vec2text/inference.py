@@ -277,7 +277,7 @@ class CowboysInference:
         latents: List[torch.Tensor],
         best_y: float,
         verbose: bool = True,
-    ) -> List[Tuple[str, float, torch.Tensor, torch.Tensor, float]]:
+    ) -> List[Tuple[str, float, torch.Tensor, torch.Tensor, float, torch.Tensor]]:
         """Rank candidates by LogEI score.
 
         Args:
@@ -287,7 +287,7 @@ class CowboysInference:
             verbose: Print progress
 
         Returns:
-            Sorted list of (text, cosine, realized_emb, target_emb, log_ei)
+            Sorted list of (text, cosine, realized_emb, target_emb, log_ei, latent)
         """
         if verbose:
             print("  Ranking candidates by LogEI...")
@@ -298,7 +298,7 @@ class CowboysInference:
             if isinstance(log_ei, torch.Tensor):
                 log_ei = log_ei.item()
 
-            ranked.append((text, cosine, realized_emb, target_emb, log_ei))
+            ranked.append((text, cosine, realized_emb, target_emb, log_ei, z))
 
         # Sort by log EI (higher = better)
         ranked.sort(key=lambda x: x[4], reverse=True)
@@ -386,11 +386,8 @@ class CowboysInference:
         # 4. Rank by LogEI
         ranked = self.rank_candidates_by_ei(decoded, top_latents, best_y, verbose)
 
-        # Get best result
-        best_text, best_cosine, best_realized, best_target, best_log_ei = ranked[0]
-
-        # Get optimized latent
-        optimized_latent = top_latents[0]
+        # Get best result (now includes the corresponding latent)
+        best_text, best_cosine, best_realized, best_target, best_log_ei, optimized_latent = ranked[0]
 
         # Compute reembedded latent
         with torch.no_grad():
@@ -398,7 +395,7 @@ class CowboysInference:
 
         if verbose:
             print(f"\n  Best candidate:")
-            print(f"    Text: {best_text[:60]}...")
+            print(f"    Text: {best_text}")
             print(f"    Cosine: {best_cosine:.4f}")
             print(f"    LogEI: {best_log_ei:.4f}")
 

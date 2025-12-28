@@ -143,6 +143,19 @@ uv run python -m robust_vec2text.run --skip-ape --select-exemplar
 - APE data augmentation generates 1000 instructions for better VAE training
 - Vec2Text max_length increased to 128 tokens for complete instructions
 
+## Coding Standards
+
+### Logging Generated Prompts
+**NEVER truncate prompts in log output.** Always log the full prompt text, not truncated versions like `"prompt text..."`. This is critical for debugging and reproducibility.
+
+```python
+# BAD - truncated prompt is useless for debugging
+log(f"Generated: {prompt[:80]}...")
+
+# GOOD - always log full prompt
+log(f"Generated:\n{prompt}")
+```
+
 ## Constraints
 
 - vLLM requires CUDA GPU; Claude API requires `ANTHROPIC_API_KEY`
