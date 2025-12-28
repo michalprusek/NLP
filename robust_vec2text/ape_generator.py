@@ -686,7 +686,7 @@ PARAPHRASED INSTRUCTION:"""
             if verbose:
                 print(f"  Generated: {len(style_instructions)}")
                 if style_instructions:
-                    print(f"  Sample: {style_instructions[0][:80]}...")
+                    print(f"  Sample:\n{style_instructions[0]}")
 
         # PHASE 2: Paraphrase base instructions
         if self.base_instructions:
