@@ -220,13 +220,14 @@ def main():
     parser.add_argument("--mcmc-thinning", type=int, default=10, help="MCMC thinning factor")
     parser.add_argument("--mcmc-adapt-beta", action="store_true", default=True, help="Adapt beta during warmup")
 
-    # Trust region parameters (disabled by default)
+    # Trust region parameters (enabled by default)
     parser.add_argument("--tr-initial", type=float, default=1.0, help="Initial trust region radius")
     parser.add_argument("--tr-min", type=float, default=0.1, help="Minimum trust region radius")
     parser.add_argument("--tr-max", type=float, default=5.0, help="Maximum trust region radius")
     parser.add_argument("--tr-expand", type=float, default=2.0, help="Trust region expand factor")
     parser.add_argument("--tr-contract", type=float, default=0.5, help="Trust region contract factor")
-    parser.add_argument("--trust-region", action="store_true", help="Enable trust region (disabled by default)")
+    parser.add_argument("--trust-region", action="store_true", default=True, help="Enable trust region (enabled by default)")
+    parser.add_argument("--no-trust-region", action="store_false", dest="trust_region", help="Disable trust region")
 
     # Weighted retraining parameters
     parser.add_argument("--retrain-interval", type=int, default=10, help="Retrain VAE every N iterations")
@@ -324,37 +325,48 @@ def main():
     log(f"  Instructions: {len(instructions)}")
     log(f"  Validation: {len(validation_data)} samples")
 
-    # APE Data Augmentation
+    # Diversity Instruction Generation (replaces homogeneous APE)
     if not args.skip_ape:
         log("\n" + "=" * 60)
-        log("Loading/Generating Instructions via APE")
+        log("Loading/Generating Diverse Instructions")
         log("=" * 60)
 
-        from robust_vec2text.ape_generator import APEInstructionGenerator
+        from .diversity_generator import DiversityInstructionGenerator
 
-        ape_generator = APEInstructionGenerator(
+        diversity_generator = DiversityInstructionGenerator(
             model=args.model,
             backend=args.backend,
+            base_instructions_path=args.instructions,  # Use base instructions for paraphrasing
         )
 
-        ape_instructions = ape_generator.generate_or_load(
+        diverse_instructions, diversity_metrics = diversity_generator.generate_or_load(
             cache_path=args.ape_cache,
             validation_data=validation_data,
             num_instructions=args.ape_instructions,
+            force_regenerate=args.regenerate_ape,
             verbose=True,
         )
 
-        all_instructions = list(set(instructions + ape_instructions))
+        # Log diversity metrics
+        log(f"\nDiversity Metrics:")
+        log(f"  Mean cosine similarity: {diversity_metrics.mean_cosine:.4f}")
+        log(f"  Similarity range: [{diversity_metrics.min_cosine:.4f}, {diversity_metrics.max_cosine:.4f}]")
+        log(f"  Near-duplicates: {diversity_metrics.num_near_duplicates}/{diversity_metrics.total_pairs}")
+        log(f"  Length: mean={diversity_metrics.length_mean:.1f}, std={diversity_metrics.length_std:.1f}")
+        log(f"  Length histogram: {diversity_metrics.length_histogram}")
+        log(f"  Validation: {diversity_metrics.validation_message}")
+
+        all_instructions = list(set(instructions + diverse_instructions))
         log(f"Total unique instructions: {len(all_instructions)}")
 
-        # Release APE generator to free GPU memory before evaluation
-        del ape_generator
+        # Release generator to free GPU memory before evaluation
+        del diversity_generator
         import gc
         gc.collect()
         torch.cuda.empty_cache()
-        log("Released APE generator GPU memory")
+        log("Released diversity generator GPU memory")
     else:
-        log("\nSkipping APE generation (--skip-ape)")
+        log("\nSkipping diversity instruction generation (--skip-ape)")
         all_instructions = instructions
 
     # Initialize optimizer (instruction-only, no exemplars)
@@ -538,13 +550,33 @@ def main():
 
         log(f"  Error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
 
-        # 4. Update GP with new observation
-        log("\n--- Updating GP ---")
-        decoded_emb = optimizer.get_decoded_embedding(best_result.text)
-        inst_emb = optimizer.gtr.encode_tensor(best_result.text).to(optimizer.device)
+        # 4. Update GP with new observation using InvBO-style decoder inversion
+        log("\n--- Updating GP (InvBO-aligned) ---")
 
+        # Get embeddings for gap diagnostics
+        inst_emb = optimizer.gtr.encode_tensor(best_result.text).to(optimizer.device)
+        decoded_emb = optimizer.get_decoded_embedding(best_result.text)
+
+        # Compute GP prediction at z_opt (BEFORE GP update)
+        with torch.no_grad():
+            gp_pred_opt, gp_std_opt = optimizer.instruction_selector.predict_error(decoded_emb)
+
+        # InvBO-style decoder inversion: find z_inv that reconstructs the evaluated text
+        # This creates aligned (z_inv, error) pairs where decode(z_inv) ≈ GTR(text)
+        z_inv = optimizer.get_vae().invert_decoder(inst_emb)
+
+        # Get aligned decoded embedding (decode(z_inv))
+        with torch.no_grad():
+            decoded_emb_aligned = optimizer.get_vae().decode(z_inv.unsqueeze(0)).squeeze(0)
+            inversion_cosine = F.cosine_similarity(
+                decoded_emb_aligned.unsqueeze(0), inst_emb.unsqueeze(0)
+            ).item()
+
+        log(f"  Decoder inversion cosine: {inversion_cosine:.4f}")
+
+        # Use ALIGNED embedding for GP training (key InvBO insight)
         optimizer.instruction_selector.add_observation_and_retrain(
-            decoded_inst_emb=decoded_emb,
+            decoded_inst_emb=decoded_emb_aligned,
             error_rate=novel_error,
             epochs=3000,
             patience=10,
@@ -555,6 +587,17 @@ def main():
         optimizer.add_observation(best_result.text, inst_emb, novel_error)
 
         log(f"  GP updated (total samples: {len(optimizer.instruction_selector.y_train)})")
+
+        # Gap diagnostics: compare GP prediction vs true evaluation
+        with torch.no_grad():
+            gp_pred_inv, gp_std_inv = optimizer.instruction_selector.predict_error(decoded_emb_aligned)
+
+        log(f"\n=== Gap Diagnostics ===")
+        log(f"  GP pred at z_opt (before): {gp_pred_opt:.4f} (std: {gp_std_opt:.4f})")
+        log(f"  GP pred at z_inv (after):  {gp_pred_inv:.4f} (std: {gp_std_inv:.4f})")
+        log(f"  True evaluation:           {novel_error:.4f}")
+        log(f"  Gap (z_opt): {abs(gp_pred_opt - novel_error):.4f}")
+        log(f"  Gap (z_inv): {abs(gp_pred_inv - novel_error):.4f}")
 
         # 5. Update trust region
         if trust_region:
@@ -584,6 +627,12 @@ def main():
             "best_error_so_far": best_error,
             "mcmc_accept_rate": result.mcmc_result.accept_rate,
             "trust_region_radius": trust_region.radius if trust_region else None,
+            # InvBO gap diagnostics
+            "gp_pred_z_opt": gp_pred_opt,
+            "gp_pred_z_inv": gp_pred_inv,
+            "gap_z_opt": abs(gp_pred_opt - novel_error),
+            "gap_z_inv": abs(gp_pred_inv - novel_error),
+            "decoder_inversion_cosine": inversion_cosine,
         }
         # Add visualization metrics if available
         if viz_metrics is not None:
