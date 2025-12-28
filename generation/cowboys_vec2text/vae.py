@@ -152,21 +152,44 @@ class InstructionVAE(nn.Module):
         mu, _ = self.encode(x)
         return mu
 
+    def cycle_consistency_loss(self, z: torch.Tensor) -> torch.Tensor:
+        """Compute cycle-consistency loss: ||E(D(z)) - z||^2.
+
+        This loss forces the VAE latent space to be a "fixed point" for
+        the Decode->Encode operation, reducing inversion drift when
+        optimizing in latent space and inverting via Vec2Text.
+
+        Args:
+            z: Latent vectors of shape (batch, 32)
+
+        Returns:
+            Scalar loss tensor (MSE between z and re-encoded z)
+        """
+        decoded = self.decode(z)  # z -> 768D embedding
+        re_encoded = self.get_latent(decoded)  # 768D -> z'
+        return F.mse_loss(re_encoded, z)
+
 
 class WeightedVAELoss(nn.Module):
-    """VAE loss with per-sample weighting support.
+    """VAE loss with per-sample weighting and cycle-consistency support.
 
     Loss = sum_i w_i * (lambda_cosine * L_cosine_i + lambda_mse * L_mse_i)
            + lambda_kld * L_kld
+           + lambda_cycle * L_cycle
 
     Where:
         w_i: Per-sample weight (higher = more influence)
         L_cosine: 1 - cosine_similarity (priority for Vec2Text)
         L_mse: MSE reconstruction loss (auxiliary)
         L_kld: KL divergence regularization (light smoothing)
+        L_cycle: Cycle-consistency loss ||E(D(z)) - z||^2 (reduces inversion drift)
 
     The cosine loss is prioritized because Vec2Text requires
     directional similarity for accurate text reconstruction.
+
+    The cycle-consistency loss forces the VAE latent space to be a
+    "fixed point" for the Decode->Encode operation, dramatically
+    improving Vec2Text inversion accuracy.
 
     Sample weights enable weighted retraining where high-performing
     prompts have more influence on the latent space structure.
@@ -175,22 +198,32 @@ class WeightedVAELoss(nn.Module):
 
     def __init__(
         self,
-        lambda_cosine: float = 10.0,
+        lambda_cosine: float = 20.0,
         lambda_mse: float = 1.0,
-        lambda_kld: float = 0.0001,
+        lambda_kld: float = 0.0025,
+        lambda_cycle: float = 2.0,
     ):
         """Initialize loss function.
 
         Args:
-            lambda_cosine: Weight for cosine loss (default: 10.0, priority)
+            lambda_cosine: Weight for cosine loss (default: 20.0, priority for GTR)
+                GTR embeddings are L2-normalized, so direction matters most.
+                High weight ensures VAE preserves angular similarity for Vec2Text.
             lambda_mse: Weight for MSE loss (default: 1.0, auxiliary)
-            lambda_kld: Weight for KL divergence (default: 0.0001, light)
+            lambda_kld: Weight for KL divergence (default: 0.0025, with annealing)
+                Too low (0.0001) allows VAE to "cheat" by clustering far from origin,
+                breaking pCN sampler's N(0,I) assumption. Too high (>0.01) causes
+                posterior collapse. 0.0025 is sweet spot per "Optimus" paper.
+            lambda_cycle: Weight for cycle-consistency loss (default: 2.0)
+                Ensures E(D(z)) ≈ z, critical for Trust Region accuracy.
+                Weight 2.0 means latent consistency is 2x more important than MSE.
         """
         super().__init__()
 
         self.lambda_cosine = lambda_cosine
         self.lambda_mse = lambda_mse
         self.lambda_kld = lambda_kld
+        self.lambda_cycle = lambda_cycle
 
     def forward(
         self,
@@ -199,6 +232,7 @@ class WeightedVAELoss(nn.Module):
         mu: torch.Tensor,
         logvar: torch.Tensor,
         sample_weights: Optional[torch.Tensor] = None,
+        cycle_loss: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Compute weighted total loss.
 
@@ -209,6 +243,8 @@ class WeightedVAELoss(nn.Module):
             logvar: Latent log variance (batch, 32)
             sample_weights: Optional per-sample weights (batch,)
                            If None, uses uniform weights.
+            cycle_loss: Optional pre-computed cycle-consistency loss.
+                        Computed externally as vae.cycle_consistency_loss(mu).
 
         Returns:
             Tuple of (total_loss, components_dict)
@@ -244,10 +280,17 @@ class WeightedVAELoss(nn.Module):
         # Total loss
         total = weighted_recon_loss + self.lambda_kld * loss_kld
 
+        # Add cycle-consistency loss if provided and lambda_cycle > 0
+        cycle_loss_value = 0.0
+        if cycle_loss is not None and self.lambda_cycle > 0:
+            total = total + self.lambda_cycle * cycle_loss
+            cycle_loss_value = cycle_loss.item()
+
         components = {
             "cosine": loss_cosine_per_sample.mean().item(),
             "mse": loss_mse_per_sample.mean().item(),
             "kld": loss_kld.item(),
+            "cycle": cycle_loss_value,
             "total": total.item(),
             "cosine_sim_mean": cosine_sim.mean().item(),
         }

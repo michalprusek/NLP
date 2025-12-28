@@ -1,0 +1,122 @@
+# GSM8K Instructions - 100 Diverse System Prompts
+# Organized in 10 categories with 10 instructions each
+
+# === CATEGORY 1: MINIMALIST (1-10) ===
+1. Solve:
+2. Answer:
+3. =
+4. ?
+5. Calculate.
+6. Result:
+7. Compute the answer.
+8. Find the number.
+9. What is it?
+10. Output:
+
+# === CATEGORY 2: PROFESSIONAL/TECHNICAL (11-20) ===
+11. Apply mathematical reasoning to solve the following word problem and provide the numerical answer.
+12. Analyze the given problem, perform the necessary calculations, and state the final result.
+13. Process this mathematical query and return the computed value.
+14. Execute arithmetic operations as required and report the final numerical outcome.
+15. Evaluate the problem systematically and derive the correct numerical solution.
+16. Parse the word problem, identify the mathematical operations needed, and compute the result.
+17. Perform quantitative analysis on the given problem and output the final answer.
+18. Apply standard mathematical procedures to determine the solution.
+19. Calculate the requested quantity using appropriate mathematical methods.
+20. Determine the numerical answer through logical mathematical deduction.
+
+# === CATEGORY 3: PEDAGOGICAL/TEACHING (21-30) ===
+21. You are a patient math tutor. Walk through this problem step by step, explaining your reasoning, and find the answer.
+22. Let's solve this together! Break down the problem into smaller parts and show your work.
+23. Think of this as a learning opportunity. Work through each step carefully to find the solution.
+24. As a helpful teacher, guide me through solving this problem. What is the final answer?
+25. Explain your thought process as you solve this math problem. Show all your work.
+26. Help me understand how to solve this. Walk me through each calculation step by step.
+27. Like a good tutor, show me how to approach this problem and find the correct answer.
+28. Demonstrate the solution process clearly, explaining each step along the way.
+29. Teach me how to solve this by showing your complete reasoning and calculations.
+30. Be a patient instructor and walk through this problem methodically to reach the answer.
+
+# === CATEGORY 4: CONVERSATIONAL/FRIENDLY (31-40) ===
+31. Hey! Can you help me figure out this math problem?
+32. I need your help with this one. What do you get?
+33. Let's work on this together - what's the answer?
+34. Mind solving this math problem for me? Thanks!
+35. So I've got this math question... what's the answer?
+36. Help me out here - what does this work out to?
+37. Quick question: can you solve this for me?
+38. I'm stuck on this problem. What's the final number?
+39. Would you mind working through this and telling me the answer?
+40. Hey friend, what's the solution to this one?
+
+# === CATEGORY 5: STRUCTURED/ALGORITHMIC (41-50) ===
+41. Step 1: Read the problem. Step 2: Identify the numbers. Step 3: Calculate. Step 4: State the answer.
+42. First understand the question. Then perform calculations. Finally report the number.
+43. PROCEDURE: Parse problem -> Extract values -> Compute -> Return result
+44. [1] Analyze [2] Calculate [3] Verify [4] Answer
+45. INPUT: word problem -> PROCESS: mathematical operations -> OUTPUT: numerical answer
+46. Task: Read, compute, and output the final numerical result.
+47. Algorithm: identify quantities, determine operations, execute calculations, return answer.
+48. Follow this process: understand -> plan -> execute -> verify -> answer
+49. Method: 1. Parse the problem 2. Set up equations 3. Solve 4. Report the answer
+50. Systematic approach: Read carefully, identify key information, calculate step by step, give the final number.
+
+# === CATEGORY 6: MOTIVATIONAL/ENCOURAGING (51-60) ===
+51. You've got this! Work through the problem and find that answer.
+52. Great job tackling this problem! Show me your best work and the final result.
+53. I believe in you! Carefully solve this and tell me the answer.
+54. Take your time, you can do this. What's the solution?
+55. You're doing great! Now solve this math problem step by step.
+56. Trust your abilities and work through this problem to find the answer.
+57. Excellent! Now put your skills to work and solve this one.
+58. Keep up the good work! What answer do you get for this problem?
+59. You're capable of solving this. Take it step by step and find the number.
+60. Nice work so far! Now calculate the answer to this problem.
+
+# === CATEGORY 7: CREATIVE/NARRATIVE (61-70) ===
+61. Imagine you are a mathematician on a quest. The treasure at the end is the answer to this problem.
+62. Picture this problem as a puzzle. Each piece is a number. Put them together to find the solution.
+63. Once upon a time, there was a math problem waiting to be solved. What is its answer?
+64. You're a detective investigating numbers. Crack this case and report your finding.
+65. The numbers in this problem are telling a story. What does it all add up to?
+66. Think of yourself as a calculator with a brain. Process this and output the answer.
+67. This is an adventure in mathematics. Navigate through the calculations to reach the destination.
+68. Consider each number as a character in this mathematical drama. What's the final scene?
+69. You're translating this word problem into the language of numbers. What's the final translation?
+70. The answer is hidden in this problem like a secret. Uncover it through calculation.
+
+# === CATEGORY 8: PRECISION/ACCURACY (71-80) ===
+71. Solve carefully and double-check your answer before responding.
+72. Accuracy is crucial. Calculate precisely and verify your result.
+73. Take your time to ensure the correct answer. No rushing.
+74. Be meticulous. Check each step of your calculation for errors.
+75. Precision matters. Work through this problem carefully and confirm your answer.
+76. Make sure your arithmetic is correct. What is the verified answer?
+77. Quality over speed. Solve this accurately and state the final number.
+78. Error-free calculation is the goal. What is the correct answer?
+79. Double-check your work. The answer must be mathematically precise.
+80. Carefully verify each calculation step before providing the final answer.
+
+# === CATEGORY 9: ANALYTICAL/REASONING (81-90) ===
+81. Analyze the logical structure of this problem and determine the solution.
+82. Use reasoning to break down this problem and find the answer.
+83. Think critically about what this problem is asking, then solve it.
+84. Apply logical thinking to work through this problem step by step.
+85. Consider all the information given and reason your way to the answer.
+86. What logical steps lead to the solution of this problem?
+87. Approach this analytically: what are the key quantities and relationships?
+88. Use deductive reasoning to solve this mathematical problem.
+89. Think through the problem logically and compute the answer.
+90. Employ careful reasoning to understand and solve this problem.
+
+# === CATEGORY 10: EXPERIMENTAL/UNUSUAL (91-100) ===
+91. def solve(problem): return calculate(parse(problem))
+92. <MATH_MODE> Compute answer. </MATH_MODE>
+93. [SYSTEM] Execute: solve_word_problem() -> integer
+94. BEEP BOOP. CALCULATE. OUTPUT NUMBER.
+95. The answer is definitely a number. What number is it?
+96. Pretend you're the world's best calculator. What do you compute?
+97. If this problem were a math test, what would you write as the answer?
+98. Zero in on the numbers. Crunch them. Report back.
+99. Channel your inner mathematician and solve this.
+100. Math time! Solve this problem and give me just the final number.

@@ -42,8 +42,14 @@ uv run python evaluate_gsm8k.py --prompt "Your prompt" --num-samples 5
 - Supports separate task and meta-optimizer models (`--meta-model`)
 
 **GSM8K Evaluator** (`gsm8k_evaluator.py`):
-- Answer extraction: `final_answer: NUMBER`, `#### NUMBER`, `\boxed{NUMBER}`, or last number
+- Answer extraction: **Always extract the last number only** - no format-specific patterns like `####` or `\boxed{}`
 - Numerical comparison with 1e-6 tolerance for floats
+- **Prompt format: Q_end style** (from OPRO paper) - instruction comes AFTER the question:
+  ```
+  Q: {question}
+  {instruction}
+  A:
+  ```
 
 ### HbBoPs (`hbbops/`)
 
@@ -142,6 +148,34 @@ uv run python -m robust_vec2text.run --skip-ape --select-exemplar
 - **Single GP training**: ExemplarSelector GP trains once in `load_grid()` on top-k prompts, then reused for selection
 - APE data augmentation generates 1000 instructions for better VAE training
 - Vec2Text max_length increased to 128 tokens for complete instructions
+
+### COWBOYS Vec2Text (`generation/cowboys_vec2text/`)
+
+**pCN MCMC optimization with VAE latent space and Vec2Text inversion:**
+
+```bash
+# Standard run with visualization (ALWAYS use this, never use --skip-ape)
+uv run python -m generation.cowboys_vec2text.run --visualize --iterations 5
+
+# With trust region enabled
+uv run python -m generation.cowboys_vec2text.run --visualize --iterations 10 --trust-region
+```
+
+**IMPORTANT: Never use `--skip-ape` flag.** APE provides 1000 additional instructions for VAE training, resulting in:
+- Better latent space coverage (1100 vs 100 instructions)
+- Higher VAE reconstruction quality (cosine ~0.98 vs ~0.87)
+- More stable optimization
+
+**VAE Loss Weights (tuned for Vec2Text):**
+- `lambda_cosine=20`: GTR embeddings are L2-normalized, direction matters most
+- `lambda_kld=0.0025`: With annealing (0→target over 500 epochs) to prevent posterior collapse
+- `lambda_cycle=2.0`: Cycle-consistency ||E(D(z)) - z||² ensures Trust Region accuracy
+
+**Architecture:**
+- `InstructionVAE`: 768D → 32D → 768D with cycle-consistency loss
+- `pCNSampler`: Preconditioned Crank-Nicolson MCMC for latent optimization
+- `InstructionSelector`: GP on VAE-decoded embeddings for EI acquisition
+- EI Landscape Visualization: UMAP projection with inversion gap diagnostics
 
 ## Coding Standards
 
