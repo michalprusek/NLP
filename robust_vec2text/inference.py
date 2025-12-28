@@ -16,6 +16,45 @@ from robust_vec2text.encoder import GTRPromptEncoder
 from robust_vec2text.exemplar_selector import ExemplarSelector
 
 
+class NegatedGPModelWrapper(torch.nn.Module):
+    """Wrapper that negates GP predictions for BoTorch maximization.
+
+    BoTorch assumes higher predictions = better. Our GP predicts error rates
+    where lower = better. This wrapper outputs -predictions so BoTorch
+    correctly maximizes (which corresponds to minimizing error).
+    """
+
+    def __init__(self, gp_model, likelihood):
+        super().__init__()
+        self.gp_model = gp_model
+        self.likelihood = likelihood
+        # Copy required attributes from base model for BoTorch compatibility
+        self.train_inputs = gp_model.train_inputs
+        self.train_targets = -gp_model.train_targets  # Negate targets too
+        self.num_outputs = 1  # Required by BoTorch
+
+    def forward(self, X):
+        # Get predictions from base GP
+        self.gp_model.eval()
+        self.likelihood.eval()
+        pred = self.gp_model(X)
+        # Negate mean, keep variance
+        return gpytorch.distributions.MultivariateNormal(-pred.mean, pred.covariance_matrix)
+
+    def posterior(self, X, observation_noise=False, **kwargs):
+        """BoTorch-compatible posterior method."""
+        from botorch.posteriors.gpytorch import GPyTorchPosterior
+
+        self.gp_model.eval()
+        with gpytorch.settings.fast_pred_var():
+            pred = self.gp_model(X.squeeze(-2) if X.dim() > 2 else X)
+            # Negate for minimization → maximization conversion
+            negated_dist = gpytorch.distributions.MultivariateNormal(
+                -pred.mean, pred.covariance_matrix
+            )
+        return GPyTorchPosterior(negated_dist)
+
+
 @dataclass
 class InversionResult:
     """Result of Vec2Text inversion."""
@@ -129,29 +168,93 @@ class RobustInference:
         patience: int = 10,
         xi: float = 0.01,
         use_log_ei: bool = True,
+        n_restarts: int = 5,
+        restart_noise_std: float = 0.5,
         verbose: bool = True,
     ) -> torch.Tensor:
-        """Gradient-based EI optimization in latent space.
+        """Gradient-based EI optimization in latent space with random restarts.
 
         Uses autodiff through GP to maximize Expected Improvement.
         Supports both standard EI and LogEI (BoTorch) for gradient stability.
+        Random restarts help avoid local optima.
 
         Args:
             initial_latent: Starting latent vector (32,)
             best_y: Best observed error rate (for EI)
-            n_steps: Maximum optimization steps
+            n_steps: Maximum optimization steps per restart
             lr: Learning rate
             patience: Early stopping patience (stop if no improvement for N steps)
             xi: EI exploration parameter (only used with standard EI)
             use_log_ei: If True, use BoTorch LogEI (recommended for gradient stability).
                         If False, use standard EI (may have vanishing gradients).
+            n_restarts: Number of random restarts (1 = original behavior)
+            restart_noise_std: Std of Gaussian noise for random starting points
             verbose: Print progress
 
         Returns:
             Optimized latent vector (32,)
         """
+        if verbose and use_log_ei:
+            print("  Using BoTorch LogEI (gradient-stable)")
+        if verbose and n_restarts > 1:
+            print(f"  Running {n_restarts} random restarts (noise_std={restart_noise_std})")
+
+        # Generate starting points
+        starting_points = [initial_latent.clone()]
+        for _ in range(n_restarts - 1):
+            noise = torch.randn_like(initial_latent) * restart_noise_std
+            starting_points.append(initial_latent + noise)
+
+        # Track best across all restarts
+        global_best_ei = float("-inf")
+        global_best_z = initial_latent.clone().detach()
+
+        for restart_idx, start_latent in enumerate(starting_points):
+            if verbose and n_restarts > 1:
+                print(f"  Restart {restart_idx + 1}/{n_restarts}")
+
+            # Run single optimization
+            best_z, best_ei = self._optimize_single_restart(
+                start_latent=start_latent,
+                best_y=best_y,
+                n_steps=n_steps,
+                lr=lr,
+                patience=patience,
+                xi=xi,
+                use_log_ei=use_log_ei,
+                verbose=verbose and (n_restarts == 1),  # Only verbose for single restart
+            )
+
+            if verbose and n_restarts > 1:
+                print(f"    Best EI: {best_ei:.6f}")
+
+            if best_ei > global_best_ei:
+                global_best_ei = best_ei
+                global_best_z = best_z
+
+        if verbose:
+            print(f"  Global best EI: {global_best_ei:.6f}")
+
+        return global_best_z
+
+    def _optimize_single_restart(
+        self,
+        start_latent: torch.Tensor,
+        best_y: float,
+        n_steps: int,
+        lr: float,
+        patience: int,
+        xi: float,
+        use_log_ei: bool,
+        verbose: bool,
+    ) -> Tuple[torch.Tensor, float]:
+        """Run optimization from a single starting point.
+
+        Returns:
+            Tuple of (best_latent, best_ei_value)
+        """
         # Clone and require grad
-        z = initial_latent.clone().detach().to(self.device)
+        z = start_latent.clone().detach().to(self.device)
         z.requires_grad_(True)
 
         optimizer = torch.optim.Adam([z], lr=lr)
@@ -159,9 +262,6 @@ class RobustInference:
         best_ei_value = float("-inf")
         best_z = z.clone().detach()
         patience_counter = 0
-
-        if verbose and use_log_ei:
-            print("  Using BoTorch LogEI (gradient-stable)")
 
         for step in range(n_steps):
             optimizer.zero_grad()
@@ -200,10 +300,7 @@ class RobustInference:
                     print(f"  Early stopping at step {step+1} (no improvement for {patience} steps)")
                 break
 
-        if verbose:
-            print(f"  Best EI: {best_ei_value:.6f}")
-
-        return best_z
+        return best_z, best_ei_value
 
     def _compute_ei_differentiable(
         self,
@@ -330,15 +427,20 @@ class RobustInference:
         selector.gp_model.eval()
         selector.likelihood.eval()
 
-        # Create LogEI acquisition function
-        # Note: BoTorch assumes MAXIMIZATION, but we have error rates (lower is better)
-        # Solution: Negate best_f so that lowest error becomes "highest" value
-        # Also need to account for GP normalization
+        # Create negated wrapper for BoTorch (minimization → maximization)
+        # BoTorch assumes higher predictions = better, but GP predicts error rates
+        # (lower = better). The wrapper negates predictions so BoTorch correctly
+        # maximizes, which corresponds to minimizing error.
+        wrapped_model = NegatedGPModelWrapper(selector.gp_model, selector.likelihood)
+
+        # best_f for BoTorch: normalize and negate
+        # Since wrapper negates predictions, best_f should be -best_y_norm
+        # (the "highest" negated error we've seen = lowest actual error)
         best_y_norm = (best_y - selector.y_mean.item()) / selector.y_std.item()
 
         log_ei_acqf = LogExpectedImprovement(
-            model=selector.gp_model,
-            best_f=-best_y_norm,  # Negate for maximization convention
+            model=wrapped_model,
+            best_f=-best_y_norm,  # Negated best = highest "negated error" seen
         )
 
         # Evaluate LogEI with gradients
