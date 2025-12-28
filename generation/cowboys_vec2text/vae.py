@@ -208,8 +208,9 @@ class InstructionVAE(nn.Module):
         z = z_init.clone().requires_grad_(True)
         optimizer = torch.optim.Adam([z], lr=lr)
 
-        # Ensure target is 1D for loss computation
+        # Ensure target is 1D for loss computation and clone to avoid inference tensor issues
         target = target_embedding.squeeze() if target_embedding.dim() > 1 else target_embedding
+        target = target.clone().detach()  # Clone to allow backward pass
 
         prev_loss = float('inf')
         for step in range(n_steps):
