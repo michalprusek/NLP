@@ -76,10 +76,17 @@ class LatentDecoder(nn.Module):
 
         Returns:
             Embedding (batch, 768) or (768,), L2-normalized if enabled
+
+        Note:
+            For single samples (1D input), temporarily switches to eval mode
+            to avoid BatchNorm instability with batch_size=1.
         """
+        # Handle single sample (BatchNorm needs batch dimension > 1 in training mode)
         was_1d = z.dim() == 1
         if was_1d:
             z = z.unsqueeze(0)
+            was_training = self.decoder.training
+            self.decoder.eval()
 
         embedding = self.decoder(z)
 
@@ -88,6 +95,8 @@ class LatentDecoder(nn.Module):
 
         if was_1d:
             embedding = embedding.squeeze(0)
+            if was_training:
+                self.decoder.train()
 
         return embedding
 

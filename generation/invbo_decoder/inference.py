@@ -711,8 +711,7 @@ class InvBOInference:
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Decode latent to embedding
-            self.decoder.train()  # Enable gradients
+            # Decode latent to embedding (gradients flow through decoder in any mode)
             decoded = self.decoder(z)
 
             # Cosine loss to target
