@@ -1,0 +1,62 @@
+{
+  "best_observed_error": 0.10765731334686279,
+  "candidates": [
+    {
+      "instruction": "            where Hindu isolated Grama 102",
+      "predicted_error": 0.13845598167001327,
+      "ei_value": 0.004690129523283673,
+      "cosine_similarity": -0.10884109884500504
+    },
+    {
+      "instruction": "            2011) where Jimmy Pagano",
+      "predicted_error": 0.14648839650967815,
+      "ei_value": 0.00447587426221795,
+      "cosine_similarity": -0.3555505871772766
+    },
+    {
+      "instruction": "           (\"the place where Tibetan folkpast isolated",
+      "predicted_error": 0.13760313530368506,
+      "ei_value": 0.004439068667145689,
+      "cosine_similarity": -0.14845320582389832
+    },
+    {
+      "instruction": "jade patch known as Pustasy INPUT has the following fragrance properties: Wembley fans have their Strangepast Outstation series",
+      "predicted_error": 0.1521488436811964,
+      "ei_value": 0.003688642855799498,
+      "cosine_similarity": 0.17755883932113647
+    },
+    {
+      "instruction": "for a i-GPA (i-GPA) outgasser but a valve emitter 110B ",
+      "predicted_error": 0.13506575782391295,
+      "ei_value": 0.005241740309361177,
+      "cosine_similarity": -0.0818842202425003
+    }
+  ],
+  "grid_best": [
+    {
+      "instruction_id": 96,
+      "instruction": "If this problem were a math test, what would you write as the answer?",
+      "error_rate": 0.10765731614859742
+    },
+    {
+      "instruction_id": 94,
+      "instruction": "The answer is definitely a number. What number is it?",
+      "error_rate": 0.1463229719484458
+    },
+    {
+      "instruction_id": 75,
+      "instruction": "Make sure your arithmetic is correct. What is the verified answer?",
+      "error_rate": 0.14783927217589088
+    },
+    {
+      "instruction_id": 44,
+      "instruction": "INPUT: word problem -> PROCESS: mathematical operations -> OUTPUT: numerical answer",
+      "error_rate": 0.15087187263078095
+    },
+    {
+      "instruction_id": 93,
+      "instruction": "BEEP BOOP. CALCULATE. OUTPUT NUMBER.",
+      "error_rate": 0.153904473085671
+    }
+  ]
+}
