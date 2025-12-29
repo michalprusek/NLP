@@ -806,7 +806,7 @@ class InvBOInference:
 
             if verbose:
                 print(f"  Sample {i + 1}: gap={gap:.4f}, cosine={cosine:.4f}")
-                print(f"    Text: {text[:60]}...")
+                print(f"    Text: {text}")
 
         stats = {
             "mean_gap": np.mean(gaps),
