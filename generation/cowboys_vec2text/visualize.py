@@ -12,6 +12,7 @@ where MCMC finds high EI and where Vec2Text actually lands.
 """
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
@@ -282,12 +283,19 @@ def visualize_ei_landscape(
             print(f"Warning: Could not draw trust region boundary: {e}")
 
     # Compute diagnostic metrics
+    # Use cosine distance in embedding space (more stable than L2 in latent space)
+    with torch.no_grad():
+        emb_opt = inference.vae.decode(center_latent.unsqueeze(0)).squeeze(0)
+        emb_realized = inference.vae.decode(z_realized.unsqueeze(0)).squeeze(0)
+    cosine_gap = 1 - F.cosine_similarity(
+        emb_opt.unsqueeze(0), emb_realized.unsqueeze(0)
+    ).item()
     gap_2d = float(np.linalg.norm(z_opt_2d - z_realized_2d))
-    gap_32d = float(torch.norm(center_latent - z_realized).item())
+    gap_32d = cosine_gap  # Renamed: now cosine distance in embedding space
 
     # Annotation with metrics
     ax.annotate(
-        f"Gap (32D): {gap_32d:.3f}\nGap (2D): {gap_2d:.3f}",
+        f"Cosine Gap: {gap_32d:.4f}\nGap (2D): {gap_2d:.3f}",
         xy=(z_realized_2d[0], z_realized_2d[1]),
         xytext=(15, 15),
         textcoords="offset points",
