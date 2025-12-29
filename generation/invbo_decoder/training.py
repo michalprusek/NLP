@@ -10,8 +10,9 @@ before training the decoder to invert it.
 import json
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from generation.invbo_decoder.encoder import (
@@ -388,6 +389,95 @@ class InvBOTrainer:
             print(f"  Cosine similarity: {sum(cosine_sims)/len(cosine_sims):.4f} "
                   f"[{min(cosine_sims):.4f}, {max(cosine_sims):.4f}]")
             print(f"  KL divergence: {sum(kl_values)/len(kl_values):.4f}")
+
+    def evaluate_vae_quality(self, verbose: bool = True) -> Dict[str, float]:
+        """Compute comprehensive VAE quality metrics.
+
+        Similar to COWBOYS VAE quality evaluation. Computes:
+        - Reconstruction quality (cosine similarity, MSE)
+        - Latent space statistics (norm, variance per dimension)
+        - KL divergence statistics
+        - Posterior collapse detection
+
+        Args:
+            verbose: Print metrics
+
+        Returns:
+            Dictionary with quality metrics
+        """
+        if self.vae is None:
+            raise RuntimeError("VAE not trained. Call train_vae() first.")
+
+        self.vae.eval()
+
+        # Use all diverse embeddings for evaluation
+        if self.diverse_embeddings is None:
+            # Fallback to grid embeddings
+            embeddings = torch.stack([
+                self.instruction_embeddings[i] for i in sorted(self.error_rates.keys())
+            ]).to(self.device)
+        else:
+            embeddings = self.diverse_embeddings
+
+        with torch.no_grad():
+            x_recon, mu, log_var, z = self.vae(embeddings)
+
+        # Reconstruction metrics
+        cosine_sims = torch.nn.functional.cosine_similarity(embeddings, x_recon, dim=-1)
+        mse_values = ((embeddings - x_recon) ** 2).mean(dim=-1)
+        l2_relative = torch.norm(embeddings - x_recon, dim=-1) / torch.norm(embeddings, dim=-1)
+
+        # Latent space statistics
+        latent_norms = z.norm(dim=-1)
+        latent_var_per_dim = z.var(dim=0)
+
+        # KL divergence
+        kld_per_sample = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1)
+
+        # Posterior collapse detection (dimensions with very low variance)
+        active_dims = (latent_var_per_dim > 0.01).sum().item()
+        total_dims = z.shape[-1]
+
+        metrics = {
+            "cosine_mean": cosine_sims.mean().item(),
+            "cosine_std": cosine_sims.std().item(),
+            "cosine_min": cosine_sims.min().item(),
+            "cosine_max": cosine_sims.max().item(),
+            "mse_mean": mse_values.mean().item(),
+            "mse_std": mse_values.std().item(),
+            "l2_relative_error": l2_relative.mean().item(),
+            "latent_norm_mean": latent_norms.mean().item(),
+            "latent_norm_std": latent_norms.std().item(),
+            "latent_var_mean": latent_var_per_dim.mean().item(),
+            "latent_var_min": latent_var_per_dim.min().item(),
+            "latent_var_max": latent_var_per_dim.max().item(),
+            "active_dims": int(active_dims),
+            "total_dims": int(total_dims),
+            "kld_mean": kld_per_sample.mean().item(),
+            "kld_std": kld_per_sample.std().item(),
+            "posterior_collapsed": active_dims < total_dims * 0.5,
+        }
+
+        if verbose:
+            print("\n--- VAE Quality Metrics ---")
+            print("Reconstruction (Cosine Similarity):")
+            print(f"  Mean: {metrics['cosine_mean']:.4f} | Std: {metrics['cosine_std']:.4f} | "
+                  f"Min: {metrics['cosine_min']:.4f} | Max: {metrics['cosine_max']:.4f}")
+            print("Reconstruction (MSE):")
+            print(f"  Mean: {metrics['mse_mean']:.6f} | Std: {metrics['mse_std']:.6f}")
+            print(f"  Relative L2 Error: {metrics['l2_relative_error']:.4f}")
+            print("Latent Space:")
+            print(f"  Norm: mean={metrics['latent_norm_mean']:.4f}, std={metrics['latent_norm_std']:.4f}")
+            print(f"  Variance per dim: mean={metrics['latent_var_mean']:.4f}, "
+                  f"min={metrics['latent_var_min']:.4f}, max={metrics['latent_var_max']:.4f}")
+            print(f"  Active dimensions (var>0.01): {metrics['active_dims']}/{metrics['total_dims']}")
+            print("KL Divergence:")
+            print(f"  Mean: {metrics['kld_mean']:.4f} | Std: {metrics['kld_std']:.4f}")
+            if metrics['posterior_collapsed']:
+                print("  WARNING: Posterior may be collapsed!")
+            print("----------------------------")
+
+        return metrics
 
     def train_gp_with_vae(self, verbose: bool = True) -> bool:
         """Train GP using VAE encoder for latent representation.

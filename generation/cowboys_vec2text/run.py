@@ -211,6 +211,7 @@ def main():
     # Model
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct")
     parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "openai", "deepinfra"])
+    parser.add_argument("--skip-eval", action="store_true", help="Skip LLM evaluation (use GP prediction as error rate)")
 
     # MCMC parameters
     parser.add_argument("--mcmc-steps", type=int, default=500, help="MCMC steps per chain")
@@ -226,7 +227,7 @@ def main():
     parser.add_argument("--tr-max", type=float, default=5.0, help="Maximum trust region radius")
     parser.add_argument("--tr-expand", type=float, default=2.0, help="Trust region expand factor")
     parser.add_argument("--tr-contract", type=float, default=0.5, help="Trust region contract factor")
-    parser.add_argument("--trust-region", action="store_true", default=True, help="Enable trust region (enabled by default)")
+    parser.add_argument("--trust-region", action="store_true", default=False, help="Enable trust region (disabled by default)")
     parser.add_argument("--no-trust-region", action="store_false", dest="trust_region", help="Disable trust region")
 
     # Weighted retraining parameters
@@ -466,9 +467,13 @@ def main():
     log("=" * 60)
 
     # Create evaluation client once (reused for all iterations)
-    from src.llm_client import create_llm_client
-    eval_client = create_llm_client(args.model, args.backend)
-    log("Initialized evaluation LLM client")
+    eval_client = None
+    if not args.skip_eval:
+        from src.llm_client import create_llm_client
+        eval_client = create_llm_client(args.model, args.backend)
+        log("Initialized evaluation LLM client")
+    else:
+        log("Skipping LLM evaluation (--skip-eval mode, using GP predictions)")
 
     best_error = best_prompt.error_rate
     best_instruction = best_prompt.instruction
@@ -540,15 +545,23 @@ def main():
         log(f"  Evaluating instruction:")
         log(f"    {novel_instruction}")
 
-        novel_error = evaluate_prompt(
-            novel_instruction,
-            validation_data,
-            args.model,
-            args.backend,
-            client=eval_client,
-        )
-
-        log(f"  Error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
+        if args.skip_eval:
+            # Use GP prediction as error rate (no LLM required)
+            inst_emb_for_pred = optimizer.gtr.encode_tensor(best_result.text).to(optimizer.device)
+            decoded_emb_for_pred = optimizer.get_decoded_embedding(best_result.text)
+            with torch.no_grad():
+                novel_error, _ = optimizer.instruction_selector.predict_error(decoded_emb_for_pred)
+            log(f"  GP-predicted error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
+            log(f"  [--skip-eval mode: no LLM evaluation]")
+        else:
+            novel_error = evaluate_prompt(
+                novel_instruction,
+                validation_data,
+                args.model,
+                args.backend,
+                client=eval_client,
+            )
+            log(f"  Error rate: {novel_error:.4f} (accuracy: {(1-novel_error)*100:.2f}%)")
 
         # 4. Update GP with new observation using InvBO-style decoder inversion
         log("\n--- Updating GP (InvBO-aligned) ---")

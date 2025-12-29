@@ -440,3 +440,59 @@ class GPWithEI:
             latent = self.feature_extractor(X_norm)
 
         return latent.squeeze(0)
+
+    def add_observation_and_retrain(
+        self,
+        embedding: torch.Tensor,
+        error_rate: float,
+        epochs: int = 500,
+        patience: int = 10,
+        verbose: bool = False,
+    ) -> bool:
+        """Add new observation and retrain GP.
+
+        Used during iterative optimization to incorporate new data points.
+        Performs full retraining of the GP with updated training data.
+
+        Args:
+            embedding: New instruction embedding (768,)
+            error_rate: Observed error rate for this embedding
+            epochs: Training epochs for retraining
+            patience: Early stopping patience
+            verbose: Print progress
+
+        Returns:
+            True if retraining succeeded
+        """
+        if self.X_train is None or self.y_train is None:
+            raise RuntimeError("No training data. Call set_training_data() first.")
+
+        # Add new observation
+        embedding = embedding.to(self.device)
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+
+        self.X_train = torch.cat([self.X_train, embedding], dim=0)
+        self.y_train = torch.cat([
+            self.y_train,
+            torch.tensor([error_rate], dtype=torch.float32, device=self.device)
+        ])
+
+        # Update best
+        if error_rate < self.y_best:
+            self.y_best = error_rate
+
+        if verbose:
+            print(f"  GP updated (total samples: {len(self.y_train)})")
+
+        # Retrain
+        return self.train(
+            epochs=epochs,
+            lr=0.01,
+            patience=patience,
+            verbose=verbose,
+        )
+
+    def get_training_size(self) -> int:
+        """Get number of training samples."""
+        return len(self.y_train) if self.y_train is not None else 0

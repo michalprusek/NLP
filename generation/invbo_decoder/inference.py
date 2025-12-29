@@ -17,6 +17,25 @@ from typing import Optional, List, Tuple
 from generation.invbo_decoder.encoder import GTRInstructionEncoder, InstructionVAE, InstructionFeatureExtractor
 from generation.invbo_decoder.gp import GPWithEI
 from generation.invbo_decoder.decoder import LatentDecoder
+from generation.invbo_decoder.trust_region import TrustRegionManager, TRConfig
+
+
+@dataclass
+class IterationRecord:
+    """Record of a single optimization iteration."""
+
+    iteration: int
+    instruction: str
+    cosine_similarity: float
+    predicted_error: float
+    actual_error: Optional[float]  # None if skip_eval mode
+    gap: float
+    improved: bool
+    best_error_so_far: float
+    trust_region_radius: Optional[float]
+    gp_samples: int
+    log_ei: Optional[float] = None
+    inversion_iters: int = 1
 
 
 @dataclass
@@ -162,6 +181,7 @@ class InvBOInference:
         gtr: Optional[GTRInstructionEncoder] = None,
         vec2text_steps: int = 50,
         vec2text_beam: int = 4,
+        trust_region_config: Optional[TRConfig] = None,
     ):
         """Initialize inference pipeline.
 
@@ -171,6 +191,7 @@ class InvBOInference:
             gtr: GTR encoder (for validation)
             vec2text_steps: Vec2Text correction steps
             vec2text_beam: Vec2Text beam width
+            trust_region_config: Optional trust region configuration
         """
         self.gp = gp
         self.decoder = decoder
@@ -182,6 +203,198 @@ class InvBOInference:
             beam_width=vec2text_beam,
             device=str(self.device),
         )
+
+        # Trust region (initialized lazily)
+        self.trust_region: Optional[TrustRegionManager] = None
+        self.trust_region_config = trust_region_config
+
+    def init_trust_region(self, anchor_latent: torch.Tensor) -> TrustRegionManager:
+        """Initialize trust region around anchor latent.
+
+        Args:
+            anchor_latent: Best known latent (10,)
+
+        Returns:
+            Initialized TrustRegionManager
+        """
+        config = self.trust_region_config or TRConfig()
+        self.trust_region = TrustRegionManager(
+            anchor=anchor_latent,
+            config=config,
+            device=str(self.device),
+        )
+        return self.trust_region
+
+    def get_best_training_latent(self) -> Tuple[torch.Tensor, int, float]:
+        """Get latent of best training sample (lowest error).
+
+        Returns:
+            (latent, index, error_rate) tuple
+        """
+        best_idx = self.gp.y_train.argmin().item()
+        best_error = self.gp.y_train[best_idx].item()
+
+        # Get latent for best embedding
+        best_embedding = self.gp.X_train[best_idx]
+        best_latent = self.gp.get_latent(best_embedding)
+
+        return best_latent, best_idx, best_error
+
+    def optimize_latent_adaptive(
+        self,
+        n_candidates: int = 500,
+        xi: float = 0.01,
+        use_trust_region: bool = True,
+        verbose: bool = True,
+    ) -> Tuple[torch.Tensor, float]:
+        """Optimize latent using adaptive trust region sampling.
+
+        Combines trust region constraints with EI optimization.
+        Best for iterative optimization as it respects trust region bounds.
+
+        Args:
+            n_candidates: Number of candidates to sample
+            xi: EI exploration parameter
+            use_trust_region: Whether to use trust region constraints
+            verbose: Print progress
+
+        Returns:
+            (optimal_latent, log_ei) tuple
+        """
+        if use_trust_region and self.trust_region is None:
+            # Initialize trust region from best training sample
+            best_latent, _, _ = self.get_best_training_latent()
+            self.init_trust_region(best_latent)
+
+        if verbose:
+            if use_trust_region:
+                print(f"Sampling {n_candidates} candidates in trust region (radius={self.trust_region.radius:.4f})...")
+            else:
+                print(f"Sampling {n_candidates} candidates globally...")
+
+        best_z = None
+        best_log_ei = -float("inf")
+
+        self.decoder.eval()
+
+        for i in range(n_candidates):
+            if use_trust_region:
+                z = self.trust_region.sample_in_region(n_samples=1)
+            else:
+                z = self.sample_in_trust_region(n_samples=1, radius=0.3)
+
+            with torch.no_grad():
+                embedding = self.decoder(z)
+
+            log_ei = self.gp.log_expected_improvement(embedding, xi=xi)
+
+            if log_ei > best_log_ei:
+                best_log_ei = log_ei
+                best_z = z
+
+        if verbose:
+            print(f"  Best LogEI: {best_log_ei:.4f}")
+
+        return best_z, best_log_ei
+
+    def run_single_iteration(
+        self,
+        n_candidates: int = 500,
+        use_trust_region: bool = True,
+        use_inversion: bool = True,
+        max_inversion_iters: int = 3,
+        gap_threshold: float = 0.1,
+        xi: float = 0.01,
+        verbose: bool = True,
+    ) -> Tuple[InversionResult, float, float]:
+        """Run a single optimization iteration.
+
+        Suitable for iterative optimization loop. Returns all data
+        needed for GP retraining and tracking.
+
+        Args:
+            n_candidates: Number of candidates for latent optimization
+            use_trust_region: Whether to use trust region constraints
+            use_inversion: Use InvBO inversion loop
+            max_inversion_iters: Maximum inversion iterations
+            gap_threshold: Threshold for re-inversion
+            xi: EI exploration parameter
+            verbose: Print progress
+
+        Returns:
+            (result, gap, log_ei) tuple where:
+            - result: InversionResult with instruction and metrics
+            - gap: Cosine gap between z_opt and z_inv embeddings
+            - log_ei: Log expected improvement at z_opt
+        """
+        # Optimize latent
+        z_opt, log_ei = self.optimize_latent_adaptive(
+            n_candidates=n_candidates,
+            xi=xi,
+            use_trust_region=use_trust_region,
+            verbose=verbose,
+        )
+
+        # Decode to embedding
+        self.decoder.eval()
+        with torch.no_grad():
+            embedding = self.decoder(z_opt)
+
+        # Invert to text
+        text = self.inverter.invert(embedding.clone())
+
+        if verbose:
+            print(f"  Generated:\n{text}")
+
+        # Inversion loop if enabled
+        gap = 0.0
+        inv_iters = 1
+        if use_inversion:
+            for inv_iter in range(max_inversion_iters):
+                inv_result = self.inversion_step(text, n_steps=100, lr=0.1, verbose=False)
+                gap = inv_result.gap
+
+                if gap <= gap_threshold:
+                    if verbose:
+                        print(f"  Gap {gap:.4f} <= {gap_threshold}, accepting")
+                    break
+
+                if verbose:
+                    print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
+
+                # Re-decode from inverted latent
+                z_opt = inv_result.z_inv
+                with torch.no_grad():
+                    embedding = self.decoder(z_opt)
+                text = self.inverter.invert(embedding.clone())
+                inv_iters += 1
+
+                if verbose:
+                    print(f"  Re-generated:\n{text}")
+
+        # Re-encode for validation
+        reencoded = self.gtr.encode_tensor(text)
+        cosine_sim = F.cosine_similarity(
+            embedding.unsqueeze(0), reencoded.unsqueeze(0)
+        ).item()
+
+        if verbose:
+            print(f"  Cosine similarity: {cosine_sim:.4f}")
+
+        # GP prediction
+        pred_mean, pred_std = self.gp.predict(embedding)
+        ei = self.gp.expected_improvement(embedding)
+
+        result = InversionResult(
+            instruction_text=text,
+            latent=z_opt,
+            embedding=embedding,
+            cosine_similarity=cosine_sim,
+            predicted_error=pred_mean,
+            ei_value=ei,
+        )
+
+        return result, gap, log_ei
 
     def optimize_latent_lbfgs(
         self,
