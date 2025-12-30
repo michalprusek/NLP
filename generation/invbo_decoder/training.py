@@ -24,6 +24,37 @@ from generation.invbo_decoder.gp import GPWithEI
 from generation.invbo_decoder.decoder import LatentDecoder, DecoderCyclicLoss
 
 
+class VAEWithAdapter(nn.Module):
+    """Wrapper combining frozen VAE encoder with trainable adapter.
+
+    Used in VAE mode to allow GP's feature extractor to learn
+    while keeping VAE weights fixed. The adapter is a small MLP
+    that transforms VAE latents.
+    """
+
+    def __init__(self, vae: nn.Module, latent_dim: int):
+        super().__init__()
+        # Freeze VAE (don't register as submodule to avoid saving it twice)
+        object.__setattr__(self, '_vae', vae)
+        vae.eval()
+        for param in vae.parameters():
+            param.requires_grad = False
+
+        # Trainable adapter: transforms VAE latents for GP
+        self.adapter = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim * 2),
+            nn.ReLU(),
+            nn.LayerNorm(latent_dim * 2),
+            nn.Linear(latent_dim * 2, latent_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # VAE encoding (frozen params, but gradients flow through)
+        z = self._vae.encode_mu(x)
+        # Trainable adapter
+        return self.adapter(z)
+
+
 @dataclass
 class TrainingConfig:
     """Configuration for InvBO training."""
@@ -539,32 +570,7 @@ class InvBOTrainer:
         # Initialize GP with VAE encoder wrapper
         self.gp = GPWithEI(device=str(self.device), latent_dim=self.config.latent_dim)
 
-        # Create a wrapper with frozen VAE + trainable adapter
-        # The adapter (10→10 MLP) allows GP to learn while VAE stays fixed
-        class VAEWithAdapter(nn.Module):
-            def __init__(self, vae, latent_dim):
-                super().__init__()
-                # Freeze VAE (don't register as submodule)
-                object.__setattr__(self, '_vae', vae)
-                vae.eval()
-                for param in vae.parameters():
-                    param.requires_grad = False
-
-                # Trainable adapter: transforms VAE latents for GP
-                self.adapter = nn.Sequential(
-                    nn.Linear(latent_dim, latent_dim * 2),
-                    nn.ReLU(),
-                    nn.LayerNorm(latent_dim * 2),
-                    nn.Linear(latent_dim * 2, latent_dim),
-                )
-
-            def forward(self, x):
-                # VAE encoding (frozen params, but gradients flow through)
-                z = self._vae.encode_mu(x)
-                # Trainable adapter
-                return self.adapter(z)
-
-        # Set training data - use raw embeddings, GP will use feature extractor
+        # Use VAEWithAdapter: frozen VAE + trainable adapter for GP feature extraction
         self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
         self.gp.set_training_data(X, y)
 
@@ -967,19 +973,8 @@ class InvBOTrainer:
             ).to(self.device)
             self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
-            # Create VAE encoder wrapper (without registering VAE as submodule)
-            class VAEEncoderWrapper(nn.Module):
-                def __init__(self, vae):
-                    super().__init__()
-                    object.__setattr__(self, '_vae', vae)
-                    vae.eval()
-                    for param in vae.parameters():
-                        param.requires_grad = False
-
-                def forward(self, x):
-                    return self._vae.encode_mu(x)
-
-            self.gp.feature_extractor = VAEEncoderWrapper(self.vae).to(self.device)
+            # Use VAEWithAdapter (same as training) to ensure state_dict compatibility
+            self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
 
             # Create VAE decoder wrapper (without registering VAE as submodule)
             class VAEDecoderWrapper(nn.Module):

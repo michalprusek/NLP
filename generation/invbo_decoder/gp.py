@@ -292,7 +292,7 @@ class GPWithEI:
         self.y_std = self.outcome_transform.stdvs.squeeze()
 
         # Initialize feature extractor only if not already set
-        # (VAE mode pre-sets VAEEncoderWrapper before calling train())
+        # (VAE mode pre-sets VAEWithAdapter before calling train())
         if self.feature_extractor is None:
             self.feature_extractor = InstructionFeatureExtractor(
                 input_dim=768, latent_dim=self.latent_dim
@@ -637,7 +637,7 @@ class GPWithEI:
         self.y_std = self.outcome_transform.stdvs.squeeze()
 
         # IMPORTANT: Keep existing feature_extractor!
-        # In VAE mode, this is VAEEncoderWrapper - don't replace it.
+        # In VAE mode, this is VAEWithAdapter - don't replace it.
 
         # Save old GP kernel hyperparameters for warm-start
         old_covar_state = None
