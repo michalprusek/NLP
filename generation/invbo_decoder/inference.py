@@ -64,7 +64,10 @@ class InversionResult:
 class Vec2TextInverter:
     """Vec2Text embedding-to-text inverter.
 
-    Uses ielabgroup/vec2text_gtr-base-st_* models for inversion.
+    Supports two model types:
+    - "32_tokens": ielabgroup/vec2text_gtr-base-st_* with corrector (default, 32 token limit)
+    - "512_tokens": vec2text/gtr-512-noise-0.00001 without corrector (512 token limit)
+
     Lazily loads models on first use.
     """
 
@@ -74,20 +77,27 @@ class Vec2TextInverter:
         beam_width: int = 4,
         max_length: int = 128,
         device: str = "auto",
+        model_type: str = "32_tokens",
     ):
         """Initialize inverter.
 
         Args:
-            num_steps: Correction iterations
+            num_steps: Correction iterations (for 32_tokens) or max_new_tokens (for 512_tokens)
             beam_width: Beam search width
             max_length: Maximum output length
             device: Device to use
+            model_type: "32_tokens" (with corrector) or "512_tokens" (InversionModel only)
         """
+        if model_type not in ("32_tokens", "512_tokens"):
+            raise ValueError(f"model_type must be '32_tokens' or '512_tokens', got '{model_type}'")
+
         self.num_steps = num_steps
         self.beam_width = beam_width
         self.max_length = max_length
         self.device = self._get_device(device)
+        self.model_type = model_type
         self._corrector = None
+        self._inversion_model = None
 
     def _get_device(self, device: str) -> str:
         if device == "auto":
@@ -98,8 +108,15 @@ class Vec2TextInverter:
             return "cpu"
         return device
 
-    def _load_corrector(self):
-        """Lazy load Vec2Text corrector."""
+    def _load_model(self):
+        """Lazy load Vec2Text model based on model_type."""
+        if self.model_type == "32_tokens":
+            self._load_32_tokens()
+        else:
+            self._load_512_tokens()
+
+    def _load_32_tokens(self):
+        """Load ielabgroup Vec2Text corrector (with InversionModel + CorrectorEncoderModel, 32 token limit)."""
         if self._corrector is not None:
             return
 
@@ -110,7 +127,7 @@ class Vec2TextInverter:
         from vec2text.models.inversion import InversionModel
         from vec2text.models.corrector_encoder import CorrectorEncoderModel
 
-        print("Loading Vec2Text models...")
+        print("Loading Vec2Text models (32_tokens: ielabgroup with corrector)...")
 
         # Load InversionModel
         inv_weights = hf_hub_download(
@@ -135,7 +152,45 @@ class Vec2TextInverter:
         corrector_model = corrector_model.to(self.device).eval()
 
         self._corrector = vec2text.load_corrector(inversion_model, corrector_model)
-        print(f"  Vec2Text loaded on {self.device}")
+        print(f"  Vec2Text (32_tokens) loaded on {self.device}")
+
+    def _load_512_tokens(self):
+        """Load Vec2Text InversionModel (without corrector, 512 token limit)."""
+        if self._inversion_model is not None:
+            return
+
+        import os
+        import json
+        from safetensors.torch import load_file
+        from huggingface_hub import snapshot_download
+        from vec2text.models.config import InversionConfig
+        from vec2text.models.inversion import InversionModel
+
+        print("Loading Vec2Text InversionModel (512_tokens: gtr-512-noise-0.00001)...")
+
+        model_dir = snapshot_download("vec2text/gtr-512-noise-0.00001")
+        config = InversionConfig.from_pretrained(model_dir)
+        print(f"  Config: max_seq_length={config.max_seq_length}")
+
+        self._inversion_model = InversionModel(config)
+
+        # Load sharded weights
+        index_path = os.path.join(model_dir, "model.safetensors.index.json")
+        with open(index_path) as f:
+            index = json.load(f)
+
+        shard_files = set(index["weight_map"].values())
+
+        state_dict = {}
+        for shard_file in shard_files:
+            shard_path = os.path.join(model_dir, shard_file)
+            shard_dict = load_file(shard_path)
+            state_dict.update(shard_dict)
+
+        self._inversion_model.load_state_dict(state_dict, strict=False)
+        self._inversion_model = self._inversion_model.to(self.device).eval()
+
+        print(f"  Vec2Text (512_tokens) loaded on {self.device}")
 
     def invert(self, embedding: torch.Tensor) -> str:
         """Invert embedding to text.
@@ -146,13 +201,20 @@ class Vec2TextInverter:
         Returns:
             Reconstructed text
         """
-        self._load_corrector()
-
-        import vec2text
+        self._load_model()
 
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
+
+        if self.model_type == "32_tokens":
+            return self._invert_32_tokens(embedding)
+        else:
+            return self._invert_512_tokens(embedding)
+
+    def _invert_32_tokens(self, embedding: torch.Tensor) -> str:
+        """Invert using ielabgroup corrector (32 token limit)."""
+        import vec2text
 
         result = vec2text.invert_embeddings(
             embeddings=embedding,
@@ -162,6 +224,25 @@ class Vec2TextInverter:
         )
 
         return result[0] if isinstance(result, list) else result
+
+    def _invert_512_tokens(self, embedding: torch.Tensor) -> str:
+        """Invert using InversionModel direct generation (512 token limit)."""
+        gen_kwargs = {
+            "num_beams": self.beam_width,
+            "max_length": self.max_length,
+            "no_repeat_ngram_size": 3,
+            "repetition_penalty": 1.2,
+        }
+
+        with torch.no_grad():
+            output_ids = self._inversion_model.generate(
+                inputs={"frozen_embeddings": embedding},
+                generation_kwargs=gen_kwargs,
+            )
+
+        tokenizer = self._inversion_model.tokenizer
+        result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        return result.strip()
 
 
 class InvBOInference:
@@ -181,7 +262,9 @@ class InvBOInference:
         gtr: Optional[GTRInstructionEncoder] = None,
         vec2text_steps: int = 50,
         vec2text_beam: int = 4,
+        vec2text_model: str = "ielabgroup",
         trust_region_config: Optional[TRConfig] = None,
+        seed: Optional[int] = None,
     ):
         """Initialize inference pipeline.
 
@@ -191,17 +274,21 @@ class InvBOInference:
             gtr: GTR encoder (for validation)
             vec2text_steps: Vec2Text correction steps
             vec2text_beam: Vec2Text beam width
+            vec2text_model: "ielabgroup" (with corrector) or "cowboys" (simpler)
             trust_region_config: Optional trust region configuration
+            seed: Random seed for reproducible optimization
         """
         self.gp = gp
         self.decoder = decoder
         self.device = gp.device
+        self.seed = seed
 
         self.gtr = gtr if gtr is not None else GTRInstructionEncoder(device=str(self.device))
         self.inverter = Vec2TextInverter(
             num_steps=vec2text_steps,
             beam_width=vec2text_beam,
             device=str(self.device),
+            model_type=vec2text_model,
         )
 
         # Trust region (initialized lazily)
@@ -239,6 +326,82 @@ class InvBOInference:
         best_latent = self.gp.get_latent(best_embedding)
 
         return best_latent, best_idx, best_error
+
+    def _get_latent_bounds(self, margin: float = 0.2) -> torch.Tensor:
+        """Compute latent space bounds from training data.
+
+        Args:
+            margin: Fraction to expand bounds beyond training data range
+
+        Returns:
+            Bounds tensor, shape (2, latent_dim)
+        """
+        from generation.invbo_decoder.botorch_acq import get_latent_bounds
+
+        return get_latent_bounds(
+            encoder=self.gp.feature_extractor,
+            X_train=self.gp.X_train,
+            X_min=self.gp.X_min,
+            X_max=self.gp.X_max,
+            margin=margin,
+        )
+
+    def optimize_latent_botorch(
+        self,
+        num_restarts: int = 20,
+        raw_samples: int = 512,
+        verbose: bool = True,
+    ) -> Tuple[torch.Tensor, float]:
+        """Optimize latent using BoTorch qLogExpectedImprovement.
+
+        Uses multi-start L-BFGS-B with proper gradient flow through:
+            latent z -> decoder -> embedding -> GP posterior -> qLogEI
+
+        This is the recommended optimization method as it:
+        1. Uses numerically stable LogEI formulation
+        2. Provides proper gradient-based optimization
+        3. Uses sophisticated multi-start initialization
+
+        Args:
+            num_restarts: Number of L-BFGS-B restarts (default: 20)
+            raw_samples: Raw samples for initialization seeding (default: 512)
+            verbose: Print progress
+
+        Returns:
+            (optimal_latent, log_ei) tuple where:
+            - optimal_latent: Best latent tensor, shape (10,)
+            - log_ei: Log expected improvement value at optimal point
+        """
+        from generation.invbo_decoder.botorch_acq import LatentSpaceAcquisition
+
+        if verbose:
+            print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
+
+        # Get latent bounds from training data
+        bounds = self._get_latent_bounds(margin=0.2)
+
+        # Create acquisition optimizer
+        acq_optimizer = LatentSpaceAcquisition(
+            gp_model=self.gp.gp_model,
+            decoder=self.decoder,
+            bounds=bounds,
+            device=self.device,
+        )
+
+        # Optimize - best_f is best observed error rate (we minimize error)
+        best_f = self.gp.y_best
+        z_opt, log_ei = acq_optimizer.optimize(
+            best_f=best_f,
+            num_restarts=num_restarts,
+            raw_samples=raw_samples,
+            seed=self.seed,
+        )
+
+        if verbose:
+            print(f"  BoTorch LogEI: {log_ei.item():.4f}")
+
+        # Return as 1D tensor
+        return z_opt.squeeze(), log_ei.item()
 
     def optimize_latent_adaptive(
         self,
@@ -299,26 +462,24 @@ class InvBOInference:
 
     def run_single_iteration(
         self,
-        n_candidates: int = 500,
-        use_trust_region: bool = True,
+        num_restarts: int = 20,
+        raw_samples: int = 512,
         use_inversion: bool = True,
         max_inversion_iters: int = 3,
         gap_threshold: float = 0.1,
-        xi: float = 0.01,
         verbose: bool = True,
     ) -> Tuple[InversionResult, float, float]:
-        """Run a single optimization iteration.
+        """Run a single optimization iteration using BoTorch qLogEI.
 
-        Suitable for iterative optimization loop. Returns all data
-        needed for GP retraining and tracking.
+        Uses BoTorch's gradient-based LogEI optimization with multi-start
+        L-BFGS-B for finding optimal latent points.
 
         Args:
-            n_candidates: Number of candidates for latent optimization
-            use_trust_region: Whether to use trust region constraints
+            num_restarts: Number of L-BFGS-B restarts for BoTorch optimization
+            raw_samples: Raw samples for initialization seeding
             use_inversion: Use InvBO inversion loop
             max_inversion_iters: Maximum inversion iterations
             gap_threshold: Threshold for re-inversion
-            xi: EI exploration parameter
             verbose: Print progress
 
         Returns:
@@ -327,11 +488,10 @@ class InvBOInference:
             - gap: Cosine gap between z_opt and z_inv embeddings
             - log_ei: Log expected improvement at z_opt
         """
-        # Optimize latent
-        z_opt, log_ei = self.optimize_latent_adaptive(
-            n_candidates=n_candidates,
-            xi=xi,
-            use_trust_region=use_trust_region,
+        # Optimize latent using BoTorch qLogEI
+        z_opt, log_ei = self.optimize_latent_botorch(
+            num_restarts=num_restarts,
+            raw_samples=raw_samples,
             verbose=verbose,
         )
 

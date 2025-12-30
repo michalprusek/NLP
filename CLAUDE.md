@@ -179,19 +179,20 @@ uv run python -m generation.cowboys_vec2text.run --visualize --iterations 10 --t
 
 ### InvBO Decoder (`generation/invbo_decoder/`)
 
-**LogEI-based Bayesian optimization with VAE latent space:**
+**LogEI-based Bayesian optimization with VAE latent space and gradient-based acquisition:**
 
 ```bash
-# Standard run
-uv run python -m generation.invbo_decoder.run --use-vae --use-inversion --iterations 5
+# Standard run (VAE enabled by default, gradient optimization enabled by default)
+uv run python -m generation.invbo_decoder.run --iterations 10
 
-# With optimal hyperparameters
+# With custom hyperparameters
 uv run python -m generation.invbo_decoder.run \
-    --use-vae --use-inversion --iterations 50 \
-    --vae-beta 0.05 --vae-annealing 300 --skip-eval
+    --iterations 50 --vae-beta 0.05 --vae-annealing 300
 ```
 
-**IMPORTANT: Never use `--trust-region` flag** - it doesn't work well in practice and causes optimization instability.
+**IMPORTANT:**
+- **Never use `--trust-region` flag** - it doesn't work well in practice and causes optimization instability.
+- **Always evaluate on full validation set (1319 samples)** - this is the default. Never reduce `--eval-samples` for final results.
 
 **Architecture:**
 - `InstructionVAE`: 768D GTR → 10D latent → 768D with KL annealing

@@ -15,6 +15,7 @@ from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.constraints import GreaterThan
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
+from botorch.models.transforms.outcome import Standardize
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional
@@ -82,6 +83,45 @@ def log_h(z: float) -> float:
         # Asymptotic branch: z ≤ -1/√ε
         # log_h(z) ≈ -z²/2 - c1 - 2·log(|z|)
         return -z * z / 2 - _C1 - 2 * math.log(abs(z))
+
+
+def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
+    """Tensor version of log_h that supports autograd.
+
+    Numerically stable computation of log(h(z)) where h(z) = φ(z) + z·Φ(z).
+    Uses piecewise approximation with smooth transitions for gradient stability.
+
+    Args:
+        z: Standardized improvement tensor (can be batched)
+
+    Returns:
+        log(h(z)) tensor with gradients preserved
+    """
+    # Constants
+    LOG_SQRT_2PI = 0.5 * math.log(2 * math.pi)
+    SQRT_2 = math.sqrt(2)
+
+    # Standard normal PDF and CDF
+    phi_z = torch.exp(-0.5 * z * z) / math.sqrt(2 * math.pi)
+    # Use error function for CDF: Φ(z) = 0.5 * (1 + erf(z/√2))
+    Phi_z = 0.5 * (1 + torch.erf(z / SQRT_2))
+
+    # h(z) = φ(z) + z * Φ(z)
+    h_z = phi_z + z * Phi_z
+
+    # Clamp to avoid log(0) - use small positive value
+    h_z_clamped = h_z.clamp(min=1e-40)
+
+    # For very negative z, use asymptotic approximation
+    # log_h(z) ≈ -z²/2 - log(2π)/2 - 2*log(|z|) for z << -1
+    log_h_asymptotic = -0.5 * z * z - LOG_SQRT_2PI - 2 * torch.log(torch.abs(z).clamp(min=1e-10))
+
+    # Use asymptotic for z < -5, direct for z >= -5
+    # Smooth transition using sigmoid
+    weight = torch.sigmoid(5 * (z + 5))  # 0 for z << -5, 1 for z >> -5
+    log_h_direct = torch.log(h_z_clamped)
+
+    return weight * log_h_direct + (1 - weight) * log_h_asymptotic
 
 
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
@@ -240,21 +280,35 @@ class GPWithEI:
         denom[denom == 0] = 1.0
         X_norm = (X - self.X_min) / denom
 
-        # Z-score standardization for outputs
-        self.y_mean = y.mean()
-        self.y_std = y.std() + 1e-6
-        y_norm = (y - self.y_mean) / self.y_std
+        # Standardize output transform (BoTorch standard approach)
+        # This replaces manual z-score normalization and ensures correct
+        # denormalization with posterior() and acquisition functions
+        self.outcome_transform = Standardize(m=1).to(self.device)
+        y_transformed, _ = self.outcome_transform(y.unsqueeze(-1))
+        y_norm = y_transformed.squeeze(-1)
 
-        # Initialize model
-        self.feature_extractor = InstructionFeatureExtractor(
-            input_dim=768, latent_dim=self.latent_dim
-        ).to(self.device)
+        # Keep y_mean/y_std for backwards compatibility with LogEI methods
+        self.y_mean = self.outcome_transform.means.squeeze()
+        self.y_std = self.outcome_transform.stdvs.squeeze()
+
+        # Initialize feature extractor only if not already set
+        # (VAE mode pre-sets VAEEncoderWrapper before calling train())
+        if self.feature_extractor is None:
+            self.feature_extractor = InstructionFeatureExtractor(
+                input_dim=768, latent_dim=self.latent_dim
+            ).to(self.device)
+        # Noise constraint - use 1e-4 as per BoTorch recommendation
+        # Higher noise (0.1) was causing underfitting
         self.likelihood = GaussianLikelihood(
-            noise_constraint=GreaterThan(1e-3)  # Relaxed from 1e-4 for stability
+            noise_constraint=GreaterThan(1e-4)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.feature_extractor
         ).to(self.device)
+
+        # Register outcome transform for BoTorch compatibility
+        # This allows qLogEI to automatically untransform predictions
+        self.gp_model.outcome_transform = self.outcome_transform
 
         # Training loop
         self.gp_model.train()
@@ -417,6 +471,59 @@ class GPWithEI:
         # LogEI = log_h(z) + log(σ)
         return log_h(z) + math.log(std)
 
+    def log_expected_improvement_tensor(
+        self,
+        embedding: torch.Tensor,
+        xi: float = 0.01,
+    ) -> torch.Tensor:
+        """Compute Log Expected Improvement as a differentiable tensor.
+
+        This version maintains gradients for optimization, allowing backprop
+        through the decoder -> embedding -> GP -> LogEI chain.
+
+        Args:
+            embedding: Instruction embedding (768,) or (1, 768) - requires_grad allowed
+            xi: Exploration-exploitation trade-off (default 0.01)
+
+        Returns:
+            LogEI as scalar tensor with gradient support
+        """
+        if self.gp_model is None or self.y_best is None:
+            return torch.tensor(float("-inf"), device=self.device)
+
+        # Ensure correct shape
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+        embedding = embedding.to(self.device)
+
+        # Normalize (preserving gradients)
+        denom = self.X_max - self.X_min
+        denom = denom.clone()
+        denom[denom == 0] = 1.0
+        X_norm = (embedding - self.X_min) / denom
+
+        # Get GP prediction with gradients
+        self.gp_model.eval()
+        self.likelihood.eval()
+
+        with gpytorch.settings.fast_pred_var():
+            pred = self.gp_model(X_norm)
+            mean_norm = pred.mean  # Keep as tensor
+            var_norm = pred.variance.clamp(min=1e-12)  # Clamp for numerical stability
+            std_norm = torch.sqrt(var_norm)
+
+        # Denormalize (keep as tensors)
+        mean = mean_norm * self.y_std + self.y_mean
+        std = std_norm * self.y_std
+
+        # Compute z-score
+        z = (self.y_best - mean - xi) / std.clamp(min=1e-10)
+
+        # LogEI = log_h(z) + log(σ)
+        log_ei = log_h_tensor(z) + torch.log(std.clamp(min=1e-10))
+
+        return log_ei.squeeze()
+
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
         """Get 10D latent for embedding using trained feature extractor.
 
@@ -505,41 +612,56 @@ class GPWithEI:
         patience: int = 10,
         verbose: bool = False,
     ) -> bool:
-        """Incremental retrain preserving normalization and warm-starting model.
+        """Incremental retrain with updated normalization and frozen feature extractor.
 
-        Unlike full train(), this method:
-        - Uses EXISTING normalization statistics (X_min, X_max, y_mean, y_std)
-        - Warm-starts feature extractor from previous weights
-        - Creates new GP model but with preserved encoder
+        This method:
+        - Recomputes output normalization (y_mean, y_std) for new data
+        - Keeps input normalization (X_min, X_max) stable
+        - KEEPS existing feature extractor (critical for VAE mode!)
+        - Only retrains GP kernel hyperparameters
         """
         X = self.X_train
         y = self.y_train
 
-        # Use EXISTING normalization (don't recompute!)
+        # Keep input normalization stable (prevents latent space drift)
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         X_norm = (X - self.X_min) / denom
-        y_norm = (y - self.y_mean) / self.y_std
 
-        # Warm-start: save old feature extractor weights
-        old_fe_state = None
-        if self.feature_extractor is not None:
-            old_fe_state = self.feature_extractor.state_dict()
+        # Recompute output normalization for new data
+        # This is critical - old y_mean/y_std don't account for new observations
+        self.outcome_transform = Standardize(m=1).to(self.device)
+        y_transformed, _ = self.outcome_transform(y.unsqueeze(-1))
+        y_norm = y_transformed.squeeze(-1)
+        self.y_mean = self.outcome_transform.means.squeeze()
+        self.y_std = self.outcome_transform.stdvs.squeeze()
 
-        # Create new feature extractor and load old weights
-        self.feature_extractor = InstructionFeatureExtractor(
-            input_dim=768, latent_dim=self.latent_dim
-        ).to(self.device)
-        if old_fe_state is not None:
-            self.feature_extractor.load_state_dict(old_fe_state)
+        # IMPORTANT: Keep existing feature_extractor!
+        # In VAE mode, this is VAEEncoderWrapper - don't replace it.
 
-        # Create new likelihood and GP model
+        # Save old GP kernel hyperparameters for warm-start
+        old_covar_state = None
+        old_likelihood_state = None
+        if self.gp_model is not None:
+            old_covar_state = self.gp_model.covar_module.state_dict()
+            old_likelihood_state = self.likelihood.state_dict()
+
+        # Create new likelihood and GP model with existing feature extractor
         self.likelihood = GaussianLikelihood(
-            noise_constraint=GreaterThan(1e-3)
+            noise_constraint=GreaterThan(1e-4)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.feature_extractor
         ).to(self.device)
+
+        # Warm-start: restore kernel hyperparameters
+        if old_covar_state is not None:
+            self.gp_model.covar_module.load_state_dict(old_covar_state)
+        if old_likelihood_state is not None:
+            self.likelihood.load_state_dict(old_likelihood_state)
+
+        # Register outcome transform for BoTorch compatibility
+        self.gp_model.outcome_transform = self.outcome_transform
 
         # Training loop
         self.gp_model.train()
