@@ -57,9 +57,9 @@ class TrainingConfig:
     use_vae: bool = False
     vae_beta: float = 0.1  # KL regularization weight
     vae_epochs: int = 1000
-    vae_lr: float = 0.001
+    vae_lr: float = 0.0003  # Reduced from 0.001 to prevent reconstruction degradation
     vae_annealing_epochs: int = 500  # Epochs for KL annealing (0 → beta)
-    vae_patience: int = 100  # Patience for VAE early stopping (higher than decoder)
+    vae_patience: int = 200  # Increased from 100 for slower KL annealing
 
     # Device
     device: str = "cuda"
@@ -276,12 +276,12 @@ class InvBOTrainer:
         # Optimizer
         optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.config.vae_epochs, eta_min=1e-5
+            optimizer, T_max=self.config.vae_epochs * 2, eta_min=1e-4  # Slower decay for stable reconstruction
         )
 
         X = self.diverse_embeddings
         n_samples = X.shape[0]
-        best_loss = float("inf")
+        best_recon = float("inf")  # Track reconstruction loss, not total (avoids early stop during KL annealing)
         patience_counter = 0
 
         if verbose:
@@ -334,8 +334,8 @@ class InvBOTrainer:
             avg_kl = sum(epoch_kl) / len(epoch_kl)
             avg_cosine = sum(epoch_cosine) / len(epoch_cosine)
 
-            if avg_loss < best_loss:
-                best_loss = avg_loss
+            if avg_recon < best_recon:
+                best_recon = avg_recon
                 patience_counter = 0
             else:
                 patience_counter += 1

@@ -12,6 +12,7 @@ import math
 import numpy as np
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
+from gpytorch.constraints import GreaterThan
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from scipy.stats import norm
@@ -248,7 +249,9 @@ class GPWithEI:
         self.feature_extractor = InstructionFeatureExtractor(
             input_dim=768, latent_dim=self.latent_dim
         ).to(self.device)
-        self.likelihood = GaussianLikelihood().to(self.device)
+        self.likelihood = GaussianLikelihood(
+            noise_constraint=GreaterThan(1e-3)  # Relaxed from 1e-4 for stability
+        ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.feature_extractor
         ).to(self.device)
@@ -449,10 +452,12 @@ class GPWithEI:
         patience: int = 10,
         verbose: bool = False,
     ) -> bool:
-        """Add new observation and retrain GP.
+        """Add new observation and retrain GP with preserved normalization.
 
-        Used during iterative optimization to incorporate new data points.
-        Performs full retraining of the GP with updated training data.
+        Uses incremental training that:
+        - Preserves original normalization statistics (X_min, X_max, y_mean, y_std)
+        - Warm-starts feature extractor from previous weights
+        - Uses lower learning rate for stability
 
         Args:
             embedding: New instruction embedding (768,)
@@ -485,13 +490,104 @@ class GPWithEI:
         if verbose:
             print(f"  GP updated (total samples: {len(self.y_train)})")
 
-        # Retrain
-        return self.train(
+        # Incremental retrain with preserved normalization
+        return self._incremental_retrain(
             epochs=epochs,
-            lr=0.01,
+            lr=0.001,  # Lower LR for stability (was 0.01)
             patience=patience,
             verbose=verbose,
         )
+
+    def _incremental_retrain(
+        self,
+        epochs: int = 500,
+        lr: float = 0.001,
+        patience: int = 10,
+        verbose: bool = False,
+    ) -> bool:
+        """Incremental retrain preserving normalization and warm-starting model.
+
+        Unlike full train(), this method:
+        - Uses EXISTING normalization statistics (X_min, X_max, y_mean, y_std)
+        - Warm-starts feature extractor from previous weights
+        - Creates new GP model but with preserved encoder
+        """
+        X = self.X_train
+        y = self.y_train
+
+        # Use EXISTING normalization (don't recompute!)
+        denom = self.X_max - self.X_min
+        denom[denom == 0] = 1.0
+        X_norm = (X - self.X_min) / denom
+        y_norm = (y - self.y_mean) / self.y_std
+
+        # Warm-start: save old feature extractor weights
+        old_fe_state = None
+        if self.feature_extractor is not None:
+            old_fe_state = self.feature_extractor.state_dict()
+
+        # Create new feature extractor and load old weights
+        self.feature_extractor = InstructionFeatureExtractor(
+            input_dim=768, latent_dim=self.latent_dim
+        ).to(self.device)
+        if old_fe_state is not None:
+            self.feature_extractor.load_state_dict(old_fe_state)
+
+        # Create new likelihood and GP model
+        self.likelihood = GaussianLikelihood(
+            noise_constraint=GreaterThan(1e-3)
+        ).to(self.device)
+        self.gp_model = InstructionDeepKernelGP(
+            X_norm, y_norm, self.likelihood, self.feature_extractor
+        ).to(self.device)
+
+        # Training loop
+        self.gp_model.train()
+        self.likelihood.train()
+
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=lr)
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
+
+        best_loss = float("inf")
+        patience_counter = 0
+
+        if verbose:
+            print("Training GP...")
+
+        with gpytorch.settings.cholesky_jitter(1e-4):
+            for epoch in range(epochs):
+                try:
+                    optimizer.zero_grad()
+                    output = self.gp_model(X_norm)
+                    loss = -mll(output, y_norm)
+                    loss.backward()
+                    optimizer.step()
+
+                    if loss.item() < best_loss:
+                        best_loss = loss.item()
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+
+                    if patience_counter >= patience:
+                        if verbose:
+                            print(f"  Early stopping at epoch {epoch + 1}")
+                        break
+
+                    if verbose and (epoch + 1) % 100 == 0:
+                        print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
+
+                except RuntimeError as e:
+                    if "cholesky" in str(e).lower():
+                        if verbose:
+                            print(f"  Cholesky error at epoch {epoch + 1}")
+                        return False
+                    raise
+
+        if verbose:
+            print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
+
+        return True
 
     def get_training_size(self) -> int:
         """Get number of training samples."""

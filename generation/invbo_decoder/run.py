@@ -1,19 +1,17 @@
 """CLI entry point for InvBO decoder inversion.
 
 Usage:
-    # Standard: Train and run single iteration
-    uv run python -m generation.invbo_decoder.run --use-vae --use-inversion
+    # Standard: Train and run 10 iterations (VAE enabled by default)
+    uv run python -m generation.invbo_decoder.run --iterations 10
 
-    # Multi-iteration with trust region (comparable to COWBOYS)
-    uv run python -m generation.invbo_decoder.run \
-        --use-vae --use-inversion --iterations 50 \
-        --trust-region --skip-eval --visualize
+    # With optimal hyperparameters
+    uv run python -m generation.invbo_decoder.run --iterations 10 \
+        --vae-beta 0.01 --vae-annealing 500
 
-    # With optimal hyperparameters from tuning
-    uv run python -m generation.invbo_decoder.run \
-        --use-vae --use-inversion --iterations 50 \
-        --vae-beta 0.01 --vae-epochs 1000 --vae-annealing 800 \
-        --trust-region --skip-eval
+    # Disable VAE (not recommended)
+    uv run python -m generation.invbo_decoder.run --no-vae
+
+NOTE: Do not use --trust-region flag - it doesn't work well in practice.
 """
 
 import argparse
@@ -190,15 +188,15 @@ def main():
 
     # VAE mode parameters
     parser.add_argument(
-        "--use-vae",
+        "--no-vae",
         action="store_true",
-        help="Use VAE mode (recommended for smooth latent space)",
+        help="Disable VAE mode (VAE is enabled by default)",
     )
     parser.add_argument(
         "--vae-beta",
         type=float,
-        default=0.1,
-        help="VAE KL regularization weight",
+        default=0.05,
+        help="VAE KL regularization weight (optimal: 0.05)",
     )
     parser.add_argument(
         "--vae-epochs",
@@ -209,8 +207,8 @@ def main():
     parser.add_argument(
         "--vae-annealing",
         type=int,
-        default=500,
-        help="KL annealing epochs (0 → beta)",
+        default=300,
+        help="KL annealing epochs (0 → beta, optimal: 300)",
     )
     parser.add_argument(
         "--vae-patience",
@@ -316,8 +314,8 @@ def main():
     parser.add_argument(
         "--eval-samples",
         type=int,
-        default=100,
-        help="Samples for LLM evaluation",
+        default=1319,
+        help="Samples for LLM evaluation (1319 = full GSM8K validation set)",
     )
 
     # Save/load
@@ -396,7 +394,7 @@ def main():
         lambda_cycle=args.lambda_cycle,
         lambda_cosine=args.lambda_embedding,
         cycle_tolerance=args.tolerance,
-        use_vae=args.use_vae,
+        use_vae=not args.no_vae,
         vae_beta=args.vae_beta,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
@@ -420,7 +418,7 @@ def main():
         gp, decoder = trainer.train(verbose=True)
 
         # Evaluate VAE quality if using VAE
-        if args.use_vae:
+        if not args.no_vae:
             print("\n" + "=" * 60)
             print("Evaluating VAE Quality")
             print("=" * 60)

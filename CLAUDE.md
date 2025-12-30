@@ -177,6 +177,33 @@ uv run python -m generation.cowboys_vec2text.run --visualize --iterations 10 --t
 - `InstructionSelector`: GP on VAE-decoded embeddings for EI acquisition
 - EI Landscape Visualization: UMAP projection with inversion gap diagnostics
 
+### InvBO Decoder (`generation/invbo_decoder/`)
+
+**LogEI-based Bayesian optimization with VAE latent space:**
+
+```bash
+# Standard run
+uv run python -m generation.invbo_decoder.run --use-vae --use-inversion --iterations 5
+
+# With optimal hyperparameters
+uv run python -m generation.invbo_decoder.run \
+    --use-vae --use-inversion --iterations 50 \
+    --vae-beta 0.05 --vae-annealing 300 --skip-eval
+```
+
+**IMPORTANT: Never use `--trust-region` flag** - it doesn't work well in practice and causes optimization instability.
+
+**Architecture:**
+- `InstructionVAE`: 768D GTR → 10D latent → 768D with KL annealing
+- `GPWithEI`: Deep kernel GP with LogEI acquisition (numerically stable for small EI values)
+- `LatentDecoder`: 10D → 768D decoder trained with cyclic loss
+- Vec2Text inversion for text generation from embeddings
+
+**Key Design Decisions:**
+- LogEI instead of EI for numerical stability (avoids underflow with tiny improvement values)
+- Noise constraint `GreaterThan(1e-4)` on GP to prevent over-confidence
+- VAE early stopping tracks reconstruction loss (not total loss) to avoid premature stop during KL annealing
+
 ## Coding Standards
 
 ### Logging Generated Prompts
