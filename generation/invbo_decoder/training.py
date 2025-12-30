@@ -24,6 +24,37 @@ from generation.invbo_decoder.gp import GPWithEI
 from generation.invbo_decoder.decoder import LatentDecoder, DecoderCyclicLoss
 
 
+class VAEWithAdapter(nn.Module):
+    """Wrapper combining frozen VAE encoder with trainable adapter.
+
+    Used in VAE mode to allow GP's feature extractor to learn
+    while keeping VAE weights fixed. The adapter is a small MLP
+    that transforms VAE latents.
+    """
+
+    def __init__(self, vae: nn.Module, latent_dim: int):
+        super().__init__()
+        # Freeze VAE (don't register as submodule to avoid saving it twice)
+        object.__setattr__(self, '_vae', vae)
+        vae.eval()
+        for param in vae.parameters():
+            param.requires_grad = False
+
+        # Trainable adapter: transforms VAE latents for GP
+        self.adapter = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim * 2),
+            nn.ReLU(),
+            nn.LayerNorm(latent_dim * 2),
+            nn.Linear(latent_dim * 2, latent_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # VAE encoding (frozen params, but gradients flow through)
+        z = self._vae.encode_mu(x)
+        # Trainable adapter
+        return self.adapter(z)
+
+
 @dataclass
 class TrainingConfig:
     """Configuration for InvBO training."""
@@ -38,9 +69,9 @@ class TrainingConfig:
     embedding_dim: int = 768
 
     # Phase 1: GP training
-    gp_epochs: int = 3000
+    gp_epochs: int = 5000  # Reduced from 10000 for faster training
     gp_lr: float = 0.01
-    gp_patience: int = 10
+    gp_patience: int = 50  # Reduced from 100 for faster convergence
 
     # Phase 2: Decoder training (on diverse instructions)
     decoder_epochs: int = 500
@@ -56,10 +87,10 @@ class TrainingConfig:
     # VAE mode (alternative to separate encoder+decoder)
     use_vae: bool = False
     vae_beta: float = 0.1  # KL regularization weight
-    vae_epochs: int = 1000
-    vae_lr: float = 0.001
+    vae_epochs: int = 10000
+    vae_lr: float = 0.0003  # Reduced from 0.001 to prevent reconstruction degradation
     vae_annealing_epochs: int = 500  # Epochs for KL annealing (0 → beta)
-    vae_patience: int = 100  # Patience for VAE early stopping (higher than decoder)
+    vae_patience: int = 500  # High patience for 10000 epochs
 
     # Device
     device: str = "cuda"
@@ -235,33 +266,40 @@ class InvBOTrainer:
             print("Training VAE with KL Annealing")
             print("=" * 60)
 
-        # Load diverse instructions for VAE training
-        if verbose:
-            print(f"Loading diverse instructions from {self.config.diverse_instructions_path}...")
-
-        with open(self.config.diverse_instructions_path, "r") as f:
-            data = json.load(f)
-            self.diverse_instructions = data["instructions"]
-
-        if verbose:
-            print(f"  Loaded {len(self.diverse_instructions)} instructions")
-
-        # Encode with GTR
-        if verbose:
-            print("  Encoding with GTR...")
+        # Load diverse instructions for VAE training (if path provided)
         embeddings_list = []
-        for inst in self.diverse_instructions:
-            emb = self.gtr.encode_tensor(inst)
-            embeddings_list.append(emb)
-        self.diverse_embeddings = torch.stack(embeddings_list).to(self.device)
 
-        # Also add the 100 grid instructions
+        if self.config.diverse_instructions_path:
+            if verbose:
+                print(f"Loading diverse instructions from {self.config.diverse_instructions_path}...")
+
+            with open(self.config.diverse_instructions_path, "r") as f:
+                data = json.load(f)
+                self.diverse_instructions = data["instructions"]
+
+            if verbose:
+                print(f"  Using {len(self.diverse_instructions)} instructions for VAE")
+
+            # Encode with GTR
+            if verbose:
+                print("  Encoding with GTR...")
+            for inst in self.diverse_instructions:
+                emb = self.gtr.encode_tensor(inst)
+                embeddings_list.append(emb)
+        else:
+            self.diverse_instructions = []
+            if verbose:
+                print("Using only grid_100 instructions for VAE training")
+
+        # Add the grid instructions
         grid_embeddings = []
         for inst_id in sorted(self.instruction_embeddings.keys()):
             grid_embeddings.append(self.instruction_embeddings[inst_id])
+
         if grid_embeddings:
-            grid_emb_tensor = torch.stack(grid_embeddings).to(self.device)
-            self.diverse_embeddings = torch.cat([self.diverse_embeddings, grid_emb_tensor], dim=0)
+            embeddings_list.extend(grid_embeddings)
+
+        self.diverse_embeddings = torch.stack(embeddings_list).to(self.device)
 
         if verbose:
             print(f"  Total training embeddings: {self.diverse_embeddings.shape}")
@@ -276,12 +314,12 @@ class InvBOTrainer:
         # Optimizer
         optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.config.vae_epochs, eta_min=1e-5
+            optimizer, T_max=self.config.vae_epochs * 2, eta_min=1e-4  # Slower decay for stable reconstruction
         )
 
         X = self.diverse_embeddings
         n_samples = X.shape[0]
-        best_loss = float("inf")
+        best_recon = float("inf")  # Track reconstruction loss, not total (avoids early stop during KL annealing)
         patience_counter = 0
 
         if verbose:
@@ -334,8 +372,8 @@ class InvBOTrainer:
             avg_kl = sum(epoch_kl) / len(epoch_kl)
             avg_cosine = sum(epoch_cosine) / len(epoch_cosine)
 
-            if avg_loss < best_loss:
-                best_loss = avg_loss
+            if avg_recon < best_recon:
+                best_recon = avg_recon
                 patience_counter = 0
             else:
                 patience_counter += 1
@@ -399,6 +437,11 @@ class InvBOTrainer:
         - KL divergence statistics
         - Posterior collapse detection
 
+        NOTE: Evaluates on grid_100 instructions only (not diverse) because:
+        1. These are the task-relevant instructions with error rates
+        2. Diverse instructions are only for VAE regularization, not optimization
+        3. Avoids confusing metrics from out-of-domain instructions
+
         Args:
             verbose: Print metrics
 
@@ -410,14 +453,18 @@ class InvBOTrainer:
 
         self.vae.eval()
 
-        # Use all diverse embeddings for evaluation
-        if self.diverse_embeddings is None:
-            # Fallback to grid embeddings
-            embeddings = torch.stack([
-                self.instruction_embeddings[i] for i in sorted(self.error_rates.keys())
-            ]).to(self.device)
-        else:
-            embeddings = self.diverse_embeddings
+        # Evaluate on grid_100 only (the task-relevant instructions)
+        embeddings = torch.stack([
+            self.instruction_embeddings[i] for i in sorted(self.error_rates.keys())
+        ]).to(self.device)
+
+        # Note: NOT using diverse_embeddings because:
+        # - Diverse instructions have no error rates (not used in optimization)
+        # - They're only used to regularize VAE latent space
+        # - Including them gives misleadingly low reconstruction quality
+        if verbose and self.diverse_embeddings is not None:
+            print(f"  Note: Evaluating on grid_100 ({embeddings.shape[0]} samples), "
+                  f"not diverse ({self.diverse_embeddings.shape[0]} samples)")
 
         with torch.no_grad():
             x_recon, mu, log_var, z = self.vae(embeddings)
@@ -523,17 +570,8 @@ class InvBOTrainer:
         # Initialize GP with VAE encoder wrapper
         self.gp = GPWithEI(device=str(self.device), latent_dim=self.config.latent_dim)
 
-        # Create a wrapper feature extractor that uses VAE.encode_mu
-        class VAEEncoderWrapper(nn.Module):
-            def __init__(self, vae):
-                super().__init__()
-                self.vae = vae
-
-            def forward(self, x):
-                return self.vae.encode_mu(x)
-
-        # Set training data - use raw embeddings, GP will use feature extractor
-        self.gp.feature_extractor = VAEEncoderWrapper(self.vae).to(self.device)
+        # Use VAEWithAdapter: frozen VAE + trainable adapter for GP feature extraction
+        self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
         self.gp.set_training_data(X, y)
 
         success = self.gp.train(
@@ -832,16 +870,16 @@ class InvBOTrainer:
             if not self.train_gp_with_vae(verbose=verbose):
                 raise RuntimeError("GP with VAE training failed")
 
-            # Create decoder wrapper from VAE
+            # Create decoder wrapper from VAE (without registering VAE as submodule)
             class VAEDecoderWrapper(nn.Module):
                 """Wraps VAE.decode() as a LatentDecoder-compatible module."""
 
                 def __init__(self, vae):
                     super().__init__()
-                    self.vae = vae
+                    object.__setattr__(self, '_vae', vae)
 
                 def forward(self, z):
-                    return self.vae.decode(z)
+                    return self._vae.decode(z)
 
             self.decoder = VAEDecoderWrapper(self.vae).to(self.device)
 
@@ -935,25 +973,17 @@ class InvBOTrainer:
             ).to(self.device)
             self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
-            # Create VAE encoder wrapper
-            class VAEEncoderWrapper(nn.Module):
-                def __init__(self, vae):
-                    super().__init__()
-                    self.vae = vae
+            # Use VAEWithAdapter (same as training) to ensure state_dict compatibility
+            self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
 
-                def forward(self, x):
-                    return self.vae.encode_mu(x)
-
-            self.gp.feature_extractor = VAEEncoderWrapper(self.vae).to(self.device)
-
-            # Create VAE decoder wrapper
+            # Create VAE decoder wrapper (without registering VAE as submodule)
             class VAEDecoderWrapper(nn.Module):
                 def __init__(self, vae):
                     super().__init__()
-                    self.vae = vae
+                    object.__setattr__(self, '_vae', vae)
 
                 def forward(self, z):
-                    return self.vae.decode(z)
+                    return self._vae.decode(z)
 
             self.decoder = VAEDecoderWrapper(self.vae).to(self.device)
         else:
@@ -979,6 +1009,7 @@ class InvBOTrainer:
         self.gp.y_best = gp_state["y_best"]
 
         # Reinitialize GP model with stored weights
+        from gpytorch.constraints import GreaterThan
         from gpytorch.likelihoods import GaussianLikelihood
         from generation.invbo_decoder.gp import InstructionDeepKernelGP
 
@@ -987,7 +1018,8 @@ class InvBOTrainer:
         X_norm = (X - self.gp.X_min) / denom
         y_norm = (y - self.gp.y_mean) / self.gp.y_std
 
-        self.gp.likelihood = GaussianLikelihood().to(self.device)
+        # Use same noise constraint as in training (prevents GP overconfidence)
+        self.gp.likelihood = GaussianLikelihood(noise_constraint=GreaterThan(1e-4)).to(self.device)
         self.gp.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.gp.likelihood, self.gp.feature_extractor
         ).to(self.device)

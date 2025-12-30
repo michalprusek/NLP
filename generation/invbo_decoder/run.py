@@ -1,28 +1,54 @@
 """CLI entry point for InvBO decoder inversion.
 
 Usage:
-    # Standard: Train and run single iteration
-    uv run python -m generation.invbo_decoder.run --use-vae --use-inversion
+    # Standard: Train and run 10 iterations (VAE enabled by default)
+    uv run python -m generation.invbo_decoder.run --iterations 10
 
-    # Multi-iteration with trust region (comparable to COWBOYS)
-    uv run python -m generation.invbo_decoder.run \
-        --use-vae --use-inversion --iterations 50 \
-        --trust-region --skip-eval --visualize
+    # With optimal hyperparameters
+    uv run python -m generation.invbo_decoder.run --iterations 10 \
+        --vae-beta 0.01 --vae-annealing 500
 
-    # With optimal hyperparameters from tuning
-    uv run python -m generation.invbo_decoder.run \
-        --use-vae --use-inversion --iterations 50 \
-        --vae-beta 0.01 --vae-epochs 1000 --vae-annealing 800 \
-        --trust-region --skip-eval
+    # Disable VAE (not recommended)
+    uv run python -m generation.invbo_decoder.run --no-vae
+
+NOTE: Do not use --trust-region flag - it doesn't work well in practice.
 """
 
 import argparse
 import json
+import logging
+import random
 import sys
+import warnings
 import torch
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+# Suppress noisy logs from PyTorch internals
+logging.getLogger('torch._dynamo').setLevel(logging.WARNING)
+logging.getLogger('torch._inductor').setLevel(logging.WARNING)
+# Suppress BoTorch optimization warnings (handled internally)
+warnings.filterwarnings("ignore", message=".*Optimization failed.*")
+
+
+def set_seed(seed: int) -> None:
+    """Set random seed for reproducibility.
+
+    Sets seed for:
+    - Python's random module
+    - NumPy
+    - PyTorch (CPU and CUDA)
+    - cuDNN deterministic mode
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # Enable deterministic cuDNN (may be slower)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 from generation.invbo_decoder.training import InvBOTrainer, TrainingConfig
 from generation.invbo_decoder.inference import InvBOInference, IterationRecord
@@ -30,7 +56,7 @@ from generation.invbo_decoder.trust_region import TRConfig
 
 
 class TeeOutput:
-    """Write to both stdout and log file."""
+    """Write to both stdout and log file. Supports context manager protocol."""
 
     def __init__(self, log_path: Path):
         self.log_path = log_path
@@ -48,6 +74,15 @@ class TeeOutput:
 
     def close(self):
         self.log.close()
+
+    def __enter__(self):
+        sys.stdout = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self.terminal
+        self.close()
+        return False  # Don't suppress exceptions
 
 
 def evaluate_with_llm(
@@ -152,8 +187,14 @@ def main():
     parser.add_argument(
         "--gp-epochs",
         type=int,
-        default=3000,
-        help="GP training epochs",
+        default=5000,
+        help="GP training epochs (reduced from 10000 for faster training)",
+    )
+    parser.add_argument(
+        "--gp-lr",
+        type=float,
+        default=0.01,
+        help="GP training learning rate",
     )
     parser.add_argument(
         "--decoder-epochs",
@@ -190,40 +231,40 @@ def main():
 
     # VAE mode parameters
     parser.add_argument(
-        "--use-vae",
+        "--no-vae",
         action="store_true",
-        help="Use VAE mode (recommended for smooth latent space)",
+        help="Disable VAE mode (VAE is enabled by default)",
     )
     parser.add_argument(
         "--vae-beta",
         type=float,
-        default=0.1,
-        help="VAE KL regularization weight",
+        default=0.02,
+        help="VAE KL regularization weight (0.02 optimal: sharp but smooth)",
     )
     parser.add_argument(
         "--vae-epochs",
         type=int,
-        default=1000,
+        default=10000,
         help="VAE training epochs",
     )
     parser.add_argument(
         "--vae-annealing",
         type=int,
         default=500,
-        help="KL annealing epochs (0 → beta)",
+        help="KL annealing epochs (0 → beta, optimal: 500)",
     )
     parser.add_argument(
         "--vae-patience",
         type=int,
-        default=100,
+        default=500,
         help="VAE early stopping patience (higher = longer training)",
     )
 
-    # Trust region parameters
+    # Trust region parameters (disabled by default)
     parser.add_argument(
         "--trust-region",
         action="store_true",
-        help="Use adaptive trust region (recommended for multi-iteration)",
+        help="Enable trust region (disabled by default)",
     )
     parser.add_argument(
         "--tr-initial",
@@ -244,24 +285,36 @@ def main():
         help="Maximum trust region radius",
     )
 
-    # Optimization parameters
+    # BoTorch optimization parameters
     parser.add_argument(
-        "--n-candidates",
+        "--n-restarts",
         type=int,
-        default=500,
-        help="Candidates for latent optimization",
+        default=64,
+        help="Number of L-BFGS-B restarts for BoTorch qLogEI optimization",
+    )
+    parser.add_argument(
+        "--raw-samples",
+        type=int,
+        default=512,
+        help="Raw samples for BoTorch acquisition optimization initialization",
     )
 
     # InvBO inversion parameters
     parser.add_argument(
         "--use-inversion",
         action="store_true",
-        help="Use InvBO-style inversion loop (recommended)",
+        default=True,
+        help="Use InvBO-style inversion loop (enabled by default)",
+    )
+    parser.add_argument(
+        "--no-inversion",
+        action="store_true",
+        help="Disable InvBO-style inversion loop",
     )
     parser.add_argument(
         "--max-inversion-iters",
         type=int,
-        default=3,
+        default=10,
         help="Maximum inversion iterations",
     )
     parser.add_argument(
@@ -281,8 +334,15 @@ def main():
     parser.add_argument(
         "--vec2text-beam",
         type=int,
-        default=4,
-        help="Vec2Text beam width",
+        default=8,
+        help="Vec2Text beam width (8 recommended for quality)",
+    )
+    parser.add_argument(
+        "--vec2text-model",
+        type=str,
+        choices=["32_tokens", "512_tokens"],
+        default="32_tokens",
+        help="Vec2Text model: '32_tokens' (ielabgroup, with corrector) or '512_tokens' (cowboys, simpler)",
     )
 
     # GP retraining parameters
@@ -295,8 +355,14 @@ def main():
     parser.add_argument(
         "--retrain-epochs",
         type=int,
-        default=500,
-        help="GP retraining epochs",
+        default=1000,
+        help="GP retraining epochs (reduced for incremental updates)",
+    )
+    parser.add_argument(
+        "--gp-patience",
+        type=int,
+        default=50,
+        help="GP early stopping patience (reduced for faster convergence)",
     )
 
     # Visualization
@@ -316,8 +382,8 @@ def main():
     parser.add_argument(
         "--eval-samples",
         type=int,
-        default=100,
-        help="Samples for LLM evaluation",
+        default=1319,
+        help="Samples for LLM evaluation (1319 = full GSM8K validation set)",
     )
 
     # Save/load
@@ -355,7 +421,18 @@ def main():
         help="Device to use",
     )
 
+    # Reproducibility
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (set before training and each optimization step)",
+    )
+
     args = parser.parse_args()
+
+    # Set random seed for reproducibility
+    set_seed(args.seed)
 
     # Set up results directory and logging
     results_dir = Path(args.save) if args.save else Path("generation/invbo_decoder/results")
@@ -365,38 +442,55 @@ def main():
     tee = TeeOutput(log_path)
     sys.stdout = tee
 
+    # Register cleanup to ensure stdout is restored even on exception
+    import atexit
+    def cleanup_tee():
+        if sys.stdout is tee:
+            sys.stdout = tee.terminal
+            tee.close()
+    atexit.register(cleanup_tee)
+
     print("=" * 70)
     print("InvBO Decoder Inversion for Instruction Optimization")
     print("=" * 70)
     print(f"Timestamp: {timestamp}")
+    print(f"Random seed: {args.seed}")
+    use_inversion = args.use_inversion and not args.no_inversion
     print(f"Key settings:")
     print(f"  Iterations: {args.iterations}")
+    print(f"  Optimization: BoTorch qLogEI")
+    print(f"    Restarts: {args.n_restarts}, Raw samples: {args.raw_samples}")
+    print(f"  Inversion: {'enabled' if use_inversion else 'disabled'}")
+    if use_inversion:
+        print(f"    Max inversion iters: {args.max_inversion_iters}, Gap threshold: {args.gap_threshold}")
     print(f"  Trust Region: {'enabled' if args.trust_region else 'disabled'}")
     print(f"  Skip-eval: {args.skip_eval}")
     print(f"  VAE: beta={args.vae_beta}, epochs={args.vae_epochs}, annealing={args.vae_annealing}")
+    print(f"  Vec2Text model: {args.vec2text_model}")
     print(f"Results directory: {results_dir}")
     print(f"Log file: {log_path}")
     print("=" * 70)
 
-    # Update APE cache path if skip-ape
+    # Set APE path (skip if --skip-ape)
     diverse_instructions_path = args.ape_cache
     if args.skip_ape:
-        print("\n[--skip-ape mode: using only grid_100 for VAE training]")
-        # Create minimal JSON with just grid instructions
+        print("\n[--skip-ape: using only grid_100 for VAE training]")
         diverse_instructions_path = None
 
     # Create config
     config = TrainingConfig(
         instructions_path=args.instructions,
         grid_path=args.grid,
-        diverse_instructions_path=diverse_instructions_path if diverse_instructions_path else args.ape_cache,
+        diverse_instructions_path=diverse_instructions_path,
         latent_dim=args.latent_dim,
         gp_epochs=args.gp_epochs,
+        gp_lr=args.gp_lr,
+        gp_patience=args.gp_patience,
         decoder_epochs=args.decoder_epochs,
         lambda_cycle=args.lambda_cycle,
         lambda_cosine=args.lambda_embedding,
         cycle_tolerance=args.tolerance,
-        use_vae=args.use_vae,
+        use_vae=not args.no_vae,
         vae_beta=args.vae_beta,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
@@ -420,7 +514,7 @@ def main():
         gp, decoder = trainer.train(verbose=True)
 
         # Evaluate VAE quality if using VAE
-        if args.use_vae:
+        if not args.no_vae:
             print("\n" + "=" * 60)
             print("Evaluating VAE Quality")
             print("=" * 60)
@@ -445,7 +539,9 @@ def main():
         gtr=trainer.gtr,
         vec2text_steps=args.vec2text_steps,
         vec2text_beam=args.vec2text_beam,
+        vec2text_model=args.vec2text_model,
         trust_region_config=tr_config,
+        seed=args.seed,
     )
 
     # Validate inversion gap if requested
@@ -478,11 +574,11 @@ def main():
         if args.trust_region:
             print(f"Trust region radius: {inference.trust_region.radius:.4f}")
 
-        # Run single iteration
+        # Run single iteration with BoTorch qLogEI optimization
         result, gap, log_ei = inference.run_single_iteration(
-            n_candidates=args.n_candidates,
-            use_trust_region=args.trust_region,
-            use_inversion=args.use_inversion,
+            num_restarts=args.n_restarts,
+            raw_samples=args.raw_samples,
+            use_inversion=use_inversion,
             max_inversion_iters=args.max_inversion_iters,
             gap_threshold=args.gap_threshold,
             verbose=True,
@@ -529,7 +625,7 @@ def main():
                 reencoded,
                 actual_error,
                 epochs=args.retrain_epochs,
-                patience=10,
+                patience=args.gp_patience,
                 verbose=True,
             )
 
@@ -583,6 +679,7 @@ def main():
     # Save results to JSON
     results_json = {
         "timestamp": timestamp,
+        "seed": args.seed,
         "method": "InvBO Decoder",
         "args": vars(args),
         "grid_best": {

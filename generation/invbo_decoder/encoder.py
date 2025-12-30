@@ -94,19 +94,20 @@ class GTRInstructionEncoder:
 class InstructionFeatureExtractor(nn.Module):
     """Deep kernel feature extractor for instruction embeddings.
 
-    Architecture (from HbBoPs paper, adapted for instruction-only):
+    Architecture (improved with LayerNorm for batch_size=1 stability):
         768D GTR embedding
             |
-        Linear(768, 64) + ReLU + BatchNorm
+        Linear(768, 128) + ReLU + LayerNorm
             |
-        Linear(64, 32) + ReLU + BatchNorm
+        Linear(128, 32) + ReLU + LayerNorm  (bottleneck)
             |
         Linear(32, 10)
             |
         10D latent for GP kernel
 
-    The BatchNorm layers help with training stability and ensure
-    consistent feature scales for the GP kernel.
+    LayerNorm is preferred over BatchNorm for:
+    - Stability with single samples (batch_size=1)
+    - Consistent behavior in train/eval modes
     """
 
     def __init__(self, input_dim: int = 768, latent_dim: int = 10):
@@ -121,12 +122,12 @@ class InstructionFeatureExtractor(nn.Module):
         self.latent_dim = latent_dim
 
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 32),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),  # 32D bottleneck
             nn.ReLU(),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.Linear(32, latent_dim),
         )
 
@@ -209,13 +210,16 @@ class InstructionVAE(nn.Module):
         self.beta = beta
 
         # Encoder: 768 -> mu, log_var
+        # Using LayerNorm instead of BatchNorm for:
+        # - Stability with batch_size=1
+        # - Consistent behavior in train/eval modes
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
-            nn.BatchNorm1d(64),
+            nn.LayerNorm(64),
             nn.Linear(64, 32),
             nn.ReLU(),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.Linear(32, latent_dim * 2),  # mu + log_var
         )
 
@@ -223,13 +227,13 @@ class InstructionVAE(nn.Module):
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, 32),
             nn.ReLU(),
-            nn.BatchNorm1d(32),
+            nn.LayerNorm(32),
             nn.Linear(32, 64),
             nn.ReLU(),
-            nn.BatchNorm1d(64),
+            nn.LayerNorm(64),
             nn.Linear(64, 256),
             nn.ReLU(),
-            nn.BatchNorm1d(256),
+            nn.LayerNorm(256),
             nn.Linear(256, input_dim),
         )
 
@@ -242,12 +246,9 @@ class InstructionVAE(nn.Module):
         Returns:
             (mu, log_var) tuple, each (batch, latent_dim) or (latent_dim,)
         """
-        # Handle single sample (BatchNorm needs batch dimension)
         was_1d = x.dim() == 1
         if was_1d:
             x = x.unsqueeze(0)
-            was_training = self.encoder.training
-            self.encoder.eval()
 
         h = self.encoder(x)
         mu, log_var = h.chunk(2, dim=-1)
@@ -255,8 +256,6 @@ class InstructionVAE(nn.Module):
         if was_1d:
             mu = mu.squeeze(0)
             log_var = log_var.squeeze(0)
-            if was_training:
-                self.encoder.train()
 
         return mu, log_var
 
@@ -283,20 +282,15 @@ class InstructionVAE(nn.Module):
         Returns:
             Reconstructed embedding (batch, 768) or (768,), L2-normalized
         """
-        # Handle single sample (BatchNorm needs batch dimension and eval mode)
         was_1d = z.dim() == 1
         if was_1d:
             z = z.unsqueeze(0)
-            was_training = self.decoder.training
-            self.decoder.eval()
 
         x_recon = self.decoder(z)
         x_recon = F.normalize(x_recon, p=2, dim=-1)
 
         if was_1d:
             x_recon = x_recon.squeeze(0)
-            if was_training:
-                self.decoder.train()
 
         return x_recon
 
