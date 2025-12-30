@@ -44,7 +44,7 @@ class InversionStepResult:
 
     z_inv: torch.Tensor  # Inverted latent
     z_original: torch.Tensor  # Original latent before inversion
-    gap: float  # ||z_original - z_inv||
+    gap: float  # Cosine distance (1 - cosine_similarity) between embeddings
     final_loss: float  # Final cosine loss
     converged: bool  # Whether optimization converged
 
@@ -74,7 +74,7 @@ class Vec2TextInverter:
     def __init__(
         self,
         num_steps: int = 50,
-        beam_width: int = 4,
+        beam_width: int = 8,
         max_length: int = 128,
         device: str = "auto",
         model_type: str = "32_tokens",

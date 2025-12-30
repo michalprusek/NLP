@@ -4,24 +4,24 @@ Implementace dekóderu z GP latentního prostoru (10D) do Vec2Text embedding pro
 
 ## Klíčové Features
 
-- **VAE Mode (default)**: Variational Autoencoder pro hladký latentní prostor (beta=0.1)
+- **VAE Mode (default)**: Variational Autoencoder pro hladký latentní prostor (beta=0.02)
 - **BoTorch qLogEI**: Gradient-based optimalizace s numericky stabilním Log Expected Improvement
-- **Trust Region (default ON)**: Omezuje exploration do známých oblastí latentního prostoru
+- **Trust Region (disabled by default)**: Omezuje exploration do známých oblastí latentního prostoru
 - **Inversion Loop**: InvBO-style inverze pro uzavření misalignment gap
 - **Standardize Transform**: BoTorch outcome transform pro správnou denormalizaci
 
 ## Quick Start
 
 ```bash
-# Doporučené: Standardní běh (VAE beta=0.1, Trust Region ON, BoTorch qLogEI)
+# Doporučené: Standardní běh (VAE beta=0.02, Trust Region OFF, BoTorch qLogEI)
 uv run python -m generation.invbo_decoder.run --iterations 10
 
 # S explicitními hyperparametry (defaults)
 uv run python -m generation.invbo_decoder.run \
-    --iterations 50 --vae-beta 0.1 --vae-annealing 500
+    --iterations 50 --vae-beta 0.02 --vae-annealing 500
 
-# Bez trust region (pokud experimentujete)
-uv run python -m generation.invbo_decoder.run --no-trust-region --iterations 10
+# S trust region (pokud experimentujete)
+uv run python -m generation.invbo_decoder.run --trust-region --iterations 10
 
 # Jednoduchý běh (1 iterace) s vizualizací
 uv run python -m generation.invbo_decoder.run --visualize
@@ -29,10 +29,10 @@ uv run python -m generation.invbo_decoder.run --visualize
 
 ## DŮLEŽITÉ
 
-- **Trust Region je zapnutý defaultně** - použijte `--no-trust-region` pro vypnutí
+- **Trust Region je vypnutý defaultně** - použijte `--trust-region` pro zapnutí
 - **Vždy evaluovat na plném validation setu (1319 samples)** - nikdy nesnižovat `--eval-samples`
-- **VAE beta=0.1** zajišťuje hladký latentní prostor pro stabilní optimalizaci
-- **GP noise constraint 0.1** zabraňuje overconfidence (MAE validation ~0.02)
+- **VAE beta=0.02** zajišťuje hladký latentní prostor pro stabilní optimalizaci
+- **GP noise constraint 1e-4** zabraňuje overconfidence (MAE validation ~0.02)
 
 ## Architektura
 
@@ -66,7 +66,7 @@ uv run python -m generation.invbo_decoder.run --visualize
 │                                                                              │
 │  GP Features:                                                               │
 │  - InstructionDeepKernelGP inherits from GPyTorchModel (BoTorch compatible)│
-│  - Noise constraint GreaterThan(0.05) prevents overconfidence               │
+│  - Noise constraint GreaterThan(1e-4) prevents overconfidence               │
 │  - Matern 5/2 kernel with ARD (10 lengthscales)                             │
 │                                                                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -216,7 +216,7 @@ Encoder:                           Decoder:
 
 **Doporučené hyperparametry (defaults):**
 ```
---vae-beta 0.1          # Vyšší KL weight pro hladší latentní prostor
+--vae-beta 0.02         # KL weight (0.02 optimal: sharp but smooth)
 --vae-epochs 10000      # Delší trénink
 --vae-annealing 500     # Pomalý ramp-up KL
 --vae-patience 500      # Vysoká patience pro 10000 epochs
@@ -238,7 +238,7 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
 - Matérn 5/2 s ARD (10 lengthscales)
 - Prior na lengthscale: `Gamma(3.0, 6.0)`
 - Prior na outputscale: `Gamma(2.0, 0.15)`
-- **Noise constraint**: `GreaterThan(0.1)` - vyšší hodnota zabraňuje overconfidence
+- **Noise constraint**: `GreaterThan(1e-4)` - zabraňuje overconfidence
 - **Standardize outcome transform**: BoTorch-kompatibilní denormalizace
 
 ### 5. GPWithEI (`gp.py`)
@@ -254,7 +254,7 @@ GPWithEI(
 
 **Klíčové metody:**
 - `set_training_data(embeddings, error_rates)`
-- `train(epochs, lr, patience)` - s noise constraint 0.05
+- `train(epochs, lr, patience)` - s noise constraint 1e-4
 - `predict(embedding) → (mean, std)`
 - `expected_improvement(embedding, xi) → EI`
 - `log_expected_improvement(embedding, xi) → LogEI`
@@ -473,14 +473,14 @@ embedding = embedding / ||embedding||₂
 
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `--n-restarts` | 20 | Počet L-BFGS-B restarts pro BoTorch qLogEI |
+| `--n-restarts` | 64 | Počet L-BFGS-B restarts pro BoTorch qLogEI |
 | `--raw-samples` | 512 | Raw samples pro inicializaci optimalizace |
 
 ### VAE Parametry
 
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `--vae-beta` | 0.1 | KL regularization weight (vyšší = hladší prostor) |
+| `--vae-beta` | 0.02 | KL regularization weight (0.02 optimal) |
 | `--vae-epochs` | 10000 | VAE training epochs |
 | `--vae-annealing` | 500 | KL annealing epochs (0 → beta) |
 | `--vae-patience` | 500 | Early stopping patience |
@@ -505,10 +505,10 @@ embedding = embedding / ||embedding||₂
 
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `--gp-epochs` | 10000 | GP training epochs |
-| `--gp-patience` | 100 | GP early stopping patience |
+| `--gp-epochs` | 5000 | GP training epochs |
+| `--gp-patience` | 50 | GP early stopping patience |
 | `--retrain-interval` | 1 | Retrain GP every N iterations |
-| `--retrain-epochs` | 10000 | Epochs pro GP retraining |
+| `--retrain-epochs` | 1000 | Epochs pro GP retraining |
 
 ### LLM Evaluation
 
@@ -517,11 +517,11 @@ embedding = embedding / ||embedding||₂
 | `--model` | Qwen/Qwen2.5-7B-Instruct | Model pro evaluaci |
 | `--eval-samples` | 1319 | Samples (1319 = plný GSM8K validation) |
 
-### Trust Region (ENABLED BY DEFAULT)
+### Trust Region (DISABLED BY DEFAULT)
 
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `--no-trust-region` | False | Vypnout trust region (je zapnutý defaultně) |
+| `--trust-region` | False | Zapnout trust region (je vypnutý defaultně) |
 | `--tr-initial` | 0.5 | Initial trust region radius |
 | `--tr-min` | 0.05 | Minimum radius (triggers restart) |
 | `--tr-max` | 2.0 | Maximum radius |
@@ -585,7 +585,7 @@ Automaticky ukládán do `generation/invbo_decoder/results/run_TIMESTAMP.log`
 **Problém**: GP může být příliš jistý svými predikcemi, což vede k LogEI = -5000.
 
 **Řešení**:
-- Noise constraint zvýšen na `GreaterThan(0.05)`
+- Noise constraint `GreaterThan(1e-4)` jako per BoTorch recommendation
 - Zajišťuje dostatečnou uncertainty pro exploration
 
 ### 3. Posterior Collapse (VAE)
@@ -616,9 +616,9 @@ Automaticky ukládán do `generation/invbo_decoder/results/run_TIMESTAMP.log`
 **Problém**: Latentní prostor může mít "díry" kde optimalizace selhává.
 
 **Řešení**:
-- **VAE beta=0.1** pro hladší latentní prostor
-- **Trust region** omezuje exploration do známých oblastí
-- **GP noise=0.1** zabraňuje overconfidence
+- **VAE beta=0.02** pro hladší latentní prostor
+- **Trust region** (optional) omezuje exploration do známých oblastí
+- **GP noise=1e-4** zabraňuje overconfidence
 
 ## Porovnání s COWBOYS
 
@@ -626,12 +626,12 @@ Automaticky ukládán do `generation/invbo_decoder/results/run_TIMESTAMP.log`
 |---------|---------------|---------|
 | Latent Dim | 10D | 32D |
 | Encoder | VAE (default) / Deep Kernel | VAE only |
-| VAE Beta | 0.1 (hladký prostor) | 0.01 |
+| VAE Beta | 0.02 (hladký prostor) | 0.01 |
 | Optimizer | BoTorch qLogEI (gradient) | pCN MCMC (sampling) |
-| Trust Region | **ENABLED** | Custom (L2) |
+| Trust Region | Disabled (optional) | Custom (L2) |
 | Inversion | InvBO-style loop (10 iters) | Direct Vec2Text |
 | GP Retraining | Incremental (preserved norm) | Batch |
-| Noise Constraint | 0.1 (prevents overconfidence) | Default |
+| Noise Constraint | 1e-4 (BoTorch recommendation) | Default |
 | Gap Metric | Cosine in embedding space | L2 in latent |
 | Standardize | BoTorch outcome transform | Manual |
 

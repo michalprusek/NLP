@@ -11,6 +11,8 @@ References:
     - BoTorch documentation: https://botorch.org/docs/optimization/
 """
 
+import logging
+import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -19,6 +21,8 @@ from botorch.acquisition import AcquisitionFunction
 from botorch.acquisition.logei import qLogExpectedImprovement
 from botorch.models.model import Model
 from botorch.optim import optimize_acqf
+
+logger = logging.getLogger(__name__)
 
 
 class CompositeLogEI(AcquisitionFunction):
@@ -70,7 +74,6 @@ class CompositeLogEI(AcquisitionFunction):
             Acquisition values with shape (batch,)
         """
         # Handle shape: (batch, q, d) or (q, d) or (d,)
-        original_shape = X.shape
         if X.dim() == 1:
             X = X.unsqueeze(0).unsqueeze(0)  # (d,) -> (1, 1, d)
         elif X.dim() == 2:
@@ -178,10 +181,9 @@ class LatentSpaceAcquisition:
         self.decoder.eval()
 
         # Optimize using BoTorch's optimize_acqf
-        # retry_on_optimization_warning=False to avoid noisy retry warnings
-        import warnings
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning)
+        # Suppress RuntimeWarnings from L-BFGS-B (common in BO) but log if debug enabled
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.filterwarnings("always", category=RuntimeWarning)
             candidate, acq_value = optimize_acqf(
                 acq_function=acq_fn,
                 bounds=self.bounds,
@@ -190,6 +192,13 @@ class LatentSpaceAcquisition:
                 raw_samples=raw_samples,
                 options=options,
                 retry_on_optimization_warning=False,
+            )
+
+        # Log warnings at debug level instead of silently suppressing
+        if caught_warnings:
+            logger.debug(
+                f"Optimization completed with {len(caught_warnings)} warnings "
+                f"(common in L-BFGS-B optimization)"
             )
 
         return candidate, acq_value

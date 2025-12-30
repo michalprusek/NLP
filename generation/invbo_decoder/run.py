@@ -56,7 +56,7 @@ from generation.invbo_decoder.trust_region import TRConfig
 
 
 class TeeOutput:
-    """Write to both stdout and log file."""
+    """Write to both stdout and log file. Supports context manager protocol."""
 
     def __init__(self, log_path: Path):
         self.log_path = log_path
@@ -74,6 +74,15 @@ class TeeOutput:
 
     def close(self):
         self.log.close()
+
+    def __enter__(self):
+        sys.stdout = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self.terminal
+        self.close()
+        return False  # Don't suppress exceptions
 
 
 def evaluate_with_llm(
@@ -432,6 +441,14 @@ def main():
     log_path = results_dir / f"run_{timestamp}.log"
     tee = TeeOutput(log_path)
     sys.stdout = tee
+
+    # Register cleanup to ensure stdout is restored even on exception
+    import atexit
+    def cleanup_tee():
+        if sys.stdout is tee:
+            sys.stdout = tee.terminal
+            tee.close()
+    atexit.register(cleanup_tee)
 
     print("=" * 70)
     print("InvBO Decoder Inversion for Instruction Optimization")
