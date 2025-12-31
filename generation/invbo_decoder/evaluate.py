@@ -41,18 +41,29 @@ def evaluate_instruction(
 
     # Evaluate responses
     correct = 0
+    evaluated = 0
+    skipped = 0
+
     for response, item in zip(responses, test_data):
         predicted = extract_answer(response)
         try:
             expected = extract_ground_truth(item["answer"])
         except ValueError:
             # Skip if we can't extract ground truth
+            skipped += 1
             continue
 
+        evaluated += 1
         if predicted is not None and compare_numbers(predicted, expected):
             correct += 1
 
-    total = len(test_data)
-    error_rate = 1.0 - (correct / total) if total > 0 else 1.0
+    # Log warning if items were skipped
+    if skipped > 0:
+        print(
+            f"  WARNING: Skipped {skipped}/{len(test_data)} items "
+            f"(ground truth extraction failed)"
+        )
 
-    return error_rate, correct, total
+    error_rate = 1.0 - (correct / evaluated) if evaluated > 0 else 1.0
+
+    return error_rate, correct, evaluated
