@@ -107,7 +107,7 @@ def evaluate_with_llm(
     import json
 
     # Lazy import to avoid loading when not needed
-    from generation.cowboys_vec2text.evaluate_grid import evaluate_instruction
+    from generation.invbo_decoder.evaluate import evaluate_instruction
     from src.llm_client import create_llm_client
 
     # Create client if not provided
