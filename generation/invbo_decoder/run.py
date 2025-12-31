@@ -107,16 +107,36 @@ def evaluate_with_llm(
     import json
 
     # Lazy import to avoid loading when not needed
-    from generation.cowboys_vec2text.evaluate_grid import evaluate_instruction
+    from generation.invbo_decoder.evaluate import evaluate_instruction
     from src.llm_client import create_llm_client
 
     # Create client if not provided
     if client is None:
         client = create_llm_client(model, "vllm")
 
-    # Load validation data
-    with open(validation_path) as f:
-        validation_data = json.load(f)
+    # Load validation data with error handling
+    from pathlib import Path
+
+    validation_file = Path(validation_path)
+    if not validation_file.exists():
+        raise FileNotFoundError(
+            f"Validation data not found: {validation_path}\n"
+            f"Please ensure the file exists or specify a different path."
+        )
+
+    try:
+        with open(validation_path) as f:
+            validation_data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Invalid JSON in validation file: {validation_path}\n"
+            f"Error at line {e.lineno}: {e.msg}"
+        ) from e
+
+    if not isinstance(validation_data, list):
+        raise ValueError(
+            f"Validation data must be a list, got {type(validation_data).__name__}"
+        )
 
     # Sample if needed
     if num_samples < len(validation_data):

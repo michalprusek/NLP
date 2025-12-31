@@ -72,6 +72,7 @@ class TrainingConfig:
     gp_epochs: int = 5000  # Reduced from 10000 for faster training
     gp_lr: float = 0.01
     gp_patience: int = 50  # Reduced from 100 for faster convergence
+    gp_initial_top_k: int = 25  # Train initial GP only on top-k prompts (lowest error)
 
     # Phase 2: Decoder training (on diverse instructions)
     decoder_epochs: int = 500
@@ -142,45 +143,41 @@ class InvBOTrainer:
     def load_data(self, verbose: bool = True) -> None:
         """Load instructions and grid data.
 
+        Loads instructions directly from grid file (which contains instruction_text),
+        ensuring instructions and error rates are always in sync.
+
         Args:
             verbose: Print progress
         """
         if verbose:
-            print(f"Loading instructions from {self.config.instructions_path}...")
+            print(f"Loading instructions and error rates from {self.config.grid_path}...")
 
-        # Load instructions (skip comments and empty lines)
-        with open(self.config.instructions_path, "r") as f:
+        # Load instructions and error rates directly from grid
+        grid_entries = []
+        with open(self.config.grid_path, "r") as f:
             for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    # Parse numbered instruction: "1. Solve:" -> "Solve:"
-                    if ". " in line[:5]:
-                        line = line.split(". ", 1)[1]
-                    self.instructions.append(line)
+                entry = json.loads(line)
+                grid_entries.append(entry)
+
+        # Sort by instruction_id for consistent ordering
+        grid_entries.sort(key=lambda x: x["instruction_id"])
+
+        # Re-index from 0 to ensure contiguous IDs
+        for new_idx, entry in enumerate(grid_entries):
+            inst_text = entry["instruction_text"]
+            self.instructions.append(inst_text)
+            self.error_rates[new_idx] = entry["error_rate"]
 
         if verbose:
-            print(f"  Loaded {len(self.instructions)} instructions")
+            print(f"  Loaded {len(self.instructions)} instructions with error rates")
+            rates = list(self.error_rates.values())
+            print(f"  Error rate range: [{min(rates):.4f}, {max(rates):.4f}]")
 
-        # Encode instructions
+        # Encode instructions with GTR
         if verbose:
             print("Encoding instructions with GTR...")
         for idx, inst in enumerate(self.instructions):
             self.instruction_embeddings[idx] = self.gtr.encode_tensor(inst)
-
-        # Load grid data (error rates)
-        if verbose:
-            print(f"Loading grid from {self.config.grid_path}...")
-
-        with open(self.config.grid_path, "r") as f:
-            for line in f:
-                entry = json.loads(line)
-                inst_id = entry["instruction_id"]
-                self.error_rates[inst_id] = entry["error_rate"]
-
-        if verbose:
-            print(f"  Loaded {len(self.error_rates)} error rates")
-            rates = list(self.error_rates.values())
-            print(f"  Error rate range: [{min(rates):.4f}, {max(rates):.4f}]")
 
     def train_phase1(self, verbose: bool = True) -> bool:
         """Phase 1: Train GP + Encoder jointly.
@@ -530,6 +527,7 @@ class InvBOTrainer:
         """Train GP using VAE encoder for latent representation.
 
         Uses VAE.encode_mu() (deterministic) for GP training.
+        Initially trains on top-k prompts (lowest error rate) for better GP fit.
 
         Args:
             verbose: Print progress
@@ -545,10 +543,23 @@ class InvBOTrainer:
             print("Training GP with VAE Encoder")
             print("=" * 60)
 
-        # Prepare training data (100 grid instructions)
+        # Sort by error rate and take top-k for initial training
+        sorted_ids = sorted(self.error_rates.keys(), key=lambda x: self.error_rates[x])
+        top_k = self.config.gp_initial_top_k
+        if top_k > 0 and top_k < len(sorted_ids):
+            train_ids = sorted_ids[:top_k]
+            if verbose:
+                print(f"  Using top-{top_k} prompts (lowest error rate)")
+                print(f"  Error rate range: [{self.error_rates[train_ids[0]]:.4f}, {self.error_rates[train_ids[-1]]:.4f}]")
+        else:
+            train_ids = sorted_ids
+            if verbose:
+                print(f"  Using all {len(train_ids)} prompts")
+
+        # Prepare training data
         embeddings = []
         targets = []
-        for inst_id in sorted(self.error_rates.keys()):
+        for inst_id in train_ids:
             embeddings.append(self.instruction_embeddings[inst_id])
             targets.append(self.error_rates[inst_id])
 
