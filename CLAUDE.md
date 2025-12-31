@@ -163,13 +163,12 @@ uv run python -m generation.invbo_decoder.run \
 ```
 
 **IMPORTANT:**
-- **Never use `--trust-region` flag** - it doesn't work well in practice and causes optimization instability.
 - **Always evaluate on full validation set (1319 samples)** - this is the default. Never reduce `--eval-samples` for final results.
 
 **Architecture:**
 - `InstructionVAE`: 768D GTR → 10D latent → 768D with KL annealing
+- `VAEWithAdapter`: Frozen VAE encoder with trainable adapter MLP
 - `GPWithEI`: Deep kernel GP with LogEI acquisition (numerically stable for small EI values)
-- `LatentDecoder`: 10D → 768D decoder trained with cyclic loss
 - Vec2Text inversion for text generation from embeddings
 
 **Key Design Decisions:**

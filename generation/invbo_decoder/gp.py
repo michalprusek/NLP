@@ -20,7 +20,6 @@ from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional
 
-from generation.invbo_decoder.encoder import InstructionFeatureExtractor
 
 
 # =============================================================================
@@ -127,15 +126,15 @@ def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
     """Gaussian Process with deep kernel for instruction optimization.
 
-    Uses ARD Matern 5/2 kernel on 10D latent features from InstructionFeatureExtractor.
+    Uses ARD Matern 5/2 kernel on 10D latent features from VAEWithAdapter.
     Inherits from GPyTorchModel for BoTorch compatibility (enables EI, etc.).
 
     Architecture:
-        768D GTR embedding -> InstructionFeatureExtractor -> 10D latent
-                                                               |
-                                               Matern 5/2 kernel (ARD)
-                                                               |
-                                               GP(mean=0, K(latent))
+        768D GTR embedding -> VAEWithAdapter -> 10D latent
+                                                   |
+                                   Matern 5/2 kernel (ARD)
+                                                   |
+                                   GP(mean=0, K(latent))
 
     The kernel learns per-dimension lengthscales (ARD) to weight
     different latent dimensions based on their importance for prediction.
@@ -148,7 +147,7 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         train_x: torch.Tensor,
         train_y: torch.Tensor,
         likelihood: GaussianLikelihood,
-        feature_extractor: InstructionFeatureExtractor,
+        feature_extractor: nn.Module,
     ):
         """Initialize GP.
 
@@ -217,7 +216,7 @@ class GPWithEI:
         self.latent_dim = latent_dim
 
         # Components (initialized during training)
-        self.feature_extractor: Optional[InstructionFeatureExtractor] = None
+        self.feature_extractor: Optional[nn.Module] = None
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
@@ -291,12 +290,12 @@ class GPWithEI:
         self.y_mean = self.outcome_transform.means.squeeze()
         self.y_std = self.outcome_transform.stdvs.squeeze()
 
-        # Initialize feature extractor only if not already set
-        # (VAE mode pre-sets VAEWithAdapter before calling train())
+        # Feature extractor must be pre-set (VAEWithAdapter)
         if self.feature_extractor is None:
-            self.feature_extractor = InstructionFeatureExtractor(
-                input_dim=768, latent_dim=self.latent_dim
-            ).to(self.device)
+            raise RuntimeError(
+                "feature_extractor must be set before training. "
+                "Use VAEWithAdapter from training.py."
+            )
         # Noise constraint - use 1e-4 as per BoTorch recommendation
         # Higher noise (0.1) was causing underfitting
         self.likelihood = GaussianLikelihood(

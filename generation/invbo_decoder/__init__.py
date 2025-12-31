@@ -1,31 +1,28 @@
-"""InvBO-style Decoder Inversion for Instruction Optimization.
+"""InvBO-style VAE Decoder Inversion for Instruction Optimization.
 
-Implements a decoder from GP latent space (10D) to Vec2Text embedding space (768D)
-with cyclic loss training. Addresses the "misalignment problem" from InvBO (NeurIPS 2024).
+VAE-based Bayesian optimization for instruction generation. Uses BoTorch qLogEI
+for gradient-based optimization in 10D latent space with Vec2Text inversion.
 
 Architecture:
-    Instruction Text -> GTR (768D) -> Encoder (10D) -> GP -> EI optimization
+    Instruction Text -> GTR (768D) -> VAE Encoder (10D) -> GP -> LogEI optimization
                                           ^
-                                          | cyclic loss
+                                          | KL regularization
                                           v
-    10D optimum -> Decoder (768D) -> Vec2Text -> Novel Instruction Text
+    10D optimum -> VAE Decoder (768D) -> Vec2Text -> Novel Instruction Text
 """
 
 from generation.invbo_decoder.encoder import (
-    InstructionFeatureExtractor,
     GTRInstructionEncoder,
+    InstructionVAE,
 )
 from generation.invbo_decoder.gp import InstructionDeepKernelGP
-from generation.invbo_decoder.decoder import LatentDecoder, DecoderCyclicLoss
 from generation.invbo_decoder.training import InvBOTrainer
 from generation.invbo_decoder.inference import InvBOInference
 
 __all__ = [
-    "InstructionFeatureExtractor",
     "GTRInstructionEncoder",
+    "InstructionVAE",
     "InstructionDeepKernelGP",
-    "LatentDecoder",
-    "DecoderCyclicLoss",
     "InvBOTrainer",
     "InvBOInference",
 ]

@@ -2,7 +2,6 @@
 
 Provides:
 - GTRInstructionEncoder: GTR-T5-Base encoder wrapper
-- InstructionFeatureExtractor: Deep kernel feature extractor (768D -> 10D)
 - InstructionVAE: Variational autoencoder with KL regularization for smooth latent space
 """
 
@@ -89,86 +88,6 @@ class GTRInstructionEncoder:
             normalize_embeddings=self.normalize,
             show_progress_bar=len(texts) > 100,
         ).to(self.device)
-
-
-class InstructionFeatureExtractor(nn.Module):
-    """Deep kernel feature extractor for instruction embeddings.
-
-    Architecture (improved with LayerNorm for batch_size=1 stability):
-        768D GTR embedding
-            |
-        Linear(768, 128) + ReLU + LayerNorm
-            |
-        Linear(128, 32) + ReLU + LayerNorm  (bottleneck)
-            |
-        Linear(32, 10)
-            |
-        10D latent for GP kernel
-
-    LayerNorm is preferred over BatchNorm for:
-    - Stability with single samples (batch_size=1)
-    - Consistent behavior in train/eval modes
-    """
-
-    def __init__(self, input_dim: int = 768, latent_dim: int = 10):
-        """Initialize feature extractor.
-
-        Args:
-            input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Output latent dimension (10 for GP)
-        """
-        super().__init__()
-        self.input_dim = input_dim
-        self.latent_dim = latent_dim
-
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU(),
-            nn.LayerNorm(128),
-            nn.Linear(128, 32),  # 32D bottleneck
-            nn.ReLU(),
-            nn.LayerNorm(32),
-            nn.Linear(32, latent_dim),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through encoder.
-
-        Args:
-            x: Instruction embedding (batch, 768) or (batch, n, 768)
-
-        Returns:
-            Latent features (batch, 10) or (batch, n, 10)
-        """
-        # Handle 3D input from BoTorch posterior computation
-        if x.dim() == 3:
-            batch, n, dim = x.shape
-            x_flat = x.reshape(-1, dim)
-            out = self.encoder(x_flat)
-            return out.reshape(batch, n, -1)
-        return self.encoder(x)
-
-    def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
-        """Get 10D latent representation for an embedding.
-
-        Convenience method that handles single embeddings.
-
-        Args:
-            embedding: Single embedding (768,) or batch (N, 768)
-
-        Returns:
-            Latent (10,) or (N, 10)
-        """
-        was_1d = embedding.dim() == 1
-        if was_1d:
-            embedding = embedding.unsqueeze(0)
-
-        with torch.no_grad():
-            latent = self.forward(embedding)
-
-        if was_1d:
-            latent = latent.squeeze(0)
-        return latent
 
 
 class InstructionVAE(nn.Module):
