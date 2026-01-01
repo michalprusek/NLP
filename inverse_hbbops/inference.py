@@ -503,10 +503,14 @@ class InverseHbBoPsInference:
             verbose=verbose,
         )
 
-        # Decode to embedding (64D latent -> 768D embedding)
+        # Denormalize and decode to embedding (64D latent -> 768D embedding)
+        # z_opt is normalized [0,1], need to convert back to VAE latent space
+        x_range = self.gp.X_max - self.gp.X_min
+        z_unnorm = z_opt * x_range + self.gp.X_min
+
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            embedding = self.vae_with_adapter.decode(z_opt)
+            embedding = self.vae_with_adapter.decode(z_unnorm)
 
         # Invert to text
         instruction = self.inverter.invert(embedding.clone())
@@ -536,10 +540,11 @@ class InverseHbBoPsInference:
                 if verbose:
                     print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
 
-                # Re-decode from inverted latent
+                # Re-decode from inverted latent (z_inv is normalized, need denormalization)
                 z_opt = inv_result.z_inv
+                z_unnorm = z_opt * x_range + self.gp.X_min
                 with torch.no_grad():
-                    embedding = self.vae_with_adapter.decode(z_opt)
+                    embedding = self.vae_with_adapter.decode(z_unnorm)
                 instruction = self.inverter.invert(embedding.clone())
                 inv_iters += 1
 

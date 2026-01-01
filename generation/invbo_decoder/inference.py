@@ -286,17 +286,21 @@ class InvBOInference:
         )
 
     def get_best_training_latent(self) -> Tuple[torch.Tensor, int, float]:
-        """Get latent of best training sample (lowest error).
+        """Get 10D latent of best training sample (lowest error).
 
         Returns:
-            (latent, index, error_rate) tuple
+            (latent, index, error_rate) tuple where latent is 10D adapter output
         """
         best_idx = self.gp.y_train.argmin().item()
         best_error = self.gp.y_train[best_idx].item()
 
-        # Get latent for best embedding
-        best_embedding = self.gp.X_train[best_idx]
-        best_latent = self.gp.get_latent(best_embedding)
+        # X_train is already 64D normalized VAE latent, apply adapter directly to get 10D
+        best_z_vae = self.gp.X_train[best_idx]  # 64D normalized
+        self.gp.vae_with_adapter.eval()
+        with torch.no_grad():
+            if best_z_vae.dim() == 1:
+                best_z_vae = best_z_vae.unsqueeze(0)
+            best_latent = self.gp.vae_with_adapter.adapter(best_z_vae).squeeze(0)
 
         return best_latent, best_idx, best_error
 
@@ -415,10 +419,14 @@ class InvBOInference:
             verbose=verbose,
         )
 
-        # Decode 64D VAE latent to 768D embedding
+        # Denormalize and decode 64D VAE latent to 768D embedding
+        # z_opt is normalized [0,1], need to convert back to VAE latent space
+        x_range = self.gp.X_max - self.gp.X_min
+        z_unnorm = z_opt * x_range + self.gp.X_min
+
         self.gp.vae_with_adapter.eval()
         with torch.no_grad():
-            embedding = self.gp.vae_with_adapter._vae.decode(z_opt)
+            embedding = self.gp.vae_with_adapter._vae.decode(z_unnorm)
 
         # Invert to text
         text = self.inverter.invert(embedding.clone())
@@ -501,12 +509,8 @@ class InvBOInference:
             print("Optimizing latent space with L-BFGS-B...")
 
         # Get bounds from training data VAE latents (64D)
-        vae = self.gp.vae_with_adapter._vae
-        vae.eval()
-
-        # Compute latent bounds from training embeddings
-        with torch.no_grad():
-            all_latents = vae.encode_mu(self.gp.X_train)
+        # X_train is already stored as 64D VAE latents (normalized), use directly
+        all_latents = self.gp.X_train
 
         z_min = all_latents.min(dim=0)[0].cpu().numpy()
         z_max = all_latents.max(dim=0)[0].cpu().numpy()
@@ -589,12 +593,9 @@ class InvBOInference:
         if verbose:
             print(f"Sampling {n_candidates} latent candidates...")
 
-        vae = self.gp.vae_with_adapter._vae
-        vae.eval()
-
         # Get VAE latent distribution from training data (64D)
-        with torch.no_grad():
-            all_latents = vae.encode_mu(self.gp.X_train)
+        # X_train is already stored as 64D VAE latents (normalized), use directly
+        all_latents = self.gp.X_train
 
         z_mean = all_latents.mean(dim=0)
         z_std = all_latents.std(dim=0) + 1e-6
@@ -944,13 +945,11 @@ class InvBOInference:
         if verbose:
             print("\nMeasuring inversion gap...")
 
-        vae = self.gp.vae_with_adapter._vae
-        vae.eval()
         self.gp.vae_with_adapter.eval()
 
         # Get VAE latent distribution (64D)
-        with torch.no_grad():
-            all_latents = vae.encode_mu(self.gp.X_train)
+        # X_train is already stored as 64D VAE latents (normalized), use directly
+        all_latents = self.gp.X_train
 
         z_mean = all_latents.mean(dim=0)
         z_std = all_latents.std(dim=0) + 1e-6
