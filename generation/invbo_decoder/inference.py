@@ -450,7 +450,8 @@ class InvBOInference:
                 if verbose:
                     print(f"  Re-generated:\n{text}")
 
-        # Re-encode for validation
+        # Re-encode for validation and GP prediction
+        # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
         reencoded = self.gtr.encode_tensor(text)
         cosine_sim = F.cosine_similarity(
             embedding.unsqueeze(0), reencoded.unsqueeze(0)
@@ -459,14 +460,14 @@ class InvBOInference:
         if verbose:
             print(f"  Cosine similarity: {cosine_sim:.4f}")
 
-        # GP prediction
-        pred_mean, pred_std = self.gp.predict(embedding)
-        ei = self.gp.expected_improvement(embedding)
+        # GP prediction on re-encoded embedding (matches training data distribution)
+        pred_mean, pred_std = self.gp.predict(reencoded)
+        ei = self.gp.expected_improvement(reencoded)
 
         result = InversionResult(
             instruction_text=text,
             latent=z_opt,
-            embedding=embedding,
+            embedding=reencoded,  # Use GTR embedding, not decoder output
             cosine_similarity=cosine_sim,
             predicted_error=pred_mean,
             ei_value=ei,

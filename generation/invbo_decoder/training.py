@@ -71,7 +71,7 @@ class TrainingConfig:
     gp_epochs: int = 5000
     gp_lr: float = 0.01
     gp_patience: int = 50
-    gp_initial_top_k: int = 25  # Train initial GP only on top-k prompts (lowest error)
+    gp_initial_top_k: int = 0  # 0 = train on all prompts, >0 = train on top-k only
 
     # VAE training
     vae_beta: float = 0.1  # KL regularization weight
@@ -162,22 +162,32 @@ class InvBOTrainer:
         for idx, inst in enumerate(self.instructions):
             self.instruction_embeddings[idx] = self.gtr.encode_tensor(inst)
 
-    def _validate_gp(self, verbose: bool = True) -> None:
-        """Validate GP predictions on training data."""
-        if verbose:
-            print("\nValidating GP predictions...")
+    def _validate_gp(self, verbose: bool = True) -> dict:
+        """Validate GP predictions on training data.
 
-        errors = []
-        for inst_id in sorted(self.error_rates.keys()):
-            emb = self.instruction_embeddings[inst_id]
-            pred_mean, pred_std = self.gp.predict(emb)
-            true_error = self.error_rates[inst_id]
-            errors.append(abs(pred_mean - true_error))
-
-        mae = sum(errors) / len(errors)
+        Returns:
+            Dictionary with MAE, RMSE, and max error metrics
+        """
         if verbose:
-            print(f"  Mean Absolute Error: {mae:.4f}")
-            print(f"  Max Error: {max(errors):.4f}")
+            print("\nValidating GP predictions on training data...")
+
+        # Collect all embeddings and true error rates
+        X = torch.stack([
+            self.instruction_embeddings[i] for i in sorted(self.error_rates.keys())
+        ])
+        y = torch.tensor([
+            self.error_rates[i] for i in sorted(self.error_rates.keys())
+        ], dtype=torch.float32)
+
+        # Use the new validate_predictions method
+        metrics = self.gp.validate_predictions(X, y)
+
+        if verbose:
+            print(f"  Mean Absolute Error: {metrics['mae']:.4f}")
+            print(f"  RMSE: {metrics['rmse']:.4f}")
+            print(f"  Max Error: {metrics['max_error']:.4f}")
+
+        return metrics
 
     def train_vae(self, verbose: bool = True) -> bool:
         """Train VAE on diverse instructions with KL annealing.
@@ -481,7 +491,7 @@ class InvBOTrainer:
             print("Training GP with VAE Encoder")
             print("=" * 60)
 
-        # Sort by error rate and take top-k for initial training
+        # Use all prompts or top-k for initial training
         sorted_ids = sorted(self.error_rates.keys(), key=lambda x: self.error_rates[x])
         top_k = self.config.gp_initial_top_k
         if top_k > 0 and top_k < len(sorted_ids):
@@ -490,9 +500,12 @@ class InvBOTrainer:
                 print(f"  Using top-{top_k} prompts (lowest error rate)")
                 print(f"  Error rate range: [{self.error_rates[train_ids[0]]:.4f}, {self.error_rates[train_ids[-1]]:.4f}]")
         else:
+            # Use all prompts for better GP generalization
             train_ids = sorted_ids
             if verbose:
+                rates = [self.error_rates[i] for i in train_ids]
                 print(f"  Using all {len(train_ids)} prompts")
+                print(f"  Error rate range: [{min(rates):.4f}, {max(rates):.4f}]")
 
         # Prepare training data
         embeddings = []
@@ -665,8 +678,9 @@ class InvBOTrainer:
         X_norm = (X - self.gp.X_min) / denom
         y_norm = (y - self.gp.y_mean) / self.gp.y_std
 
-        # Use same noise constraint as in training (prevents GP overconfidence)
-        self.gp.likelihood = GaussianLikelihood(noise_constraint=GreaterThan(1e-4)).to(self.device)
+        # Use same noise constraint as in training
+        from gpytorch.constraints import Interval
+        self.gp.likelihood = GaussianLikelihood(noise_constraint=Interval(0.001, 0.1)).to(self.device)
         self.gp.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.gp.likelihood, self.gp.feature_extractor
         ).to(self.device)

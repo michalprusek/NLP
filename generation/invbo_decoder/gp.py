@@ -12,7 +12,7 @@ import math
 import numpy as np
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.constraints import GreaterThan
+from gpytorch.constraints import GreaterThan, Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
@@ -296,10 +296,10 @@ class GPWithEI:
                 "feature_extractor must be set before training. "
                 "Use VAEWithAdapter from training.py."
             )
-        # Noise constraint - use 1e-4 as per BoTorch recommendation
-        # Higher noise (0.1) was causing underfitting
+        # Noise constraint - allow GP to learn noise in reasonable range
+        # Too low (1e-4) causes overconfidence, too high causes underfitting
         self.likelihood = GaussianLikelihood(
-            noise_constraint=GreaterThan(1e-4)
+            noise_constraint=Interval(0.001, 0.1)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.feature_extractor
@@ -396,6 +396,43 @@ class GPWithEI:
         std = std_norm * self.y_std.item()
 
         return mean, std
+
+    def validate_predictions(
+        self,
+        X: torch.Tensor,
+        y: torch.Tensor,
+    ) -> dict:
+        """Validate GP predictions against true values.
+
+        Useful for checking GP fit quality after training.
+
+        Args:
+            X: Embeddings to predict on (N, 768)
+            y: True error rates (N,)
+
+        Returns:
+            Dictionary with MAE, RMSE, and max error metrics
+        """
+        if self.gp_model is None:
+            raise RuntimeError("GP not trained.")
+
+        preds = []
+        for i in range(X.shape[0]):
+            mean, _ = self.predict(X[i])
+            preds.append(mean)
+
+        preds = torch.tensor(preds, device=self.device)
+        y = y.to(self.device)
+
+        mae = (preds - y).abs().mean()
+        rmse = ((preds - y) ** 2).mean().sqrt()
+        max_error = (preds - y).abs().max()
+
+        return {
+            "mae": mae.item(),
+            "rmse": rmse.item(),
+            "max_error": max_error.item(),
+        }
 
     def expected_improvement(
         self,
@@ -647,7 +684,7 @@ class GPWithEI:
 
         # Create new likelihood and GP model with existing feature extractor
         self.likelihood = GaussianLikelihood(
-            noise_constraint=GreaterThan(1e-4)
+            noise_constraint=Interval(0.001, 0.1)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.feature_extractor
