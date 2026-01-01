@@ -1,0 +1,12 @@
+{
+  "timestamp": "20260102_001606",
+  "method": "OPRO",
+  "prompt": "文本：解决这个问题的方法是什么？",
+  "validation_accuracy": 0.908,
+  "test_accuracy": 0.8483699772554966,
+  "test_error_rate": 0.15163002274450343,
+  "test_correct": 1119,
+  "test_total": 1319,
+  "budget_used": 132327,
+  "iterations": 64
+}

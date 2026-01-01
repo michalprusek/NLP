@@ -1,0 +1,150 @@
+{
+  "timestamp": "20260101_235310",
+  "vae_quality_metrics": {
+    "cosine_mean": 0.9658421874046326,
+    "cosine_std": 0.03293503448367119,
+    "cosine_min": 0.8670234084129333,
+    "cosine_max": 0.9923058748245239,
+    "mse_mean": 8.895293285604566e-05,
+    "mse_std": 8.576832624385133e-05,
+    "l2_relative_error": 0.24369528889656067,
+    "latent_norm_mean": 7.672718048095703,
+    "latent_norm_std": 0.6846615076065063,
+    "latent_var_mean": 0.9111839532852173,
+    "latent_var_min": 0.21396726369857788,
+    "latent_var_max": 1.7611985206604004,
+    "active_dims": 64,
+    "total_dims": 64,
+    "kld_mean": 7.617127895355225,
+    "kld_std": 2.5537476539611816,
+    "posterior_collapsed": false
+  },
+  "config": {
+    "mode": "standard",
+    "grid_path": null,
+    "top_k": null,
+    "validate_hyperband": false,
+    "ape_instructions": 1000,
+    "ape_model": "Qwen/Qwen2.5-7B-Instruct",
+    "skip_ape": false,
+    "vae_beta": 0.003,
+    "vae_epochs": 10000,
+    "vae_annealing": 500,
+    "vae_latent_dim": 64,
+    "vae_hidden_dim": 256,
+    "vae_lr": 0.0003,
+    "vae_patience": 500,
+    "bmin": 10,
+    "eta": 2.0,
+    "gp_epochs": 10000,
+    "gp_lr": 0.01,
+    "gp_patience": 100,
+    "iterations": 5,
+    "vec2text_model": "512_tokens",
+    "eval_model": "Qwen/Qwen2.5-7B-Instruct",
+    "eval_backend": "vllm",
+    "validation_samples": 1319,
+    "debug": false
+  },
+  "vae_training": {
+    "epochs_trained": 7266,
+    "final_recon_loss": 0.02786268969066441,
+    "final_kl_loss": 7.170452952384949,
+    "final_cosine_similarity": 0.972137313336134,
+    "final_beta": 0.003,
+    "early_stopped": true,
+    "num_embeddings": 1000,
+    "latent_dim": 64
+  },
+  "gp_training": {
+    "epochs_trained": 653,
+    "final_loss": -1.044679045677185,
+    "early_stopped": true,
+    "num_samples": 12,
+    "best_observed_error": 0.09220000356435776,
+    "error_range": {
+      "min": 0.09220000356435776,
+      "max": 0.241799995303154
+    }
+  },
+  "ape_generation": {
+    "llm_calls": 0
+  },
+  "hyperband": {
+    "best_instruction": "Solve problem步骤: 分析数据，找出关系，计算答案。",
+    "best_error": 0.0922,
+    "llm_calls": 0
+  },
+  "total_llm_calls": 6595,
+  "inference": {
+    "best_instruction": "Solve problem步骤: 分析数据，找出关系，计算答案。",
+    "best_error": 0.0922,
+    "iterations": 5,
+    "llm_calls": 6595,
+    "improvement": 0.0,
+    "use_inversion": true,
+    "use_botorch": true,
+    "history": [
+      {
+        "iteration": 1,
+        "instruction": "As a tutor, the step-by-step process is to break down the problem into manageable chunks. Then, as a student, explain each step in a clear and understandable way.",
+        "predicted_error": 0.11395215189224928,
+        "actual_error": 0.19787717968157692,
+        "improved": false,
+        "best_so_far": 0.0922,
+        "cosine_similarity": 0.8676670789718628,
+        "log_ei": -1.6254658699035645,
+        "gap": 0.05493199825286865,
+        "inversion_iters": 1
+      },
+      {
+        "iteration": 2,
+        "instruction": "Step by step, analyzing the information given in the equations. Analyze each step to find a solution to the problem. Divide the steps into steps based on the given information.",
+        "predicted_error": 0.1551539411968612,
+        "actual_error": 0.15693707354056108,
+        "improved": false,
+        "best_so_far": 0.0922,
+        "cosine_similarity": 0.9243990778923035,
+        "log_ei": -1.7195444107055664,
+        "gap": 0.06299382448196411,
+        "inversion_iters": 1
+      },
+      {
+        "iteration": 3,
+        "instruction": "Identify the source of the problem and determine the necessary steps to solve the problem. Using deductive reasoning, draw a complete list of all possible answers to the problem, identifying the factors that contribute to the final result. Analyze the logic of the given situation by analyzing the previous steps.",
+        "predicted_error": 0.23354503515990643,
+        "actual_error": 0.2463987869598181,
+        "improved": false,
+        "best_so_far": 0.0922,
+        "cosine_similarity": 0.9250690937042236,
+        "log_ei": -1.5304198265075684,
+        "gap": 0.0058522820472717285,
+        "inversion_iters": 1
+      },
+      {
+        "iteration": 4,
+        "instruction": "Analyze the steps taken in a given problem. Break down the information into steps.",
+        "predicted_error": 0.111499478640539,
+        "actual_error": 0.17589082638362397,
+        "improved": false,
+        "best_so_far": 0.0922,
+        "cosine_similarity": 0.919832706451416,
+        "log_ei": -1.5587553977966309,
+        "gap": 0.020184755325317383,
+        "inversion_iters": 1
+      },
+      {
+        "iteration": 5,
+        "instruction": "Step by step. Let's think of the problem in terms of manageable steps and break it down into manageable parts.",
+        "predicted_error": 0.15825237632663658,
+        "actual_error": 0.1637604245640637,
+        "improved": false,
+        "best_so_far": 0.0922,
+        "cosine_similarity": 0.9373651742935181,
+        "log_ei": -1.595386028289795,
+        "gap": 0.04359745979309082,
+        "inversion_iters": 1
+      }
+    ]
+  }
+}
