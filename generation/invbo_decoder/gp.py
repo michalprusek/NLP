@@ -255,10 +255,26 @@ class GPWithEI:
 
         embeddings = embeddings.to(self.device)
 
+        # Validate input dimension
+        expected_embed_dim = 768
+        if embeddings.shape[-1] != expected_embed_dim:
+            raise ValueError(
+                f"Expected embeddings with dim {expected_embed_dim}, got {embeddings.shape[-1]}. "
+                f"Ensure you're passing GTR embeddings, not VAE latents."
+            )
+
         # Transform to 64D VAE latents using frozen encoder
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            vae_latents = self.vae_with_adapter._vae.encode_mu(embeddings)
+            vae_latents = self.vae_with_adapter.encode_vae(embeddings)
+
+        # Validate VAE output dimension
+        expected_vae_dim = 64
+        if vae_latents.shape[-1] != expected_vae_dim:
+            raise RuntimeError(
+                f"VAE encoder output dimension mismatch: expected {expected_vae_dim}, "
+                f"got {vae_latents.shape[-1]}. Check VAE configuration."
+            )
 
         self.X_train = vae_latents  # (N, 64)
         self.y_train = error_rates.to(self.device)
@@ -366,9 +382,14 @@ class GPWithEI:
                         print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
 
                 except RuntimeError as e:
-                    if "cholesky" in str(e).lower():
+                    error_msg = str(e).lower()
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                        print(f"WARNING: GP training failed - numerical instability")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
+                        print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
+                        print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
                         if verbose:
-                            print(f"  Cholesky error at epoch {epoch + 1}")
+                            print(f"  Error: {e}")
                         return False
                     raise
 
@@ -401,7 +422,7 @@ class GPWithEI:
         with torch.no_grad():
             if embedding.shape[-1] == 768:
                 # Encode through VAE to get 64D latent
-                z_vae = self.vae_with_adapter._vae.encode_mu(embedding)
+                z_vae = self.vae_with_adapter.encode_vae(embedding)
             else:
                 z_vae = embedding
 
@@ -608,7 +629,7 @@ class GPWithEI:
         # First encode to 64D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            z_vae = self.vae_with_adapter._vae.encode_mu(embedding)
+            z_vae = self.vae_with_adapter.encode_vae(embedding)
 
         # Normalize 64D latent
         denom = self.X_max - self.X_min
@@ -651,7 +672,7 @@ class GPWithEI:
 
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            z_vae = self.vae_with_adapter._vae.encode_mu(embedding)
+            z_vae = self.vae_with_adapter.encode_vae(embedding)
 
         # Add 64D VAE latent to training data
         self.X_train = torch.cat([self.X_train, z_vae], dim=0)
@@ -765,9 +786,14 @@ class GPWithEI:
                         print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
 
                 except RuntimeError as e:
-                    if "cholesky" in str(e).lower():
+                    error_msg = str(e).lower()
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                        print(f"WARNING: GP training failed - numerical instability")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
+                        print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
+                        print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
                         if verbose:
-                            print(f"  Cholesky error at epoch {epoch + 1}")
+                            print(f"  Error: {e}")
                         return False
                     raise
 

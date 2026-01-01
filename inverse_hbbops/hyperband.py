@@ -179,11 +179,16 @@ class InverseHbBoPs:
         if np.std(errors) < 1e-6:
             return False
 
-        # Prepare training tensors
-        X = torch.stack([emb for emb, _ in fidelity_data]).to(self.device)
+        # Prepare training tensors - convert 768D embeddings to 64D VAE latents
+        embeddings = torch.stack([emb for emb, _ in fidelity_data]).to(self.device)
         y = torch.tensor(errors, dtype=torch.float32, device=self.device)
 
-        # Unit cube normalization for inputs
+        # Convert to 64D VAE latents (GP expects 64D input for adapter)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            X = self.vae_with_adapter.encode_vae(embeddings)
+
+        # Unit cube normalization for 64D VAE latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -243,10 +248,15 @@ class InverseHbBoPs:
 
         emb = self.instruction_embeddings[prompt.instruction_id].unsqueeze(0)
 
-        # Normalize
+        # Convert 768D embedding to 64D VAE latent (GP expects 64D)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            z_vae = self.vae_with_adapter.encode_vae(emb)
+
+        # Normalize 64D VAE latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
-        X_norm = (emb - self.X_min) / denom
+        X_norm = (z_vae - self.X_min) / denom
 
         self.gp_model.eval()
         self.likelihood.eval()
@@ -257,7 +267,12 @@ class InverseHbBoPs:
                 mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
                 std = pred.stddev.item() * self.y_std.item()
         except RuntimeError as e:
-            print(f"  EI prediction error (falling back to random): {e}")
+            error_msg = str(e).lower()
+            if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                print(f"  WARNING: EI prediction failed (numerical issue), using RANDOM selection")
+                print(f"    Error: {e}")
+            else:
+                print(f"  WARNING: Unexpected EI prediction error: {type(e).__name__}: {e}")
             return 0.0
 
         if std <= 0:
@@ -400,7 +415,7 @@ class InverseHbBoPs:
             raise RuntimeError("GP not trained. Run run_hyperband() first.")
 
         gp_with_ei = GPWithEI(device=str(self.device), latent_dim=10)
-        gp_with_ei.feature_extractor = self.vae_with_adapter
+        gp_with_ei.vae_with_adapter = self.vae_with_adapter
 
         # Set training data from design data
         # Use highest fidelity observations for each prompt
