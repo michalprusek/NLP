@@ -475,7 +475,7 @@ class InvBOTrainer:
         """Train GP using VAE encoder for latent representation.
 
         Uses VAE.encode_mu() (deterministic) for GP training.
-        Initially trains on top-k prompts (lowest error rate) for better GP fit.
+        Trains on all prompts by default (gp_initial_top_k=0).
 
         Args:
             verbose: Print progress

@@ -806,8 +806,8 @@ class InvBOInference:
 
         z_inv = z.detach()
 
-        # Gap jako cosine distance v embedding space (stabilnější než L2 v latentu)
-        # L2 v latentu může být vysoká i když embeddingy jsou podobné
+        # Gap as cosine distance in embedding space (more stable than L2 in latent)
+        # L2 in latent can be high even when embeddings are similar
         with torch.no_grad():
             self.decoder.eval()
             emb_original = self.decoder(z_original)
@@ -815,7 +815,7 @@ class InvBOInference:
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
-        gap = cosine_gap  # Nyní v rozsahu [0, 2] místo [0, ∞)
+        gap = cosine_gap  # Now in range [0, 2] instead of [0, infinity)
 
         if verbose:
             print(f"  Inversion: gap = {gap:.4f}, loss = {final_loss:.4f}, converged = {converged}")
