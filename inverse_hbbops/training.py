@@ -392,6 +392,7 @@ class InverseHbBoPsTrainer:
 
             epoch_losses = []
             epoch_cosine = []
+            epoch_kl = []
 
             for i in range(0, len(embeddings), self.config.vae_batch_size):
                 batch = X_shuffled[i:i + self.config.vae_batch_size]
@@ -405,11 +406,13 @@ class InverseHbBoPsTrainer:
 
                 epoch_losses.append(loss_dict["recon"])
                 epoch_cosine.append(loss_dict["cosine_mean"])
+                epoch_kl.append(loss_dict["kl"])
 
             scheduler.step()
 
             avg_recon = sum(epoch_losses) / len(epoch_losses)
             avg_cosine = sum(epoch_cosine) / len(epoch_cosine)
+            avg_kl = sum(epoch_kl) / len(epoch_kl)
 
             if avg_recon < best_recon:
                 best_recon = avg_recon
@@ -423,12 +426,13 @@ class InverseHbBoPsTrainer:
                 break
 
             if verbose and (epoch + 1) % 100 == 0:
-                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}")
+                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, kl={avg_kl:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}")
 
         # Store VAE training stats
         self.vae_stats = {
             "epochs_trained": epoch + 1,
             "final_recon_loss": float(avg_recon),
+            "final_kl_loss": float(avg_kl),
             "final_cosine_similarity": float(avg_cosine),
             "final_beta": float(current_beta),
             "early_stopped": patience_counter >= self.config.vae_patience,
@@ -784,6 +788,109 @@ class InverseHbBoPsTrainer:
             print(f"  Encoded {len(self.diverse_embeddings)} diverse instructions")
 
         return diverse_instructions
+
+    def load_from_hyperband_evaluations(
+        self,
+        evals_path: str,
+        top_fidelity_fraction: float = 0.25,
+        verbose: bool = True,
+    ) -> Tuple[List[str], List[float], List[int]]:
+        """Load instructions and evaluations from saved hyperband_evaluations JSON.
+
+        This allows skipping HbBoPs run by using pre-existing evaluations.
+        Only uses evaluations with fidelity in the top fraction (like HbBoPs).
+
+        Args:
+            evals_path: Path to JSON file with 'instructions' and 'hyperband_evaluations' keys
+            top_fidelity_fraction: Only use evaluations with fidelity >= max_fidelity * (1 - fraction)
+                                   e.g., 0.25 means keep top 25% of fidelity range (default: 0.25)
+            verbose: Print progress
+
+        Returns:
+            Tuple of (instructions, error_rates, fidelities) for high-fidelity evaluated instructions only
+        """
+        if verbose:
+            print(f"\nLoading hyperband evaluations: {evals_path}")
+
+        with open(evals_path, "r") as f:
+            data = json.load(f)
+
+        # Load all instructions
+        all_instructions = data.get("instructions", [])
+        if verbose:
+            print(f"  Total instructions: {len(all_instructions)}")
+
+        # Load hyperband evaluations
+        hb_evals = data.get("hyperband_evaluations", {})
+        results = hb_evals.get("results", {})
+        max_fidelity = hb_evals.get("max_fidelity", 1319)
+
+        if verbose:
+            print(f"  Evaluated instructions: {len(results)}")
+            print(f"  Max fidelity: {max_fidelity}")
+
+        # Compute threshold: top 25% means fidelity >= max_fidelity * 0.75
+        fidelity_threshold = int(max_fidelity * (1 - top_fidelity_fraction))
+
+        if verbose:
+            print(f"  Fidelity threshold (top {top_fidelity_fraction*100:.0f}%): >= {fidelity_threshold}")
+
+        # Build lists of evaluated instructions with their error rates and fidelities
+        # Only include high-fidelity evaluations
+        evaluated_instructions = []
+        error_rates = []
+        fidelities = []
+
+        for idx_str, result in results.items():
+            idx = int(idx_str)
+            fidelity = result.get("fidelity", max_fidelity)
+            if idx < len(all_instructions) and fidelity >= fidelity_threshold:
+                evaluated_instructions.append(all_instructions[idx])
+                error_rates.append(result["error_rate"])
+                fidelities.append(fidelity)
+
+        if verbose:
+            print(f"  High-fidelity instructions: {len(evaluated_instructions)} (filtered from {len(results)})")
+            errors = sorted(error_rates)
+            print(f"  Error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
+            print(f"  Best 5 errors: {[f'{e:.4f}' for e in errors[:5]]}")
+
+        # Store for VAE and GP training
+        self.instructions = evaluated_instructions
+        self.grid_error_rates = error_rates
+        self.fidelities = fidelities
+
+        # Build grid_data (sorted by error_rate) for train_gp_from_grid compatibility
+        grid_data = []
+        for inst, err, fid in zip(evaluated_instructions, error_rates, fidelities):
+            grid_data.append({
+                "instruction_text": inst,
+                "error_rate": err,
+                "fidelity": fid,
+            })
+        grid_data.sort(key=lambda x: x["error_rate"])
+        self.grid_data = grid_data
+
+        # Pre-compute embeddings
+        if verbose:
+            print("Encoding instructions with GTR...")
+        for idx, inst in enumerate(self.instructions):
+            self.instruction_embeddings[idx] = self.gtr.encode_tensor(inst)
+
+        if verbose:
+            print(f"  Encoded {len(self.instruction_embeddings)} instructions")
+
+        # Store for diverse VAE training (all 1000+ instructions)
+        self.diverse_instructions = all_instructions
+        self.diverse_embeddings = {}
+        if verbose:
+            print("Encoding all diverse instructions for VAE...")
+        for idx, inst in enumerate(all_instructions):
+            self.diverse_embeddings[idx] = self.gtr.encode_tensor(inst)
+        if verbose:
+            print(f"  Encoded {len(self.diverse_embeddings)} diverse instructions")
+
+        return evaluated_instructions, error_rates, fidelities
 
     def evaluate_vae_quality(self, verbose: bool = True) -> Dict[str, float]:
         """Compute comprehensive VAE quality metrics.

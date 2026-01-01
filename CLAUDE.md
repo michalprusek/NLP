@@ -204,9 +204,20 @@ Note: Fidelity indicates how many validation samples were used. Lower fidelity =
 
 **Instruction-only optimization with VAE latent space and adapter-based GP:**
 
+```bash
+# Skip HbBoPs: Load pre-evaluated results and train GP only (DEFAULT - no LLM needed)
+uv run python -m inverse_hbbops.run --skip-hbbops
+
+# Skip HbBoPs with custom evaluations file
+uv run python -m inverse_hbbops.run --skip-hbbops --hyperband-evals-path path/to/evals.json
+
+# Full run with HbBoPs evaluation (requires LLM)
+uv run python -m inverse_hbbops.run --iterations 10
+```
+
 **Datasets:**
 - Grid with evaluations: `/home/prusek/NLP/datasets/inversion/grid_100_qend.jsonl`
-- Diverse instructions for VAE training: `/home/prusek/NLP/datasets/inversion/diverse_instructions_1000.json`
+- APE instructions with hyperband evaluations: `/home/prusek/NLP/inverse_hbbops/data/ape_instructions.json` (1000 instructions, 225 evaluated)
 
 **Architecture:**
 - VAE: 768D GTR → 64D latent (frozen during GP training)
@@ -217,6 +228,13 @@ Note: Fidelity indicates how many validation samples were used. Lower fidelity =
 ```
 z (64D) → Adapter → z_gp (10D) → GP → qLogEI
 ```
+
+**Skip HbBoPs Mode:**
+When `--skip-hbbops` is enabled:
+1. Loads all instructions + hyperband_evaluations from JSON
+2. Trains VAE on all 1000+ instructions (diverse coverage)
+3. Trains GP on 225 evaluated instructions only
+4. Runs InvBO inference without additional LLM calls for training
 
 ## Coding Standards
 

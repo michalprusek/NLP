@@ -231,7 +231,7 @@ class InverseHbBoPs:
                         break
                 except RuntimeError as e:
                     error_msg = str(e).lower()
-                    if "cholesky" in error_msg or "singular" in error_msg:
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
                         print(f"  GP training: numerical error at epoch {epoch + 1}, stopping early")
                     else:
                         print(f"  GP training error at epoch {epoch + 1}: {e}")

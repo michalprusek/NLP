@@ -446,10 +446,20 @@ class GPWithEI:
         self.gp_model.eval()
         self.likelihood.eval()
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            pred = self.likelihood(self.gp_model(X_norm))
-            mean_norm = pred.mean.item()
-            std_norm = pred.stddev.item()
+        try:
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                pred = self.likelihood(self.gp_model(X_norm))
+                mean_norm = pred.mean.item()
+                std_norm = pred.stddev.item()
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                raise RuntimeError(
+                    f"GP prediction failed due to numerical instability. "
+                    f"This may indicate ill-conditioned training data. "
+                    f"Original error: {e}"
+                ) from e
+            raise
 
         # Denormalize
         mean = mean_norm * self.y_std.item() + self.y_mean.item()

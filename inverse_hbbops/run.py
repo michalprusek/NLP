@@ -248,6 +248,15 @@ def main():
         "--hyperband-only", action="store_true",
         help="Run only Hyperband (no InvBO inference)"
     )
+    parser.add_argument(
+        "--skip-hbbops", action="store_true",
+        help="Skip HbBoPs run, load evaluations from --hyperband-evals-path"
+    )
+    parser.add_argument(
+        "--hyperband-evals-path", type=str,
+        default="inverse_hbbops/data/ape_instructions.json",
+        help="Path to JSON with hyperband_evaluations (default: inverse_hbbops/data/ape_instructions.json)"
+    )
 
     # GP training
     parser.add_argument(
@@ -383,11 +392,14 @@ def main():
     # Setup
     # =========================================================================
 
-    mode = "grid" if args.load_grid else "standard"
+    mode = "skip_hbbops" if args.skip_hbbops else ("grid" if args.load_grid else "standard")
     print("=" * 70)
     print("INVERSE HbBoPs PIPELINE")
     print("=" * 70)
-    if args.load_grid:
+    if args.skip_hbbops:
+        print(f"Mode: SKIP HBBOPS (load pre-evaluated)")
+        print(f"Evaluations: {args.hyperband_evals_path}")
+    elif args.load_grid:
         print(f"Mode: GRID LOADING (top-{args.top_k})")
         print(f"Grid: {args.load_grid}")
         if args.validate_hyperband:
@@ -412,6 +424,7 @@ def main():
     from inverse_hbbops.training import InverseHbBoPsTrainer
     from inverse_hbbops.inference import InverseHbBoPsInference
     from inverse_hbbops.evaluate import GSM8KEvaluator
+    from inverse_hbbops.instruction import InstructionOnlyPrompt
 
     # =========================================================================
     # Build Config from CLI args (SSOT)
@@ -459,10 +472,42 @@ def main():
     )
 
     # =========================================================================
+    # SKIP HBBOPS MODE: Load from pre-evaluated hyperband_evaluations JSON
+    # =========================================================================
+
+    if args.skip_hbbops:
+        trainer.load_validation_data(verbose=True)
+
+        # Load instructions and evaluations from JSON
+        trainer.load_from_hyperband_evaluations(
+            args.hyperband_evals_path,
+            verbose=True,
+        )
+
+        # Train VAE on all diverse instructions (1000+)
+        trainer.train_vae(embedding_source="diverse", verbose=True)
+        vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
+
+        # Train GP on evaluated instructions (225)
+        gp = trainer.train_gp_from_grid(verbose=True)
+
+        # Get best instruction from evaluations
+        best_idx = int(trainer.grid_error_rates.index(min(trainer.grid_error_rates)))
+        best_prompt = InstructionOnlyPrompt(
+            instruction=trainer.instructions[best_idx],
+            instruction_id=best_idx,
+        )
+        best_error = trainer.grid_error_rates[best_idx]
+
+        print(f"\nSkip HbBoPs loading complete!")
+        print(f"  Best prompt (from evaluations):\n{best_prompt.instruction}")
+        print(f"  Best error: {best_error:.4f}")
+
+    # =========================================================================
     # GRID MODE: Load from pre-evaluated grid
     # =========================================================================
 
-    if args.load_grid:
+    elif args.load_grid:
         trainer.load_validation_data(verbose=True)
 
         if args.validate_hyperband:
