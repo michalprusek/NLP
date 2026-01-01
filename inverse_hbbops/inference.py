@@ -540,9 +540,9 @@ class InverseHbBoPsInference:
                 continue
 
         if best_z is None:
-            # Fallback to random sampling
-            if verbose:
-                print("  All restarts failed, using random sampling")
+            # Fallback to random sampling - always warn, this is unusual
+            print("WARNING: All L-BFGS-B restarts failed. Falling back to random sampling.")
+            print("  This may indicate a numerical issue with the GP or VAE.")
             best_z = np.random.uniform(low=z_min, high=z_max)
             z = torch.tensor(best_z, dtype=torch.float32, device=self.device)
             with torch.no_grad():
@@ -672,10 +672,12 @@ class InverseHbBoPsInference:
             error_to_use,
             epochs=500,
             patience=10,
-            verbose=False,
+            verbose=verbose,
         )
-        if not retrain_success and verbose:
-            print(f"  Warning: GP retraining failed (Cholesky error), continuing with previous model")
+        if not retrain_success:
+            # GP already logs the warning, just note we're continuing
+            if verbose:
+                print(f"  Continuing with previous GP model")
 
         record = IterationRecord(
             iteration=iteration,

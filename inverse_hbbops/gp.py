@@ -347,8 +347,12 @@ class GPWithEI:
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
+                        # Always log Cholesky errors - they indicate numerical issues
+                        print(f"WARNING: GP training failed - Cholesky decomposition error")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
+                        print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
                         if verbose:
-                            print(f"  Cholesky error at epoch {epoch + 1}")
+                            print(f"  Error: {e}")
                         return False
                     raise
 
@@ -655,6 +659,7 @@ class GPWithEI:
         best_loss = float("inf")
         patience_counter = 0
 
+        final_epoch = 0
         with gpytorch.settings.cholesky_jitter(1e-4):
             for epoch in range(epochs):
                 try:
@@ -664,6 +669,7 @@ class GPWithEI:
                     loss.backward()
                     optimizer.step()
 
+                    final_epoch = epoch + 1
                     if loss.item() < best_loss:
                         best_loss = loss.item()
                         patience_counter = 0
@@ -675,8 +681,16 @@ class GPWithEI:
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
+                        # Always log Cholesky errors - they indicate numerical issues
+                        print(f"WARNING: GP retraining failed - Cholesky decomposition error")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {self.get_training_size()}")
+                        if verbose:
+                            print(f"  Error: {e}")
                         return False
                     raise
+
+        if verbose:
+            print(f"  GP retrained: {final_epoch} epochs, MLL={-best_loss:.4f}")
 
         return True
 
