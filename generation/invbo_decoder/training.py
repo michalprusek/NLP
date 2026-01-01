@@ -669,7 +669,7 @@ class InvBOTrainer:
         self.gp.y_best = gp_state["y_best"]
 
         # Reinitialize GP model with stored weights
-        from gpytorch.constraints import GreaterThan
+        from gpytorch.constraints import Interval
         from gpytorch.likelihoods import GaussianLikelihood
         from generation.invbo_decoder.gp import InstructionDeepKernelGP
 
@@ -679,7 +679,6 @@ class InvBOTrainer:
         y_norm = (y - self.gp.y_mean) / self.gp.y_std
 
         # Use same noise constraint as in training
-        from gpytorch.constraints import Interval
         self.gp.likelihood = GaussianLikelihood(noise_constraint=Interval(0.001, 0.1)).to(self.device)
         self.gp.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.gp.likelihood, self.gp.feature_extractor

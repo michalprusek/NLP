@@ -173,7 +173,7 @@ uv run python -m generation.invbo_decoder.run \
 
 **Key Design Decisions:**
 - LogEI instead of EI for numerical stability (avoids underflow with tiny improvement values)
-- Noise constraint `GreaterThan(1e-4)` on GP to prevent over-confidence
+- Noise constraint `Interval(0.001, 0.1)` on GP to balance between over-confidence (too low) and underfitting (too high)
 - VAE early stopping tracks reconstruction loss (not total loss) to avoid premature stop during KL annealing
 
 ## Coding Standards

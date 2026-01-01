@@ -12,7 +12,7 @@ import math
 import numpy as np
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.constraints import GreaterThan, Interval
+from gpytorch.constraints import Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
