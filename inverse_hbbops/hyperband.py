@@ -11,35 +11,17 @@ Algorithm based on Schneider et al. (2025)
 """
 
 import torch
-import torch.nn as nn
 import gpytorch
-from typing import List, Tuple, Dict, Optional, Callable, Any
+from typing import List, Tuple, Dict, Optional, Callable
 from collections import Counter
 import numpy as np
 import random
-from dataclasses import dataclass
 from scipy.stats import norm
 
+from inverse_hbbops.config import Config
 from inverse_hbbops.instruction import InstructionOnlyPrompt
 from inverse_hbbops.encoder import GTRInstructionEncoder, VAEWithAdapter
-from inverse_hbbops.gp import GPWithEI
-
-
-@dataclass
-class HyperbandConfig:
-    """Configuration for Hyperband."""
-    bmin: int = 10  # Minimum fidelity (samples)
-    eta: float = 2.0  # Downsampling rate
-    random_interleaving_prob: float = 0.1  # 10% random for exploration
-    gp_epochs: int = 3000
-    gp_lr: float = 0.01
-    gp_patience: int = 10
-    top_fidelity_pct: float = 0.75  # Train GP on top 75% fidelity levels
-    seed: int = 42
-
-
-# Note: InstructionDeepKernelGP is imported from gp.py to avoid duplication
-from inverse_hbbops.gp import InstructionDeepKernelGP
+from inverse_hbbops.gp import GPWithEI, InstructionDeepKernelGP
 
 
 class InverseHbBoPs:
@@ -59,7 +41,7 @@ class InverseHbBoPs:
         llm_evaluator: Callable[[InstructionOnlyPrompt, List[Dict]], float],
         vae_with_adapter: VAEWithAdapter,
         encoder: GTRInstructionEncoder,
-        config: Optional[HyperbandConfig] = None,
+        config: Config,
         device: str = "auto",
     ):
         """Initialize Hyperband.
@@ -70,10 +52,10 @@ class InverseHbBoPs:
             llm_evaluator: Function (prompt, data) -> error_rate
             vae_with_adapter: VAEWithAdapter for GP feature extraction
             encoder: GTR encoder for embeddings
-            config: Hyperband configuration
+            config: Unified pipeline configuration
             device: Device to use
         """
-        self.config = config or HyperbandConfig()
+        self.config = config
         self.device = self._get_device(device)
 
         # Store instructions as prompts
@@ -197,11 +179,16 @@ class InverseHbBoPs:
         if np.std(errors) < 1e-6:
             return False
 
-        # Prepare training tensors
-        X = torch.stack([emb for emb, _ in fidelity_data]).to(self.device)
+        # Prepare training tensors - convert 768D embeddings to 64D VAE latents
+        embeddings = torch.stack([emb for emb, _ in fidelity_data]).to(self.device)
         y = torch.tensor(errors, dtype=torch.float32, device=self.device)
 
-        # Unit cube normalization for inputs
+        # Convert to 64D VAE latents (GP expects 64D input for adapter)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            X = self.vae_with_adapter.encode_vae(embeddings)
+
+        # Unit cube normalization for 64D VAE latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -244,7 +231,7 @@ class InverseHbBoPs:
                         break
                 except RuntimeError as e:
                     error_msg = str(e).lower()
-                    if "cholesky" in error_msg or "singular" in error_msg:
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
                         print(f"  GP training: numerical error at epoch {epoch + 1}, stopping early")
                     else:
                         print(f"  GP training error at epoch {epoch + 1}: {e}")
@@ -261,10 +248,15 @@ class InverseHbBoPs:
 
         emb = self.instruction_embeddings[prompt.instruction_id].unsqueeze(0)
 
-        # Normalize
+        # Convert 768D embedding to 64D VAE latent (GP expects 64D)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            z_vae = self.vae_with_adapter.encode_vae(emb)
+
+        # Normalize 64D VAE latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
-        X_norm = (emb - self.X_min) / denom
+        X_norm = (z_vae - self.X_min) / denom
 
         self.gp_model.eval()
         self.likelihood.eval()
@@ -275,7 +267,12 @@ class InverseHbBoPs:
                 mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
                 std = pred.stddev.item() * self.y_std.item()
         except RuntimeError as e:
-            print(f"  EI prediction error (falling back to random): {e}")
+            error_msg = str(e).lower()
+            if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                print(f"  WARNING: EI prediction failed (numerical issue), using RANDOM selection")
+                print(f"    Error: {e}")
+            else:
+                print(f"  WARNING: Unexpected EI prediction error: {type(e).__name__}: {e}")
             return 0.0
 
         if std <= 0:
@@ -418,7 +415,7 @@ class InverseHbBoPs:
             raise RuntimeError("GP not trained. Run run_hyperband() first.")
 
         gp_with_ei = GPWithEI(device=str(self.device), latent_dim=10)
-        gp_with_ei.feature_extractor = self.vae_with_adapter
+        gp_with_ei.vae_with_adapter = self.vae_with_adapter
 
         # Set training data from design data
         # Use highest fidelity observations for each prompt
@@ -436,7 +433,13 @@ class InverseHbBoPs:
         gp_with_ei.y_mean = self.y_mean
         gp_with_ei.y_std = self.y_std
 
-        # Retrain GP with proper setup
-        gp_with_ei.train(epochs=3000, lr=0.01, patience=50, verbose=False)
+        # Retrain GP with params from config
+        hb_gp_params = self.config.for_hyperband_gp()
+        gp_with_ei.train(
+            epochs=hb_gp_params["epochs"],
+            lr=hb_gp_params["lr"],
+            patience=hb_gp_params["patience"],
+            verbose=False,
+        )
 
         return gp_with_ei

@@ -113,8 +113,8 @@ class InstructionVAE(nn.Module):
     def __init__(
         self,
         input_dim: int = 768,
-        latent_dim: int = 10,
-        beta: float = 0.1,
+        latent_dim: int = 64,
+        beta: float = 0.003,
     ):
         """Initialize VAE.
 

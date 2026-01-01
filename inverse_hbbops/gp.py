@@ -14,7 +14,7 @@ import math
 import numpy as np
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.constraints import GreaterThan, Interval
+from gpytorch.constraints import Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
@@ -127,18 +127,18 @@ def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
     """Gaussian Process with deep kernel for instruction optimization.
 
-    Uses ARD Matern 5/2 kernel on 10D latent features from VAEWithAdapter.
+    Uses trainable adapter (64D → 10D) + ARD Matern 5/2 kernel.
     Inherits from GPyTorchModel for BoTorch compatibility (enables EI, etc.).
 
     Architecture:
-        768D GTR embedding -> VAEWithAdapter -> 10D latent
-                                                   |
-                                   Matern 5/2 kernel (ARD)
-                                                   |
-                                   GP(mean=0, K(latent))
+        64D VAE latent -> Adapter (trainable) -> 10D
+                                                  |
+                                  Matern 5/2 kernel (ARD)
+                                                  |
+                                  GP(mean=0, K(latent))
 
-    The kernel learns per-dimension lengthscales (ARD) to weight
-    different latent dimensions based on their importance for prediction.
+    Training: Adapter and GP kernel are trained jointly on 64D VAE latents.
+    VAE encoder is frozen and applied before GP training.
     """
 
     _num_outputs = 1  # Required for BoTorch
@@ -148,15 +148,15 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         train_x: torch.Tensor,
         train_y: torch.Tensor,
         likelihood: GaussianLikelihood,
-        feature_extractor: nn.Module,
+        adapter: nn.Module,
     ):
         """Initialize GP.
 
         Args:
-            train_x: Training embeddings (N, 768)
+            train_x: Training VAE latents (N, 64)
             train_y: Training targets (N,) - error rates
             likelihood: Gaussian likelihood
-            feature_extractor: Deep kernel feature extractor
+            adapter: Trainable adapter MLP (64D → 10D)
         """
         # Ensure train_y is 1D for ExactGP
         train_y = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
@@ -166,24 +166,24 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         self.covar_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(
                 nu=2.5,  # Matern 5/2 - smooth but flexible
-                ard_num_dims=10,  # Per-dimension lengthscales
+                ard_num_dims=10,  # Per-dimension lengthscales (adapter output dim)
                 lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
             ),
             outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
         )
-        self.feature_extractor = feature_extractor
+        self.adapter = adapter
 
     def forward(self, x: torch.Tensor) -> MultivariateNormal:
         """Forward pass through GP.
 
         Args:
-            x: Instruction embedding (batch, 768) or (batch, n, 768)
+            x: VAE latent (batch, 64) or (batch, n, 64)
 
         Returns:
             MultivariateNormal distribution over function values
         """
-        # Extract latent features
-        latent = self.feature_extractor(x)
+        # Apply adapter: 64D → 10D
+        latent = self.adapter(x)
 
         # Handle 3D for BoTorch posterior
         if latent.dim() == 3:
@@ -200,6 +200,10 @@ class GPWithEI:
 
     Manages GP training, prediction, and EI computation for
     instruction optimization.
+
+    Architecture:
+        Training: embeddings (768D) → frozen VAE encoder → z (64D) → adapter+GP training
+        Inference: z (64D) → adapter → z_gp (10D) → GP → qLogEI
     """
 
     def __init__(
@@ -211,21 +215,21 @@ class GPWithEI:
 
         Args:
             device: Device to use
-            latent_dim: Latent dimension (10)
+            latent_dim: Adapter output dimension (10)
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.latent_dim = latent_dim
 
         # Components (initialized during training)
-        self.feature_extractor: Optional[nn.Module] = None
+        self.vae_with_adapter: Optional[nn.Module] = None  # VAEWithAdapter (frozen VAE + trainable adapter)
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
-        # Training data
-        self.X_train: Optional[torch.Tensor] = None  # (N, 768)
+        # Training data - stored as 64D VAE latents
+        self.X_train: Optional[torch.Tensor] = None  # (N, 64) VAE latents
         self.y_train: Optional[torch.Tensor] = None  # (N,)
 
-        # Normalization parameters
+        # Normalization parameters (for 64D latents)
         self.X_min: Optional[torch.Tensor] = None
         self.X_max: Optional[torch.Tensor] = None
         self.y_mean: Optional[torch.Tensor] = None
@@ -244,11 +248,39 @@ class GPWithEI:
     ):
         """Set training data for GP.
 
+        Transforms embeddings to 64D VAE latents using frozen VAE encoder.
+
         Args:
             embeddings: Instruction embeddings (N, 768)
             error_rates: Error rates (N,)
         """
-        self.X_train = embeddings.to(self.device)
+        if self.vae_with_adapter is None:
+            raise RuntimeError("vae_with_adapter must be set before setting training data.")
+
+        embeddings = embeddings.to(self.device)
+
+        # Validate input dimension
+        expected_embed_dim = 768
+        if embeddings.shape[-1] != expected_embed_dim:
+            raise ValueError(
+                f"Expected embeddings with dim {expected_embed_dim}, got {embeddings.shape[-1]}. "
+                f"Ensure you're passing GTR embeddings, not VAE latents."
+            )
+
+        # Transform to 64D VAE latents using frozen encoder
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            vae_latents = self.vae_with_adapter.encode_vae(embeddings)
+
+        # Validate VAE output dimension
+        expected_vae_dim = 64
+        if vae_latents.shape[-1] != expected_vae_dim:
+            raise RuntimeError(
+                f"VAE encoder output dimension mismatch: expected {expected_vae_dim}, "
+                f"got {vae_latents.shape[-1]}. Check VAE configuration."
+            )
+
+        self.X_train = vae_latents  # (N, 64)
         self.y_train = error_rates.to(self.device)
         self.y_best = self.y_train.min().item()
 
@@ -259,7 +291,10 @@ class GPWithEI:
         patience: int = 10,
         verbose: bool = True,
     ) -> bool:
-        """Train GP on stored data.
+        """Train GP on stored 64D VAE latents.
+
+        Trains adapter (64D→10D) and GP kernel jointly.
+        VAE encoder is frozen.
 
         Args:
             epochs: Maximum training epochs
@@ -273,10 +308,10 @@ class GPWithEI:
         if self.X_train is None or self.y_train is None:
             raise RuntimeError("No training data. Call set_training_data() first.")
 
-        X = self.X_train
+        X = self.X_train  # Already 64D VAE latents
         y = self.y_train
 
-        # Unit cube normalization for inputs
+        # Unit cube normalization for 64D latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -292,18 +327,22 @@ class GPWithEI:
         self.y_mean = self.outcome_transform.means.squeeze()
         self.y_std = self.outcome_transform.stdvs.squeeze()
 
-        # Feature extractor must be pre-set (VAEWithAdapter)
-        if self.feature_extractor is None:
+        # VAEWithAdapter must be pre-set
+        if self.vae_with_adapter is None:
             raise RuntimeError(
-                "feature_extractor must be set before training. "
+                "vae_with_adapter must be set before training. "
                 "Use VAEWithAdapter from encoder.py."
             )
+
+        # Get trainable adapter from VAEWithAdapter
+        adapter = self.vae_with_adapter.adapter
+
         # Noise constraint - allow GP to learn noise in reasonable range
         self.likelihood = GaussianLikelihood(
             noise_constraint=Interval(0.001, 0.1)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, self.feature_extractor
+            X_norm, y_norm, self.likelihood, adapter
         ).to(self.device)
 
         # Register outcome transform for BoTorch compatibility
@@ -346,11 +385,12 @@ class GPWithEI:
                         print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
 
                 except RuntimeError as e:
-                    if "cholesky" in str(e).lower():
-                        # Always log Cholesky errors - they indicate numerical issues
-                        print(f"WARNING: GP training failed - Cholesky decomposition error")
+                    error_msg = str(e).lower()
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                        print(f"WARNING: GP training failed - numerical instability")
                         print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
                         print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
+                        print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
                         if verbose:
                             print(f"  Error: {e}")
                         return False
@@ -389,19 +429,37 @@ class GPWithEI:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
+        # Encode 768D embedding to 64D VAE latent if needed
+        with torch.no_grad():
+            if embedding.shape[-1] == 768:
+                # Encode through VAE to get 64D latent
+                z_vae = self.vae_with_adapter.encode_vae(embedding)
+            else:
+                z_vae = embedding
+
         # Normalize
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
-        X_norm = (embedding - self.X_min) / denom
+        X_norm = (z_vae - self.X_min) / denom
 
         # Predict
         self.gp_model.eval()
         self.likelihood.eval()
 
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            pred = self.likelihood(self.gp_model(X_norm))
-            mean_norm = pred.mean.item()
-            std_norm = pred.stddev.item()
+        try:
+            with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                pred = self.likelihood(self.gp_model(X_norm))
+                mean_norm = pred.mean.item()
+                std_norm = pred.stddev.item()
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                raise RuntimeError(
+                    f"GP prediction failed due to numerical instability. "
+                    f"This may indicate ill-conditioned training data. "
+                    f"Original error: {e}"
+                ) from e
+            raise
 
         # Denormalize
         mean = mean_norm * self.y_std.item() + self.y_mean.item()
@@ -527,7 +585,9 @@ class GPWithEI:
         return log_ei.squeeze()
 
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
-        """Get 10D latent for embedding using trained feature extractor.
+        """Get 10D latent for embedding using trained adapter.
+
+        Pipeline: embedding (768D) → VAE encoder → z (64D) → normalize → adapter → z_gp (10D)
 
         Args:
             embedding: Instruction embedding (768,)
@@ -535,21 +595,26 @@ class GPWithEI:
         Returns:
             Latent (10,)
         """
-        if self.feature_extractor is None:
-            raise RuntimeError("Feature extractor not initialized.")
+        if self.vae_with_adapter is None:
+            raise RuntimeError("vae_with_adapter not initialized.")
 
         embedding = embedding.to(self.device)
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
 
-        # Normalize first
+        # First encode to 64D VAE latent
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            z_vae = self.vae_with_adapter.encode_vae(embedding)
+
+        # Normalize 64D latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
-        X_norm = (embedding - self.X_min) / denom
+        z_norm = (z_vae - self.X_min) / denom
 
-        self.feature_extractor.eval()
+        # Apply adapter: 64D → 10D
         with torch.no_grad():
-            latent = self.feature_extractor(X_norm)
+            latent = self.vae_with_adapter.adapter(z_norm)
 
         return latent.squeeze(0)
 
@@ -576,12 +641,17 @@ class GPWithEI:
         if self.X_train is None or self.y_train is None:
             raise RuntimeError("No training data. Call set_training_data() first.")
 
-        # Add new observation
+        # Convert embedding (768D) to VAE latent (64D)
         embedding = embedding.to(self.device)
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
 
-        self.X_train = torch.cat([self.X_train, embedding], dim=0)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            z_vae = self.vae_with_adapter.encode_vae(embedding)
+
+        # Add 64D VAE latent to training data
+        self.X_train = torch.cat([self.X_train, z_vae], dim=0)
         self.y_train = torch.cat([
             self.y_train,
             torch.tensor([error_rate], dtype=torch.float32, device=self.device)
@@ -632,12 +702,12 @@ class GPWithEI:
             old_covar_state = self.gp_model.covar_module.state_dict()
             old_likelihood_state = self.likelihood.state_dict()
 
-        # Create new likelihood and GP model with existing feature extractor
+        # Create new likelihood and GP model with existing adapter
         self.likelihood = GaussianLikelihood(
             noise_constraint=Interval(0.001, 0.1)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, self.feature_extractor
+            X_norm, y_norm, self.likelihood, self.vae_with_adapter.adapter
         ).to(self.device)
 
         # Warm-start: restore kernel hyperparameters
@@ -680,10 +750,11 @@ class GPWithEI:
                         break
 
                 except RuntimeError as e:
-                    if "cholesky" in str(e).lower():
-                        # Always log Cholesky errors - they indicate numerical issues
-                        print(f"WARNING: GP retraining failed - Cholesky decomposition error")
+                    error_msg = str(e).lower()
+                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
+                        print(f"WARNING: GP retraining failed - numerical instability")
                         print(f"  Epoch: {epoch + 1}, Training samples: {self.get_training_size()}")
+                        print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
                         if verbose:
                             print(f"  Error: {e}")
                         return False

@@ -8,13 +8,11 @@ Self-contained - no imports from other modules outside inverse_hbbops/.
 """
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from scipy.optimize import minimize
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
 
+from inverse_hbbops.config import Config
 from inverse_hbbops.encoder import GTRInstructionEncoder, InstructionVAE
 from inverse_hbbops.gp import GPWithEI
 from inverse_hbbops.instruction import InstructionOnlyPrompt
@@ -250,12 +248,10 @@ class InverseHbBoPsInference:
         self,
         gp: GPWithEI,
         vae: InstructionVAE,
+        config: Config,
         gtr: Optional[GTRInstructionEncoder] = None,
         evaluator: Optional[Callable[[str, List[dict]], float]] = None,
         validation_data: Optional[List[dict]] = None,
-        vec2text_model: str = "512_tokens",
-        vec2text_beam: int = 8,
-        device: str = "cuda",
         initial_best_instruction: Optional[str] = None,
         initial_best_error: Optional[float] = None,
     ):
@@ -264,26 +260,27 @@ class InverseHbBoPsInference:
         Args:
             gp: Trained GPWithEI
             vae: Trained InstructionVAE
+            config: Unified pipeline configuration
             gtr: GTR encoder (for validation)
             evaluator: Function (instruction, data) -> error_rate
             validation_data: Validation Q/A pairs for evaluation
-            vec2text_model: "32_tokens" or "512_tokens" (default)
-            vec2text_beam: Beam width for Vec2Text
-            device: Device to use
             initial_best_instruction: Best instruction from Hyperband (to avoid null)
             initial_best_error: Best error from Hyperband
         """
         self.gp = gp
         self.vae = vae
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.config = config
+        # VAEWithAdapter for decoding (64D -> 768D)
+        self.vae_with_adapter = gp.vae_with_adapter
+        self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.evaluator = evaluator
         self.validation_data = validation_data
 
         self.gtr = gtr if gtr is not None else GTRInstructionEncoder(device=str(self.device))
         self.inverter = Vec2TextInverter(
-            beam_width=vec2text_beam,
+            beam_width=config.vec2text_beam,
             device=str(self.device),
-            model_type=vec2text_model,
+            model_type=config.vec2text_model,
         )
 
         # History
@@ -300,51 +297,30 @@ class InverseHbBoPsInference:
             self.best_error = gp.y_best
             # Note: instruction not available from GP alone
 
-    def _get_latent_bounds(self, margin: float = 0.2) -> torch.Tensor:
-        """Compute latent space bounds from training data."""
-        encoder = self.gp.feature_extractor
-        encoder.eval()
-
-        with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_norm = (self.gp.X_train - self.gp.X_min) / denom
-            all_latents = encoder(X_norm)
-
-        z_min = all_latents.min(dim=0)[0]
-        z_max = all_latents.max(dim=0)[0]
-
-        # Expand bounds for exploration
-        z_range = z_max - z_min
-        z_min = z_min - margin * z_range
-        z_max = z_max + margin * z_range
-
-        return torch.stack([z_min, z_max]).to(self.device)
-
     def optimize_latent_botorch(
         self,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         verbose: bool = True,
     ) -> Tuple[torch.Tensor, float]:
-        """Optimize latent using BoTorch qLogExpectedImprovement.
+        """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
         Uses multi-start L-BFGS-B with proper gradient flow through:
-            latent z -> VAE decoder -> embedding -> GP posterior -> qLogEI
+            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
 
         This is the recommended optimization method as it:
-        1. Uses numerically stable LogEI formulation
-        2. Provides proper gradient-based optimization
-        3. Uses sophisticated multi-start initialization
+        1. Optimizes in rich 64D VAE latent space
+        2. Uses adapter to compress to 10D for efficient GP
+        3. Gradients flow through adapter for latent optimization
 
         Args:
-            num_restarts: Number of L-BFGS-B restarts (default: 20)
-            raw_samples: Raw samples for initialization seeding (default: 512)
+            num_restarts: Number of L-BFGS-B restarts (default: 64)
+            raw_samples: Raw samples for initialization seeding (default: 1024)
             verbose: Print progress
 
         Returns:
             (optimal_latent, log_ei) tuple where:
-            - optimal_latent: Best latent tensor, shape (10,)
+            - optimal_latent: Best VAE latent tensor, shape (64,)
             - log_ei: Log expected improvement value at optimal point
         """
         from inverse_hbbops.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
@@ -352,19 +328,20 @@ class InverseHbBoPsInference:
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
 
-        # Get latent bounds from training data
+        # Get latent bounds from training data (64D VAE latent space)
         bounds = get_latent_bounds(
-            encoder=self.gp.feature_extractor,
+            encoder=self.gp.vae_with_adapter,
             X_train=self.gp.X_train,
             X_min=self.gp.X_min,
             X_max=self.gp.X_max,
-            margin=0.2,
+            margin=self.config.latent_margin,
         )
 
         # Create acquisition optimizer
+        # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
+        # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
-            vae=self.vae,
             bounds=bounds,
             device=self.device,
         )
@@ -412,15 +389,18 @@ class InverseHbBoPsInference:
         # Get target embedding from text
         target_emb = self.gtr.encode_tensor(text)
 
-        # Warm start: encode target embedding to get initial z
-        encoder = self.gp.feature_extractor
+        # Warm start: encode target embedding to VAE latent (64D)
+        encoder = self.gp.vae_with_adapter
         encoder.eval()
 
         with torch.no_grad():
+            # Encode 768D embedding to 64D VAE latent (unnormalized)
+            z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
+
+            # Normalize to GP input space
             denom = self.gp.X_max - self.gp.X_min
             denom[denom == 0] = 1.0
-            target_norm = (target_emb - self.gp.X_min) / denom
-            z_init = encoder(target_norm.unsqueeze(0)).squeeze(0)
+            z_init = (z_vae - self.gp.X_min) / denom
 
         # Clone for optimization
         z = z_init.clone().requires_grad_(True)
@@ -431,11 +411,15 @@ class InverseHbBoPsInference:
         final_loss = float("inf")
         converged = False
 
+        # Precompute denormalization constants for gradient flow
+        x_range = self.gp.X_max - self.gp.X_min
+
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Decode latent to embedding (gradients flow through VAE decoder)
-            decoded = self.vae.decode(z)
+            # Denormalize z to VAE latent space (64D), then decode to 768D embedding
+            z_vae = z * x_range + self.gp.X_min
+            decoded = self.vae_with_adapter.decode(z_vae)
 
             # Cosine loss to target
             loss = 1 - F.cosine_similarity(
@@ -458,9 +442,11 @@ class InverseHbBoPsInference:
 
         # Gap as cosine distance in embedding space (more stable than L2 in latent)
         with torch.no_grad():
-            self.vae.eval()
-            emb_original = self.vae.decode(z_original)
-            emb_inv = self.vae.decode(z_inv)
+            self.vae_with_adapter.eval()
+            z_vae_original = z_original * x_range + self.gp.X_min
+            z_vae_inv = z_inv * x_range + self.gp.X_min
+            emb_original = self.vae_with_adapter.decode(z_vae_original)
+            emb_inv = self.vae_with_adapter.decode(z_vae_inv)
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
@@ -477,88 +463,11 @@ class InverseHbBoPsInference:
             converged=converged,
         )
 
-    def optimize_latent(
-        self,
-        n_restarts: int = 20,
-        max_iter: int = 100,
-        verbose: bool = True,
-    ) -> Tuple[torch.Tensor, float]:
-        """Optimize latent using LogEI with L-BFGS-B.
-
-        Args:
-            n_restarts: Number of random restarts
-            max_iter: Max iterations per restart
-            verbose: Print progress
-
-        Returns:
-            (optimal_latent, log_ei) tuple
-        """
-        if verbose:
-            print("Optimizing latent with LogEI...")
-
-        bounds_tensor = self._get_latent_bounds()
-        z_min = bounds_tensor[0].cpu().numpy()
-        z_max = bounds_tensor[1].cpu().numpy()
-        bounds = [(z_min[i], z_max[i]) for i in range(len(z_min))]
-
-        def neg_log_ei(z_np):
-            """Negative LogEI for minimization."""
-            z = torch.tensor(z_np, dtype=torch.float32, device=self.device)
-
-            # Decode latent to embedding
-            self.vae.eval()
-            with torch.no_grad():
-                embedding = self.vae.decode(z)
-
-            # Compute LogEI
-            log_ei = self.gp.log_expected_improvement(embedding)
-            return -log_ei
-
-        best_z = None
-        best_log_ei = float("-inf")
-
-        for restart in range(n_restarts):
-            z0 = np.random.uniform(low=z_min, high=z_max)
-
-            try:
-                result = minimize(
-                    neg_log_ei,
-                    z0,
-                    method="L-BFGS-B",
-                    bounds=bounds,
-                    options={"maxiter": max_iter},
-                )
-
-                log_ei = -result.fun
-                if log_ei > best_log_ei:
-                    best_log_ei = log_ei
-                    best_z = result.x
-
-            except RuntimeError as e:
-                if verbose:
-                    print(f"  L-BFGS-B restart {restart + 1} failed: {e}")
-                continue
-
-        if best_z is None:
-            # Fallback to random sampling - always warn, this is unusual
-            print("WARNING: All L-BFGS-B restarts failed. Falling back to random sampling.")
-            print("  This may indicate a numerical issue with the GP or VAE.")
-            best_z = np.random.uniform(low=z_min, high=z_max)
-            z = torch.tensor(best_z, dtype=torch.float32, device=self.device)
-            with torch.no_grad():
-                embedding = self.vae.decode(z)
-            best_log_ei = self.gp.log_expected_improvement(embedding)
-
-        if verbose:
-            print(f"  Best LogEI: {best_log_ei:.4f}")
-
-        return torch.tensor(best_z, dtype=torch.float32, device=self.device), best_log_ei
-
     def run_iteration(
         self,
         iteration: int,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         use_inversion: bool = True,
         max_inversion_iters: int = 3,
         gap_threshold: float = 0.1,
@@ -594,10 +503,14 @@ class InverseHbBoPsInference:
             verbose=verbose,
         )
 
-        # Decode to embedding
-        self.vae.eval()
+        # Denormalize and decode to embedding (64D latent -> 768D embedding)
+        # z_opt is normalized [0,1], need to convert back to VAE latent space
+        x_range = self.gp.X_max - self.gp.X_min
+        z_unnorm = z_opt * x_range + self.gp.X_min
+
+        self.vae_with_adapter.eval()
         with torch.no_grad():
-            embedding = self.vae.decode(z_opt)
+            embedding = self.vae_with_adapter.decode(z_unnorm)
 
         # Invert to text
         instruction = self.inverter.invert(embedding.clone())
@@ -610,7 +523,13 @@ class InverseHbBoPsInference:
         inv_iters = 1
         if use_inversion:
             for inv_iter in range(max_inversion_iters):
-                inv_result = self.inversion_step(instruction, n_steps=100, lr=0.1, verbose=False)
+                inv_result = self.inversion_step(
+                    instruction,
+                    n_steps=self.config.inversion_n_steps,
+                    lr=self.config.inversion_lr,
+                    convergence_threshold=self.config.inversion_convergence_threshold,
+                    verbose=False,
+                )
                 gap = inv_result.gap
 
                 if gap <= gap_threshold:
@@ -621,10 +540,11 @@ class InverseHbBoPsInference:
                 if verbose:
                     print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
 
-                # Re-decode from inverted latent
+                # Re-decode from inverted latent (z_inv is normalized, need denormalization)
                 z_opt = inv_result.z_inv
+                z_unnorm = z_opt * x_range + self.gp.X_min
                 with torch.no_grad():
-                    embedding = self.vae.decode(z_opt)
+                    embedding = self.vae_with_adapter.decode(z_unnorm)
                 instruction = self.inverter.invert(embedding.clone())
                 inv_iters += 1
 
@@ -670,8 +590,8 @@ class InverseHbBoPsInference:
         retrain_success = self.gp.add_observation_and_retrain(
             reencoded,
             error_to_use,
-            epochs=500,
-            patience=10,
+            epochs=self.config.gp_retrain_epochs,
+            patience=self.config.gp_retrain_patience,
             verbose=verbose,
         )
         if not retrain_success:
@@ -700,8 +620,8 @@ class InverseHbBoPsInference:
     def run(
         self,
         iterations: int = 10,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         use_inversion: bool = True,
         max_inversion_iters: int = 3,
         gap_threshold: float = 0.1,

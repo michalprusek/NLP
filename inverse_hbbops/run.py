@@ -19,10 +19,86 @@ Usage:
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 from scipy.stats import spearmanr
+
+
+def setup_logging(output_dir: str, timestamp: str) -> Path:
+    """Setup logging to both console and file.
+
+    Args:
+        output_dir: Directory for log file
+        timestamp: Timestamp string for log filename
+
+    Returns:
+        Path to the log file
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    log_file = output_path / f"run_{timestamp}.log"
+
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # Remove existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_format)
+    root_logger.addHandler(console_handler)
+
+    # File handler
+    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_format = logging.Formatter('%(asctime)s | %(message)s', datefmt='%H:%M:%S')
+    file_handler.setFormatter(file_format)
+    root_logger.addHandler(file_handler)
+
+    return log_file
+
+
+class TeeOutput:
+    """Tee stdout/stderr to both console and file logger.
+
+    Filters out progress bars and other noisy output from file logging.
+    """
+
+    # Patterns to skip when logging to file (progress bars, etc.)
+    SKIP_PATTERNS = ("Batches:", "|", "it/s]", "Fetching", "%|")
+
+    def __init__(self, original, logger, level=logging.INFO):
+        self.original = original
+        self.logger = logger
+        self.level = level
+        self.buffer = ""
+
+    def _should_skip(self, line: str) -> bool:
+        """Check if line should be skipped (progress bars, etc.)."""
+        return any(pattern in line for pattern in self.SKIP_PATTERNS)
+
+    def write(self, text):
+        self.original.write(text)
+        # Buffer lines and log complete lines
+        self.buffer += text
+        while '\n' in self.buffer:
+            line, self.buffer = self.buffer.split('\n', 1)
+            if line.strip() and not self._should_skip(line):
+                self.logger.log(self.level, line)
+
+    def flush(self):
+        self.original.flush()
+        if self.buffer.strip() and not self._should_skip(self.buffer):
+            self.logger.log(self.level, self.buffer.strip())
+            self.buffer = ""
 
 
 def _validate_hyperband_ranking(trainer, grid_path: str, verbose: bool = True) -> dict:
@@ -147,8 +223,8 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.02,
-        help="VAE KL regularization weight"
+        "--vae-beta", type=float, default=0.003,
+        help="VAE KL regularization weight (scaled for latent_dim=64)"
     )
     parser.add_argument(
         "--vae-epochs", type=int, default=10000,
@@ -171,6 +247,29 @@ def main():
     parser.add_argument(
         "--hyperband-only", action="store_true",
         help="Run only Hyperband (no InvBO inference)"
+    )
+    parser.add_argument(
+        "--skip-hbbops", action="store_true",
+        help="Skip HbBoPs run, load evaluations from --hyperband-evals-path"
+    )
+    parser.add_argument(
+        "--hyperband-evals-path", type=str,
+        default="inverse_hbbops/data/ape_instructions.json",
+        help="Path to JSON with hyperband_evaluations (default: inverse_hbbops/data/ape_instructions.json)"
+    )
+
+    # GP training
+    parser.add_argument(
+        "--gp-epochs", type=int, default=10000,
+        help="GP training epochs (default: 10000)"
+    )
+    parser.add_argument(
+        "--gp-lr", type=float, default=0.01,
+        help="GP learning rate (default: 0.01)"
+    )
+    parser.add_argument(
+        "--gp-patience", type=int, default=100,
+        help="GP early stopping patience (default: 100)"
     )
 
     # Grid loading (skip APE and Hyperband)
@@ -208,6 +307,26 @@ def main():
         "--vec2text-model", type=str, default="512_tokens",
         choices=["32_tokens", "512_tokens"],
         help="Vec2Text model type (default: 512_tokens)"
+    )
+    parser.add_argument(
+        "--num-restarts", type=int, default=64,
+        help="L-BFGS-B restarts for BoTorch optimization (default: 64)"
+    )
+    parser.add_argument(
+        "--raw-samples", type=int, default=1024,
+        help="Raw samples for initialization seeding (default: 1024)"
+    )
+    parser.add_argument(
+        "--max-inversion-iters", type=int, default=3,
+        help="Maximum inversion iterations per step (default: 3)"
+    )
+    parser.add_argument(
+        "--gap-threshold", type=float, default=0.1,
+        help="Gap threshold for re-inversion (cosine distance) (default: 0.1)"
+    )
+    parser.add_argument(
+        "--vec2text-beam", type=int, default=8,
+        help="Beam width for Vec2Text generation (default: 8)"
     )
 
     # Evaluation
@@ -247,14 +366,40 @@ def main():
     args = parser.parse_args()
 
     # =========================================================================
+    # Setup Logging
+    # =========================================================================
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = setup_logging(args.output_dir, timestamp)
+
+    # TeeOutput redirects stdout/stderr to file handler only (logger already prints to console)
+    # Get only the file handler from the logger
+    file_logger = logging.getLogger("file_only")
+    file_logger.setLevel(logging.INFO)
+    file_logger.propagate = False  # Don't propagate to root logger (avoids double console output)
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.FileHandler):
+            file_logger.addHandler(handler)
+            break
+
+    # Redirect stdout/stderr through TeeOutput - writes to original stream + file logger
+    sys.stdout = TeeOutput(sys.__stdout__, file_logger, logging.INFO)
+    sys.stderr = TeeOutput(sys.__stderr__, file_logger, logging.WARNING)
+
+    print(f"Logging to: {log_file}")
+
+    # =========================================================================
     # Setup
     # =========================================================================
 
-    mode = "grid" if args.load_grid else "standard"
+    mode = "skip_hbbops" if args.skip_hbbops else ("grid" if args.load_grid else "standard")
     print("=" * 70)
     print("INVERSE HbBoPs PIPELINE")
     print("=" * 70)
-    if args.load_grid:
+    if args.skip_hbbops:
+        print(f"Mode: SKIP HBBOPS (load pre-evaluated)")
+        print(f"Evaluations: {args.hyperband_evals_path}")
+    elif args.load_grid:
         print(f"Mode: GRID LOADING (top-{args.top_k})")
         print(f"Grid: {args.load_grid}")
         if args.validate_hyperband:
@@ -275,25 +420,42 @@ def main():
         args.vae_annealing = 50
 
     # Import after arg parsing for faster --help
-    from inverse_hbbops.training import InverseHbBoPsTrainer, TrainingConfig
+    from inverse_hbbops.config import Config
+    from inverse_hbbops.training import InverseHbBoPsTrainer
     from inverse_hbbops.inference import InverseHbBoPsInference
     from inverse_hbbops.evaluate import GSM8KEvaluator
+    from inverse_hbbops.instruction import InstructionOnlyPrompt
 
     # =========================================================================
-    # Training Config
+    # Build Config from CLI args (SSOT)
     # =========================================================================
 
-    config = TrainingConfig(
+    config = Config(
+        # APE Generation
         ape_num_instructions=args.ape_instructions,
         ape_model=args.ape_model,
         ape_backend=args.eval_backend,
         ape_cache_path=args.ape_cache,
-        validation_path=args.validation_path,
+        # VAE Training
         vae_beta=args.vae_beta,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
+        # Hyperband
         bmin=args.bmin,
         eta=args.eta,
+        # GP Training
+        gp_epochs=args.gp_epochs,
+        gp_lr=args.gp_lr,
+        gp_patience=args.gp_patience,
+        # Inference
+        num_restarts=args.num_restarts,
+        raw_samples=args.raw_samples,
+        max_inversion_iters=args.max_inversion_iters,
+        gap_threshold=args.gap_threshold,
+        vec2text_beam=args.vec2text_beam,
+        vec2text_model=args.vec2text_model,
+        # Device/Paths
+        validation_path=args.validation_path,
         device=args.device,
     )
 
@@ -310,10 +472,42 @@ def main():
     )
 
     # =========================================================================
+    # SKIP HBBOPS MODE: Load from pre-evaluated hyperband_evaluations JSON
+    # =========================================================================
+
+    if args.skip_hbbops:
+        trainer.load_validation_data(verbose=True)
+
+        # Load instructions and evaluations from JSON
+        trainer.load_from_hyperband_evaluations(
+            args.hyperband_evals_path,
+            verbose=True,
+        )
+
+        # Train VAE on all diverse instructions (1000+)
+        trainer.train_vae(embedding_source="diverse", verbose=True)
+        vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
+
+        # Train GP on evaluated instructions (225)
+        gp = trainer.train_gp_from_grid(verbose=True)
+
+        # Get best instruction from evaluations
+        best_idx = int(trainer.grid_error_rates.index(min(trainer.grid_error_rates)))
+        best_prompt = InstructionOnlyPrompt(
+            instruction=trainer.instructions[best_idx],
+            instruction_id=best_idx,
+        )
+        best_error = trainer.grid_error_rates[best_idx]
+
+        print(f"\nSkip HbBoPs loading complete!")
+        print(f"  Best prompt (from evaluations):\n{best_prompt.instruction}")
+        print(f"  Best error: {best_error:.4f}")
+
+    # =========================================================================
     # GRID MODE: Load from pre-evaluated grid
     # =========================================================================
 
-    if args.load_grid:
+    elif args.load_grid:
         trainer.load_validation_data(verbose=True)
 
         if args.validate_hyperband:
@@ -325,6 +519,7 @@ def main():
                 verbose=True,
             )
             trainer.train_vae(verbose=True)
+            vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
 
             # Run Hyperband on grid instructions
             best_prompt, best_error = trainer.run_hyperband(
@@ -345,7 +540,7 @@ def main():
             print(f"  LLM calls (Hyperband): {trainer.total_llm_calls}")
 
             if args.hyperband_only:
-                _save_results(args, trainer, evaluator, best_prompt, best_error, None)
+                _save_results(args, trainer, evaluator, best_prompt, best_error, None, timestamp, vae_quality_metrics)
                 return
 
             gp = trainer.get_gp_for_inference()
@@ -362,9 +557,12 @@ def main():
             # Train VAE on diverse instructions or grid instructions
             if args.diverse_instructions:
                 trainer.load_diverse_instructions(args.diverse_instructions, verbose=True)
-                trainer.train_vae_on_diverse(verbose=True)
+                trainer.train_vae(embedding_source="diverse", verbose=True)
             else:
                 trainer.train_vae(verbose=True)
+
+            # Evaluate VAE quality
+            vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
 
             gp = trainer.train_gp_from_grid(verbose=True)
 
@@ -401,6 +599,7 @@ def main():
             )
 
         trainer.train_vae(verbose=True)
+        vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
 
         best_prompt, best_error = trainer.run_hyperband(
             llm_evaluator=evaluator,
@@ -414,7 +613,7 @@ def main():
 
         if args.hyperband_only:
             print("\n--hyperband-only specified, skipping inference.")
-            _save_results(args, trainer, evaluator, best_prompt, best_error, None)
+            _save_results(args, trainer, evaluator, best_prompt, best_error, None, timestamp, vae_quality_metrics)
             return
 
         gp = trainer.get_gp_for_inference()
@@ -430,22 +629,21 @@ def main():
     inference = InverseHbBoPsInference(
         gp=gp,
         vae=trainer.vae,
+        config=config,
         gtr=trainer.gtr,
         evaluator=evaluator if not args.skip_eval else None,
         validation_data=trainer.validation_data if not args.skip_eval else None,
-        vec2text_model=args.vec2text_model,
-        device=args.device,
         initial_best_instruction=best_prompt.instruction,
         initial_best_error=best_error,
     )
 
     history = inference.run(
         iterations=args.iterations,
-        num_restarts=20,
-        raw_samples=512,
-        use_inversion=True,
-        max_inversion_iters=3,
-        gap_threshold=0.1,
+        num_restarts=config.num_restarts,
+        raw_samples=config.raw_samples,
+        use_inversion=config.use_inversion,
+        max_inversion_iters=config.max_inversion_iters,
+        gap_threshold=config.gap_threshold,
         skip_eval=args.skip_eval,
         verbose=True,
     )
@@ -471,15 +669,17 @@ def main():
     print(f"  TOTAL: {total_llm_calls}")
     print("=" * 70)
 
-    _save_results(args, trainer, evaluator, best_prompt, best_error, inference)
+    _save_results(args, trainer, evaluator, best_prompt, best_error, inference, timestamp, vae_quality_metrics)
 
 
-def _save_results(args, trainer, evaluator, best_prompt, best_error, inference):
+def _save_results(
+    args, trainer, evaluator, best_prompt, best_error, inference, timestamp: str,
+    vae_quality_metrics: dict = None
+):
     """Save results to JSON file."""
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     result_path = output_dir / f"result_{timestamp}.json"
 
     # Calculate total LLM calls (avoid double counting - don't add evaluator.total_calls)
@@ -489,6 +689,7 @@ def _save_results(args, trainer, evaluator, best_prompt, best_error, inference):
 
     result = {
         "timestamp": timestamp,
+        "vae_quality_metrics": vae_quality_metrics,
         "config": {
             # Mode
             "mode": "grid_loading" if args.load_grid else "standard",

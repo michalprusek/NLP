@@ -4,7 +4,10 @@ This module provides BoTorch-based acquisition function optimization
 for the InvBO decoder pipeline. Uses qLogExpectedImprovement which is
 numerically stable even when improvement values are extremely small.
 
-Pipeline: z (10D latent) -> decoder -> embedding (768D) -> GP -> qLogEI
+Pipeline (synced with inverse_hbbops):
+    z (64D VAE latent) -> Adapter -> z_gp (10D) -> GP -> qLogEI
+
+After optimization: z_opt (64D) -> VAE decoder -> embedding (768D) -> Vec2Text
 
 References:
     - "Unexpected Improvements to Expected Improvement" (NeurIPS 2023)
@@ -26,37 +29,31 @@ logger = logging.getLogger(__name__)
 
 
 class CompositeLogEI(AcquisitionFunction):
-    """qLogEI that works through decoder transformation.
+    """qLogEI that operates on 64D VAE latent space.
 
-    Computes LogEI(decoder(z)) for latent z, enabling gradient-based
-    optimization in the low-dimensional latent space while evaluating
-    improvement in the embedding space where the GP operates.
+    The GP model expects 64D VAE latent input and applies adapter internally:
+        z (64D) -> GP (with adapter) -> z_gp (10D) -> kernel -> qLogEI
 
-    This is critical for InvBO because:
-    1. We optimize in 10D latent space (tractable)
-    2. GP operates in 768D embedding space (high-quality predictions)
-    3. Decoder bridges the two spaces with differentiable transform
+    This enables gradient-based optimization in 64D VAE latent space
+    with gradients flowing through the adapter.
     """
 
     def __init__(
         self,
         model: Model,
-        decoder: nn.Module,
         best_f: float,
         sampler: Optional[torch.Tensor] = None,
     ):
         """Initialize composite acquisition function.
 
         Args:
-            model: GP model (must implement posterior())
-            decoder: Latent -> embedding decoder (10D -> 768D)
+            model: GP model that accepts 64D VAE latents and applies adapter internally
             best_f: Best observed objective value (error rate to minimize)
             sampler: Optional MC sampler for qLogEI
         """
         super().__init__(model=model)
-        self.decoder = decoder
         self.best_f = best_f
-        # qLogEI with fat=True for numerical stability
+        # qLogEI for numerically stable expected improvement
         self._base_acq = qLogExpectedImprovement(
             model=model,
             best_f=best_f,
@@ -64,84 +61,59 @@ class CompositeLogEI(AcquisitionFunction):
         )
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
-        """Evaluate acquisition on latent points.
+        """Evaluate acquisition on VAE latent points.
 
         Args:
-            X: Latent points with shape (batch, q, d) where d=10 (latent dim)
-               For single-point acquisition, shape is (batch, 1, 10)
+            X: VAE latent points with shape (batch, q, d) where d=64
+               For single-point acquisition, shape is (batch, 1, 64)
 
         Returns:
             Acquisition values with shape (batch,)
         """
-        # Handle shape: (batch, q, d) or (q, d) or (d,)
-        if X.dim() == 1:
-            X = X.unsqueeze(0).unsqueeze(0)  # (d,) -> (1, 1, d)
-        elif X.dim() == 2:
-            X = X.unsqueeze(0)  # (q, d) -> (1, q, d)
-
-        batch_shape = X.shape[:-2]
-        q = X.shape[-2]
-        d = X.shape[-1]
-
-        # Decode latent to embeddings
-        # Flatten for decoder: (batch, q, d) -> (batch*q, d)
-        X_flat = X.reshape(-1, d)
-
-        # Ensure decoder is in eval mode but allow gradients
-        self.decoder.eval()
-        embeddings = self.decoder(X_flat)  # (batch*q, 768)
-
-        # Reshape for qLogEI: (batch*q, 768) -> (batch, q, 768)
-        embedding_dim = embeddings.shape[-1]
-        embeddings = embeddings.view(*batch_shape, q, embedding_dim)
-
-        # Evaluate qLogEI on embeddings
-        return self._base_acq(embeddings)
+        # Pass directly to qLogEI - GP applies adapter internally
+        return self._base_acq(X)
 
 
 class LatentSpaceAcquisition:
-    """Optimizes qLogEI in decoder latent space.
+    """Optimizes qLogEI in VAE latent space (64D).
 
     Uses BoTorch's optimize_acqf with multi-start L-BFGS-B optimization.
     This provides proper gradient flow through:
-        latent z -> decoder -> embedding -> GP posterior -> LogEI
+        z (64D) -> GP (with trainable adapter) -> z_gp (10D) -> kernel -> LogEI
 
-    Key advantages over random sampling:
-    1. Gradient-based refinement finds local optima
+    Key advantages over scipy L-BFGS-B:
+    1. Gradient-based refinement with proper autograd
     2. Multi-start with raw_samples avoids poor local optima
-    3. L-BFGS-B is efficient for smooth acquisition landscapes
+    3. Sophisticated initialization from BoTorch
     """
 
     def __init__(
         self,
         gp_model: Model,
-        decoder: nn.Module,
         bounds: torch.Tensor,
         device: torch.device,
     ):
         """Initialize latent space acquisition optimizer.
 
         Args:
-            gp_model: Trained GP model (InstructionDeepKernelGP)
-            decoder: LatentDecoder (10D -> 768D)
-            bounds: Latent space bounds, shape (2, latent_dim)
+            gp_model: Trained GP model that accepts 64D VAE latents
+            bounds: VAE latent space bounds, shape (2, 64)
                     bounds[0] = lower bounds, bounds[1] = upper bounds
             device: Torch device
         """
         self.gp_model = gp_model
-        self.decoder = decoder
         self.bounds = bounds.to(device)
         self.device = device
 
     def optimize(
         self,
         best_f: float,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         options: Optional[dict] = None,
         seed: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Find optimal latent z maximizing qLogEI.
+        """Find optimal VAE latent z (64D) maximizing qLogEI.
 
         Uses BoTorch's optimize_acqf with:
         1. raw_samples random starting points
@@ -157,7 +129,7 @@ class LatentSpaceAcquisition:
 
         Returns:
             (candidate, acq_value) tuple where:
-            - candidate: Optimal latent tensor, shape (1, latent_dim)
+            - candidate: Optimal VAE latent tensor, shape (1, 64)
             - acq_value: LogEI value at optimal point
         """
         if options is None:
@@ -170,7 +142,6 @@ class LatentSpaceAcquisition:
         # Create composite acquisition function
         acq_fn = CompositeLogEI(
             model=self.gp_model,
-            decoder=self.decoder,
             best_f=best_f,
         )
 
@@ -178,7 +149,6 @@ class LatentSpaceAcquisition:
         self.gp_model.eval()
         if hasattr(self.gp_model, 'likelihood'):
             self.gp_model.likelihood.eval()
-        self.decoder.eval()
 
         # Optimize using BoTorch's optimize_acqf
         # Suppress RuntimeWarnings from L-BFGS-B (common in BO) but log if debug enabled
@@ -211,34 +181,30 @@ def get_latent_bounds(
     X_max: torch.Tensor,
     margin: float = 0.2,
 ) -> torch.Tensor:
-    """Compute latent space bounds from training data.
+    """Compute bounds for 64D VAE latent space from training data.
 
-    Encodes training embeddings to latent space and computes
-    bounds with optional margin for exploration.
+    X_train is already stored as 64D VAE latents. We just need to
+    normalize and compute bounds with margin for exploration.
 
     Args:
-        encoder: Feature extractor (768D -> 10D)
-        X_train: Training embeddings (N, 768)
-        X_min: Min values for normalization
-        X_max: Max values for normalization
+        encoder: VAEWithAdapter (unused, kept for API compatibility)
+        X_train: Training VAE latents (N, 64)
+        X_min: Min values for normalization (64D)
+        X_max: Max values for normalization (64D)
         margin: Fraction to expand bounds (0.2 = 20% each side)
 
     Returns:
-        Bounds tensor, shape (2, latent_dim)
+        Bounds tensor, shape (2, 64) for 64D VAE latent space
     """
-    encoder.eval()
     with torch.no_grad():
-        # Normalize training data
+        # Normalize training data (already 64D VAE latents)
         denom = X_max - X_min
         denom[denom == 0] = 1.0
-        X_norm = (X_train - X_min) / denom
+        latents_norm = (X_train - X_min) / denom
 
-        # Encode to latent
-        latents = encoder(X_norm)  # (N, 10)
-
-        # Compute bounds
-        z_min = latents.min(dim=0)[0]
-        z_max = latents.max(dim=0)[0]
+        # Compute bounds from normalized latents
+        z_min = latents_norm.min(dim=0)[0]
+        z_max = latents_norm.max(dim=0)[0]
 
         # Expand bounds by margin
         z_range = z_max - z_min

@@ -28,10 +28,10 @@ class VAEWithAdapter(nn.Module):
 
     Used in VAE mode to allow GP's feature extractor to learn
     while keeping VAE weights fixed. The adapter is a small MLP
-    that transforms VAE latents.
+    that reduces VAE latents (64D) to GP latent dimension (10D).
     """
 
-    def __init__(self, vae: nn.Module, latent_dim: int):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int, gp_latent_dim: int = 10):
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -39,19 +39,52 @@ class VAEWithAdapter(nn.Module):
         for param in vae.parameters():
             param.requires_grad = False
 
-        # Trainable adapter: transforms VAE latents for GP
+        # Trainable adapter: reduces VAE latents (64D) to GP latent dimension (10D)
         self.adapter = nn.Sequential(
-            nn.Linear(latent_dim, latent_dim * 2),
+            nn.Linear(vae_latent_dim, 32),
             nn.ReLU(),
-            nn.LayerNorm(latent_dim * 2),
-            nn.Linear(latent_dim * 2, latent_dim),
+            nn.LayerNorm(32),
+            nn.Linear(32, gp_latent_dim),
         )
 
+    def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode embedding to 64D VAE latent (deterministic mu).
+
+        Use this for getting latent for optimization bounds.
+        """
+        return self._vae.encode_mu(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # VAE encoding (frozen params, but gradients flow through)
+        """Encode embedding to 10D GP latent (through adapter).
+
+        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
+
+        This is used for GP training.
+        """
         z = self._vae.encode_mu(x)
-        # Trainable adapter
         return self.adapter(z)
+
+    def adapt(self, z: torch.Tensor) -> torch.Tensor:
+        """Apply adapter to VAE latent.
+
+        Args:
+            z: VAE latent tensor of shape (..., 64)
+
+        Returns:
+            GP latent tensor of shape (..., 10)
+        """
+        return self.adapter(z)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Decode 64D VAE latent to 768D embedding.
+
+        Args:
+            z: VAE latent tensor of shape (..., 64)
+
+        Returns:
+            Embedding tensor of shape (..., 768)
+        """
+        return self._vae.decode(z)
 
 
 @dataclass
@@ -64,7 +97,8 @@ class TrainingConfig:
     diverse_instructions_path: str = "datasets/inversion/diverse_instructions_1000.json"
 
     # Architecture
-    latent_dim: int = 10
+    latent_dim: int = 10  # GP latent dimension (after adapter reduction)
+    vae_latent_dim: int = 64  # VAE latent dimension (before adapter reduction)
     embedding_dim: int = 768
 
     # GP training
@@ -249,10 +283,10 @@ class InvBOTrainer:
         if verbose:
             print(f"  Total training embeddings: {self.diverse_embeddings.shape}")
 
-        # Initialize VAE
+        # Initialize VAE with vae_latent_dim (64D by default)
         self.vae = InstructionVAE(
             input_dim=self.config.embedding_dim,
-            latent_dim=self.config.latent_dim,
+            latent_dim=self.config.vae_latent_dim,
             beta=self.config.vae_beta,
         ).to(self.device)
 
@@ -533,7 +567,10 @@ class InvBOTrainer:
         self.gp = GPWithEI(device=str(self.device), latent_dim=self.config.latent_dim)
 
         # Use VAEWithAdapter: frozen VAE + trainable adapter for GP feature extraction
-        self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
+        # Adapter reduces vae_latent_dim (64D) to latent_dim (10D) for GP
+        self.gp.vae_with_adapter = VAEWithAdapter(
+            self.vae, self.config.vae_latent_dim, self.config.latent_dim
+        ).to(self.device)
         self.gp.set_training_data(X, y)
 
         success = self.gp.train(
@@ -638,16 +675,19 @@ class InvBOTrainer:
 
         self.gp = GPWithEI(device=str(self.device), latent_dim=self.config.latent_dim)
 
-        # Load VAE and use as encoder
+        # Load VAE and use as encoder (with vae_latent_dim)
         self.vae = InstructionVAE(
             input_dim=self.config.embedding_dim,
-            latent_dim=self.config.latent_dim,
+            latent_dim=self.config.vae_latent_dim,
             beta=self.config.vae_beta,
         ).to(self.device)
         self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
         # Use VAEWithAdapter (same as training) to ensure state_dict compatibility
-        self.gp.feature_extractor = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
+        # Adapter reduces vae_latent_dim (64D) to latent_dim (10D) for GP
+        self.gp.vae_with_adapter = VAEWithAdapter(
+            self.vae, self.config.vae_latent_dim, self.config.latent_dim
+        ).to(self.device)
 
         # Create VAE decoder wrapper (without registering VAE as submodule)
         class VAEDecoderWrapper(nn.Module):
@@ -660,7 +700,7 @@ class InvBOTrainer:
 
         self.decoder = VAEDecoderWrapper(self.vae).to(self.device)
 
-        # Set training data and GP params
+        # Set training data and GP params (set_training_data encodes to 64D VAE latents)
         self.gp.set_training_data(X, y)
         self.gp.X_min = gp_state["X_min"]
         self.gp.X_max = gp_state["X_max"]
@@ -673,15 +713,16 @@ class InvBOTrainer:
         from gpytorch.likelihoods import GaussianLikelihood
         from generation.invbo_decoder.gp import InstructionDeepKernelGP
 
+        # X_train is already 64D VAE latents (set by set_training_data)
         denom = self.gp.X_max - self.gp.X_min
         denom[denom == 0] = 1.0
-        X_norm = (X - self.gp.X_min) / denom
-        y_norm = (y - self.gp.y_mean) / self.gp.y_std
+        X_norm = (self.gp.X_train - self.gp.X_min) / denom
+        y_norm = (self.gp.y_train - self.gp.y_mean) / self.gp.y_std
 
         # Use same noise constraint as in training
         self.gp.likelihood = GaussianLikelihood(noise_constraint=Interval(0.001, 0.1)).to(self.device)
         self.gp.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.gp.likelihood, self.gp.feature_extractor
+            X_norm, y_norm, self.gp.likelihood, self.gp.vae_with_adapter.adapter
         ).to(self.device)
         self.gp.gp_model.load_state_dict(gp_state["gp_model"])
         self.gp.likelihood.load_state_dict(gp_state["likelihood"])

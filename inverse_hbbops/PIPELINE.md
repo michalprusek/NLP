@@ -8,7 +8,14 @@
 - **Hyperband** for multi-fidelity Bayesian optimization
 - **InvBO Inference** with Vec2Text inversion for novel instruction generation
 
-The key innovation is **instruction-only optimization** (no exemplars), enabling efficient search in a 64D VAE latent space (reduced to 10D for GP) while maintaining Vec2Text compatibility for text generation.
+The key innovation is **instruction-only optimization** (no exemplars), enabling efficient search in a **64D VAE latent space** with a trainable **adapter (64D→10D)** for GP modeling, while maintaining Vec2Text compatibility for text generation.
+
+**Architecture Flow:**
+```
+768D GTR embedding → VAE encoder (frozen) → 64D latent → Adapter (trainable) → 10D → GP kernel
+                                              ↓
+                                         VAE decoder → 768D → Vec2Text → instruction text
+```
 
 ---
 
@@ -696,6 +703,14 @@ for step in range(n_steps):
 
 ## 9. run.py - CLI Entry Point
 
+### File Logging
+
+All run output is automatically saved to `results/run_{timestamp}.log`. The logging system:
+- Captures both stdout and stderr in real-time
+- Filters out progress bars and batch indicators from file output
+- Preserves progress bars in console for interactive monitoring
+- Logs VAE training every 50 epochs with loss, cosine similarity, KL, and β values
+
 ### Main Pipeline (Lines 119-474)
 
 **CLI Arguments:**
@@ -705,7 +720,7 @@ for step in range(n_steps):
 | `--iterations` | 10 | InvBO iterations |
 | `--ape-instructions` | 1000 | APE generation count |
 | `--model` | Qwen/Qwen2.5-7B-Instruct | Evaluation model |
-| `--vae-beta` | 0.02 | KL regularization weight |
+| `--vae-beta` | 0.003 | KL regularization weight |
 | `--vae-epochs` | 10000 | Max VAE training epochs |
 | `--vae-annealing` | 500 | KL annealing epochs |
 | `--bmin` | 10 | Hyperband minimum fidelity |
@@ -748,7 +763,7 @@ inference.run(iterations=args.iterations)
 ```
 run.py:main()
 │
-├── TrainingConfig(ape_instructions=1000, vae_beta=0.02, ...)
+├── TrainingConfig(ape_instructions=1000, vae_beta=0.003, ...)
 │
 ├── InverseHbBoPsTrainer(config)
 │   ├── GTRInstructionEncoder.load()    # Lazy load GTR-T5-Base
@@ -776,7 +791,7 @@ run.py:main()
 │   │
 │   ├── For epoch 1 to 10000 (or early stop):
 │   │   ├── KL annealing:
-│   │   │   β = 0.02 × min(1.0, epoch / 500)
+│   │   │   β = 0.003 × min(1.0, epoch / 500)
 │   │   │
 │   │   ├── For each batch (64 samples):
 │   │   │   ├── Forward: x → encode → (μ, log_var)
@@ -876,13 +891,33 @@ run.py:main()
 
 | Parameter | Default | Description | Effect |
 |-----------|---------|-------------|--------|
-| `vae_beta` | 0.02 | KL regularization weight | Higher = smoother latent, less reconstruction |
+| `vae_beta` | 0.003 | KL regularization weight | Higher = smoother latent, less reconstruction |
 | `vae_epochs` | 10000 | Max training epochs | Usually early-stops around 500-1000 |
 | `vae_annealing_epochs` | 500 | KL warm-up duration | Prevents posterior collapse |
 | `latent_dim` | 64 | VAE latent space dimension | Higher = more expressive VAE |
 | `gp_latent_dim` | 10 | GP latent space dimension | Adapter reduces VAE→GP |
 | `vae_lr` | 0.001 | Learning rate | Standard for Adam |
 | `vae_batch_size` | 64 | Training batch size | Stable with LayerNorm |
+
+### VAE Quality Metrics
+
+After VAE training, the pipeline automatically evaluates reconstruction quality:
+
+| Metric | Description |
+|--------|-------------|
+| `cosine_mean/std/min/max` | Cosine similarity between original and reconstructed embeddings |
+| `mse_mean/std` | Mean squared error |
+| `l2_relative_error` | Relative L2 reconstruction error |
+| `latent_norm_mean/std` | Norms of latent vectors (should be ~√latent_dim) |
+| `latent_var_mean/min/max` | Per-dimension variance (should be ~1.0 for well-trained VAE) |
+| `active_dims` | Dimensions with variance > 0.01 (should equal latent_dim) |
+| `kld_mean/std` | KL divergence from N(0,1) |
+| `posterior_collapsed` | True if too many dimensions have near-zero variance |
+
+**Target values for 64D VAE:**
+- `cosine_mean` > 0.90 (good reconstruction)
+- `active_dims` = 64/64 (no posterior collapse)
+- `latent_var` ≈ 1.0 (well-regularized latent)
 
 ### Gaussian Process
 
