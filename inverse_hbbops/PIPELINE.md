@@ -8,7 +8,7 @@
 - **Hyperband** for multi-fidelity Bayesian optimization
 - **InvBO Inference** with Vec2Text inversion for novel instruction generation
 
-The key innovation is **instruction-only optimization** (no exemplars), enabling efficient search in a 10-dimensional latent space while maintaining Vec2Text compatibility for text generation.
+The key innovation is **instruction-only optimization** (no exemplars), enabling efficient search in a 64D VAE latent space (reduced to 10D for GP) while maintaining Vec2Text compatibility for text generation.
 
 ---
 
@@ -179,12 +179,12 @@ Feature extractor for GP with frozen VAE.
 Architecture:
   768D embedding
     ↓
-  [Frozen VAE.encode_mu()] → 10D latent (μ)
+  [Frozen VAE.encode_mu()] → 64D latent (μ)
     ↓
-  [Trainable Adapter MLP] → 10D output
+  [Trainable Adapter MLP] → 10D output (for GP)
 
-Adapter MLP (latent_dim=10):
-  10D → Linear(20) → ReLU → LayerNorm → Linear(10)
+Adapter MLP (64D → 10D):
+  64D → Linear(32) → ReLU → LayerNorm → Linear(10)
 ```
 
 **Purpose:** Allows GP to learn on top of frozen VAE features while preserving pre-trained representations. The adapter transforms the VAE's latent space to optimize for GP prediction quality.
@@ -311,9 +311,9 @@ Deep kernel GP with ARD Matern 5/2.
 Architecture:
   768D embedding (normalized)
     ↓
-  VAEWithAdapter (feature extractor)
+  VAEWithAdapter (VAE encoder + adapter)
     ↓
-  10D latent features
+  10D latent features (64D VAE → 10D adapter)
     ↓
   ARD Matern 5/2 Kernel (per-dimension lengthscales)
     ↓
@@ -462,10 +462,11 @@ class TrainingConfig:
     ape_cache_path: str = "inverse_hbbops/data/ape_instructions.json"
 
     # VAE
-    vae_beta: float = 0.02
+    vae_beta: float = 0.003  # Scaled for latent_dim=64
     vae_epochs: int = 10000
     vae_annealing_epochs: int = 500
-    vae_latent_dim: int = 10
+    latent_dim: int = 64  # VAE latent dimension
+    gp_latent_dim: int = 10  # GP latent dimension (adapter output)
 
     # Hyperband
     bmin: int = 10
@@ -771,7 +772,7 @@ run.py:main()
 │       └── GTR batch encode (~30 calls)
 │
 ├── trainer.train_vae()
-│   ├── Create InstructionVAE(768D → 10D)
+│   ├── Create InstructionVAE(768D → 64D)
 │   │
 │   ├── For epoch 1 to 10000 (or early stop):
 │   │   ├── KL annealing:
@@ -878,7 +879,8 @@ run.py:main()
 | `vae_beta` | 0.02 | KL regularization weight | Higher = smoother latent, less reconstruction |
 | `vae_epochs` | 10000 | Max training epochs | Usually early-stops around 500-1000 |
 | `vae_annealing_epochs` | 500 | KL warm-up duration | Prevents posterior collapse |
-| `vae_latent_dim` | 10 | Latent space dimension | Trade-off: expressiveness vs tractability |
+| `latent_dim` | 64 | VAE latent space dimension | Higher = more expressive VAE |
+| `gp_latent_dim` | 10 | GP latent space dimension | Adapter reduces VAE→GP |
 | `vae_lr` | 0.001 | Learning rate | Standard for Adam |
 | `vae_batch_size` | 64 | Training batch size | Stable with LayerNorm |
 
@@ -934,11 +936,12 @@ Unlike standard HbBoPs which optimizes (Instruction × Exemplar) pairs:
 ### 2. GTR + VAE + Vec2Text Pipeline
 
 ```
-GTR (768D) → VAE (10D) → Vec2Text (text)
+GTR (768D) → VAE (64D) → Adapter (10D for GP) → Vec2Text (text)
 ```
 
 - GTR provides Vec2Text-compatible embeddings
-- VAE creates smooth 10D latent for optimization
+- VAE creates smooth 64D latent space
+- Adapter reduces to 10D for efficient GP optimization
 - Vec2Text enables novel text generation
 
 ### 3. LogEI for Numerical Stability

@@ -39,14 +39,15 @@ class TrainingConfig:
     validation_path: str = "hbbops_improved_2/data/validation.json"
 
     # VAE training
-    vae_beta: float = 0.02  # KL regularization weight (matches run.py CLI default)
+    vae_beta: float = 0.003  # KL regularization weight (scaled for latent_dim=64)
     vae_epochs: int = 10000
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
     vae_lr: float = 0.0003
     vae_batch_size: int = 64
     vae_hidden_dim: int = 256  # Hidden layer size
-    latent_dim: int = 10
+    latent_dim: int = 64  # VAE latent dimension
+    gp_latent_dim: int = 10  # GP latent dimension (adapter output)
     embedding_dim: int = 768
 
     # Hyperband
@@ -457,7 +458,9 @@ class InverseHbBoPsTrainer:
             print(f"  VAE training complete (epochs={epoch + 1}, final cosine={avg_cosine:.4f})")
 
         # Create VAEWithAdapter
-        self.vae_with_adapter = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
+        self.vae_with_adapter = VAEWithAdapter(
+            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+        ).to(self.device)
 
         return self.vae
 
@@ -610,7 +613,9 @@ class InverseHbBoPsTrainer:
         self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
         # Create VAEWithAdapter
-        self.vae_with_adapter = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
+        self.vae_with_adapter = VAEWithAdapter(
+            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+        ).to(self.device)
 
         print(f"Models loaded from {save_dir}")
 
@@ -905,7 +910,9 @@ class InverseHbBoPsTrainer:
         self.vae.eval()
 
         # Create VAEWithAdapter
-        self.vae_with_adapter = VAEWithAdapter(self.vae, self.config.latent_dim).to(self.device)
+        self.vae_with_adapter = VAEWithAdapter(
+            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+        ).to(self.device)
 
         if verbose:
             print(f"  Final cosine similarity: {avg_cosine:.4f}")

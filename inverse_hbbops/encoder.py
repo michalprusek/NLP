@@ -115,14 +115,14 @@ class InstructionVAE(nn.Module):
     def __init__(
         self,
         input_dim: int = 768,
-        latent_dim: int = 10,
+        latent_dim: int = 64,
         beta: float = 0.1,
     ):
         """Initialize VAE.
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Latent space dimension (10 for GP compatibility)
+            latent_dim: Latent space dimension (64 for GP compatibility)
             beta: KL regularization weight (higher = more regularized)
         """
         super().__init__()
@@ -326,11 +326,11 @@ class VAEWithAdapter(nn.Module):
     """Wrapper combining frozen VAE encoder with trainable adapter.
 
     Used to allow GP's feature extractor to learn
-    while keeping VAE weights fixed. The adapter is a small MLP
-    that transforms VAE latents.
+    while keeping VAE weights fixed. The adapter is an MLP
+    that transforms VAE latents (64D) to GP latents (10D).
     """
 
-    def __init__(self, vae: nn.Module, latent_dim: int):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -338,16 +338,19 @@ class VAEWithAdapter(nn.Module):
         for param in vae.parameters():
             param.requires_grad = False
 
-        # Trainable adapter: transforms VAE latents for GP
+        self.vae_latent_dim = vae_latent_dim
+        self.gp_latent_dim = gp_latent_dim
+
+        # Trainable adapter: reduces VAE latents (64D) to GP latents (10D)
         self.adapter = nn.Sequential(
-            nn.Linear(latent_dim, latent_dim * 2),
+            nn.Linear(vae_latent_dim, 32),
             nn.ReLU(),
-            nn.LayerNorm(latent_dim * 2),
-            nn.Linear(latent_dim * 2, latent_dim),
+            nn.LayerNorm(32),
+            nn.Linear(32, gp_latent_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # VAE encoding (frozen params, but gradients flow through)
         z = self._vae.encode_mu(x)
-        # Trainable adapter
+        # Trainable adapter: 64D -> 10D
         return self.adapter(z)
