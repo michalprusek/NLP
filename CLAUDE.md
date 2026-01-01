@@ -186,16 +186,19 @@ The file `datasets/inversion/diverse_instructions_1000.json` contains:
     "hyperband_evaluations": {
         "source": "path/to/log",
         "num_evaluated": 225,  # Number of evaluated instructions
-        "max_fidelity": 1319,
+        "max_fidelity": 1319,  # Maximum possible fidelity (full validation set)
         "results": {
-            "0": {"error_rate": 0.19, "accuracy": 0.81, "fidelity": 1319},
-            "1": {"error_rate": 0.15, "accuracy": 0.85, "fidelity": 1319},
+            # Results are indexed by instruction index (string keys)
+            # Fidelity varies due to Hyperband's multi-fidelity approach
+            "0": {"error_rate": 0.19, "accuracy": 0.81, "fidelity": 1319},  # Full fidelity
+            "42": {"error_rate": 0.25, "accuracy": 0.75, "fidelity": 160},  # Partial fidelity
             ...
         }
     }
 }
 ```
 VAE trains only on instructions with evaluations (accuracy + fidelity for contrastive loss).
+Note: Fidelity indicates how many validation samples were used. Lower fidelity = higher uncertainty.
 
 ## Coding Standards
 

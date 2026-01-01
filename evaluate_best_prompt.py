@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
-"""Evaluate best prompt from grid on GSM8K test set."""
+"""Evaluate best prompt from grid on GSM8K test set.
+
+This script evaluates the best-performing prompt from the HbBoPs grid
+on the GSM8K TEST set (not validation) to get a final held-out evaluation.
+The prompt was originally selected based on validation set performance.
+
+Requires: GPU 1 to be available (CUDA_VISIBLE_DEVICES=1)
+"""
 import os
+import sys
 import json
 from datetime import datetime
 
@@ -84,11 +92,16 @@ def main():
     }
 
     output_file = f"results/grid_best_test_{timestamp}.json"
-    os.makedirs("results", exist_ok=True)
-    with open(output_file, "w") as f:
-        json.dump(results, f, indent=2)
-
-    print(f"\nResults saved to: {output_file}")
+    try:
+        os.makedirs("results", exist_ok=True)
+        with open(output_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to: {output_file}")
+    except (IOError, OSError, PermissionError) as e:
+        print(f"\nERROR: Failed to save results to {output_file}: {e}")
+        print("Results (for manual recovery):")
+        print(json.dumps(results, indent=2))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

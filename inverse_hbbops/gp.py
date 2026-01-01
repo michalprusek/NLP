@@ -347,8 +347,12 @@ class GPWithEI:
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
+                        # Always log Cholesky errors - they indicate numerical issues
+                        print(f"WARNING: GP training failed - Cholesky decomposition error")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
+                        print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
                         if verbose:
-                            print(f"  Cholesky error at epoch {epoch + 1}")
+                            print(f"  Error: {e}")
                         return False
                     raise
 
@@ -677,8 +681,11 @@ class GPWithEI:
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
+                        # Always log Cholesky errors - they indicate numerical issues
+                        print(f"WARNING: GP retraining failed - Cholesky decomposition error")
+                        print(f"  Epoch: {epoch + 1}, Training samples: {self.get_training_size()}")
                         if verbose:
-                            print(f"  GP retrain failed (Cholesky) at epoch {epoch}")
+                            print(f"  Error: {e}")
                         return False
                     raise
 

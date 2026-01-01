@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Evaluate best OPRO prompt on GSM8K test set."""
+"""Evaluate best OPRO prompt on GSM8K test set.
+
+This script finds the most recent OPRO results file and evaluates
+the best prompt on the GSM8K TEST set (not validation).
+Results are updated in-place in the original OPRO results file.
+
+Requires: GPU 1 to be available (CUDA_VISIBLE_DEVICES=1)
+"""
 import os
+import sys
 import json
 import glob
-from datetime import datetime
 
 # Use GPU 1
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
@@ -16,17 +23,35 @@ def main():
     # Find most recent OPRO results
     result_files = sorted(glob.glob("results/opro_*.json"))
     if not result_files:
-        print("No OPRO results found. Run OPRO first.")
-        return
+        print("ERROR: No OPRO results found in 'results/' directory")
+        print("Expected files matching pattern: results/opro_*.json")
+        print("\nTo generate results, run:")
+        print("  uv run python run_opro.py --model qwen")
+        sys.exit(1)
 
     latest = result_files[-1]
     print(f"Loading results from: {latest}")
 
-    with open(latest) as f:
-        results = json.load(f)
+    try:
+        with open(latest) as f:
+            results = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in {latest}: {e}")
+        print("The file may be corrupted or from an incomplete run.")
+        sys.exit(1)
+    except (IOError, FileNotFoundError) as e:
+        print(f"ERROR: Cannot read {latest}: {e}")
+        sys.exit(1)
 
-    best_prompt = results.get("best_prompt", "")
+    best_prompt = results.get("best_prompt")
+    if not best_prompt:
+        print(f"ERROR: No 'best_prompt' found in {latest}")
+        print("The results file may be corrupted or from an incomplete run.")
+        sys.exit(1)
+
     val_accuracy = results.get("validation_accuracy", 0)
+    if val_accuracy == 0:
+        print(f"WARNING: validation_accuracy is 0 or missing in {latest}")
 
     print("=" * 60)
     print("OPRO BEST PROMPT - TEST SET EVALUATION")
@@ -85,10 +110,15 @@ def main():
     results["test_correct"] = test_results['correct']
     results["test_total"] = test_results['total']
 
-    with open(latest, "w") as f:
-        json.dump(results, f, indent=2)
-
-    print(f"\nResults updated in: {latest}")
+    try:
+        with open(latest, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults updated in: {latest}")
+    except (IOError, OSError, PermissionError) as e:
+        print(f"\nERROR: Failed to update results in {latest}: {e}")
+        print("Updated results (for manual recovery):")
+        print(json.dumps(results, indent=2))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

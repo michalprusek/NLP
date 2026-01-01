@@ -664,12 +664,24 @@ class InverseHbBoPsTrainer:
                 print(f"  Loaded {len(instruction_texts)} instruction texts")
 
             # Add instruction_text to grid_data
+            missing_ids = []
             for d in grid_data:
                 inst_id = d["instruction_id"]
                 if inst_id < len(instruction_texts):
                     d["instruction_text"] = instruction_texts[inst_id]
                 else:
-                    d["instruction_text"] = f"[Unknown instruction {inst_id}]"
+                    missing_ids.append(inst_id)
+
+            # Fail loudly if any instruction IDs are missing
+            if missing_ids:
+                max_id = max(d["instruction_id"] for d in grid_data)
+                raise ValueError(
+                    f"Grid references {len(missing_ids)} instruction IDs not found in instructions file.\n"
+                    f"  Missing IDs: {missing_ids[:10]}{'...' if len(missing_ids) > 10 else ''}\n"
+                    f"  Instructions file has {len(instruction_texts)} entries (IDs 0-{len(instruction_texts)-1})\n"
+                    f"  Grid references IDs up to {max_id}\n"
+                    f"  Check that the correct instructions file is being used: {instructions_path}"
+                )
 
         # Aggregate by instruction (average error rates across exemplars)
         # Grid has instruction+exemplar combinations, but GP uses only instruction embeddings

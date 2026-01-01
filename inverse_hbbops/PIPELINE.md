@@ -177,15 +177,17 @@ Feature extractor for GP with frozen VAE.
 
 ```
 Architecture:
-  768D → [Frozen VAE Encoder] → μ
-       → [Trainable Adapter MLP] → 768D
-       → [VAE encode_mu] → 10D latent
+  768D embedding
+    ↓
+  [Frozen VAE.encode_mu()] → 10D latent (μ)
+    ↓
+  [Trainable Adapter MLP] → 10D output
 
-Adapter MLP:
-  768 → Linear(768×2) → ReLU → LayerNorm → Linear(768)
+Adapter MLP (latent_dim=10):
+  10D → Linear(20) → ReLU → LayerNorm → Linear(10)
 ```
 
-**Purpose:** Allows GP to learn on top of frozen VAE features while preserving pre-trained representations.
+**Purpose:** Allows GP to learn on top of frozen VAE features while preserving pre-trained representations. The adapter transforms the VAE's latent space to optimize for GP prediction quality.
 
 ---
 
