@@ -12,60 +12,16 @@ Self-contained - no imports from other modules outside inverse_hbbops/.
 import json
 import random
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable, Any
-from dataclasses import dataclass, field
-from tqdm import tqdm
+from dataclasses import dataclass
 
+from inverse_hbbops.config import Config
 from inverse_hbbops.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
 from inverse_hbbops.gp import GPWithEI
-from inverse_hbbops.hyperband import InverseHbBoPs, HyperbandConfig
+from inverse_hbbops.hyperband import InverseHbBoPs
 from inverse_hbbops.instruction import InstructionOnlyPrompt
-
-
-@dataclass
-class TrainingConfig:
-    """Configuration for Inverse HbBoPs training."""
-
-    # APE generation
-    ape_num_instructions: int = 1000
-    ape_model: str = "Qwen/Qwen2.5-7B-Instruct"
-    ape_backend: str = "vllm"
-    ape_cache_path: str = "inverse_hbbops/data/ape_instructions.json"
-
-    # Validation data path
-    validation_path: str = "hbbops_improved_2/data/validation.json"
-
-    # VAE training
-    vae_beta: float = 0.003  # KL regularization weight (scaled for latent_dim=64)
-    vae_epochs: int = 10000
-    vae_annealing_epochs: int = 500
-    vae_patience: int = 500
-    vae_lr: float = 0.0003
-    vae_batch_size: int = 64
-    vae_hidden_dim: int = 256  # Hidden layer size
-    latent_dim: int = 64  # VAE latent dimension
-    gp_latent_dim: int = 10  # GP latent dimension (adapter output)
-    embedding_dim: int = 768
-
-    # Hyperband
-    bmin: int = 10
-    eta: float = 2.0
-    random_interleaving_prob: float = 0.1
-    top_fidelity_pct: float = 0.75
-
-    # GP training (synced with invbo_decoder)
-    gp_epochs: int = 10000
-    gp_lr: float = 0.01
-    gp_patience: int = 100
-
-    # Device
-    device: str = "cuda"
-
-    # Seed
-    seed: int = 42
 
 
 class APEGenerator:
@@ -271,7 +227,7 @@ class InverseHbBoPsTrainer:
     4. Output: trained VAE + GP ready for InvBO inference
     """
 
-    def __init__(self, config: TrainingConfig):
+    def __init__(self, config: Config):
         self.config = config
         self.device = torch.device(
             config.device if torch.cuda.is_available() else "cpu"
@@ -360,18 +316,44 @@ class InverseHbBoPsTrainer:
 
         return self.instructions
 
-    def train_vae(self, verbose: bool = True) -> InstructionVAE:
-        """Train VAE on instruction embeddings with KL annealing."""
-        if not self.instruction_embeddings:
-            raise RuntimeError("No instructions. Call generate_instructions() first.")
+    def train_vae(
+        self,
+        embedding_source: str = "instructions",
+        verbose: bool = True,
+    ) -> InstructionVAE:
+        """Train VAE on instruction embeddings with KL annealing.
+
+        Args:
+            embedding_source: Which embeddings to use for training:
+                - "instructions": Use self.instruction_embeddings (default)
+                - "diverse": Use self.diverse_embeddings (must call load_diverse_instructions first)
+            verbose: Print progress
+
+        Returns:
+            Trained InstructionVAE
+
+        Raises:
+            RuntimeError: If specified embeddings are not loaded
+        """
+        # Select embeddings based on source
+        if embedding_source == "diverse":
+            if not hasattr(self, 'diverse_embeddings') or not self.diverse_embeddings:
+                raise RuntimeError("No diverse instructions. Call load_diverse_instructions() first.")
+            embeddings_dict = self.diverse_embeddings
+            source_name = "diverse"
+        else:
+            if not self.instruction_embeddings:
+                raise RuntimeError("No instructions. Call generate_instructions() or load_from_grid() first.")
+            embeddings_dict = self.instruction_embeddings
+            source_name = "grid/APE"
 
         if verbose:
             print("\n" + "=" * 60)
-            print("Training VAE with KL Annealing")
+            print(f"Training VAE on {source_name} Instructions")
             print("=" * 60)
 
         # Prepare embeddings
-        embeddings = torch.stack(list(self.instruction_embeddings.values())).to(self.device)
+        embeddings = torch.stack(list(embeddings_dict.values())).to(self.device)
 
         if verbose:
             print(f"  Training on {embeddings.shape[0]} embeddings")
@@ -386,7 +368,7 @@ class InverseHbBoPsTrainer:
         # Optimizer
         optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.config.vae_epochs * 2, eta_min=1e-4
+            optimizer, T_max=self.config.vae_epochs * 2, eta_min=self.config.vae_eta_min
         )
 
         best_recon = float("inf")
@@ -418,7 +400,7 @@ class InverseHbBoPsTrainer:
                 x_recon, mu, log_var, z = self.vae(batch)
                 loss, loss_dict = self.vae.loss(batch, x_recon, mu, log_var, beta=current_beta)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), max_norm=self.config.vae_grad_clip)
                 optimizer.step()
 
                 epoch_losses.append(loss_dict["recon"])
@@ -457,7 +439,7 @@ class InverseHbBoPsTrainer:
         if verbose:
             print(f"  VAE training complete (epochs={epoch + 1}, final cosine={avg_cosine:.4f})")
 
-        # Create VAEWithAdapter
+        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
         self.vae_with_adapter = VAEWithAdapter(
             self.vae, self.config.latent_dim, self.config.gp_latent_dim
         ).to(self.device)
@@ -481,24 +463,13 @@ class InverseHbBoPsTrainer:
             print("Running Hyperband")
             print("=" * 60)
 
-        hb_config = HyperbandConfig(
-            bmin=self.config.bmin,
-            eta=self.config.eta,
-            random_interleaving_prob=self.config.random_interleaving_prob,
-            gp_epochs=self.config.gp_epochs,
-            gp_lr=self.config.gp_lr,
-            gp_patience=self.config.gp_patience,
-            top_fidelity_pct=self.config.top_fidelity_pct,
-            seed=self.config.seed,
-        )
-
         self.hyperband = InverseHbBoPs(
             instructions=self.instructions,
             validation_data=self.validation_data,
             llm_evaluator=llm_evaluator,
             vae_with_adapter=self.vae_with_adapter,
             encoder=self.gtr,
-            config=hb_config,
+            config=self.config,
             device=str(self.device),
         )
 
@@ -612,7 +583,7 @@ class InverseHbBoPsTrainer:
         ).to(self.device)
         self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
-        # Create VAEWithAdapter
+        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
         self.vae_with_adapter = VAEWithAdapter(
             self.vae, self.config.latent_dim, self.config.gp_latent_dim
         ).to(self.device)
@@ -814,111 +785,112 @@ class InverseHbBoPsTrainer:
 
         return diverse_instructions
 
-    def train_vae_on_diverse(self, verbose: bool = True) -> InstructionVAE:
-        """Train VAE on diverse instruction embeddings.
+    def evaluate_vae_quality(self, verbose: bool = True) -> Dict[str, float]:
+        """Compute comprehensive VAE quality metrics.
 
-        Uses diverse_embeddings instead of instruction_embeddings.
-        Must call load_diverse_instructions() first.
+        Computes:
+        - Reconstruction quality (cosine similarity, MSE)
+        - Latent space statistics (norm, variance per dimension)
+        - KL divergence statistics
+        - Posterior collapse detection
+
+        NOTE: Evaluates on grid instructions (not diverse) because:
+        1. These are the task-relevant instructions with error rates
+        2. Diverse instructions are only for VAE regularization
+
+        Args:
+            verbose: Print metrics
+
+        Returns:
+            Dictionary with quality metrics
         """
-        if not hasattr(self, 'diverse_embeddings') or not self.diverse_embeddings:
-            raise RuntimeError("No diverse instructions. Call load_diverse_instructions() first.")
-
-        if verbose:
-            print("\n" + "=" * 60)
-            print("Training VAE on Diverse Instructions")
-            print("=" * 60)
-
-        # Use diverse embeddings for training
-        embeddings = torch.stack(list(self.diverse_embeddings.values())).to(self.device)
-
-        if verbose:
-            print(f"  Training on {embeddings.shape[0]} diverse embeddings")
-
-        # Initialize VAE
-        self.vae = InstructionVAE(
-            input_dim=self.config.embedding_dim,
-            latent_dim=self.config.latent_dim,
-            beta=self.config.vae_beta,
-        ).to(self.device)
-
-        # Optimizer
-        optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.config.vae_epochs * 2, eta_min=1e-4
-        )
-
-        best_recon = float("inf")
-        patience_counter = 0
-
-        if verbose:
-            print(f"  KL annealing: β = 0 → {self.config.vae_beta} over {self.config.vae_annealing_epochs} epochs")
-
-        self.vae.train()
-
-        for epoch in range(self.config.vae_epochs):
-            # KL annealing
-            if epoch < self.config.vae_annealing_epochs:
-                current_beta = self.config.vae_beta * (epoch / self.config.vae_annealing_epochs)
-            else:
-                current_beta = self.config.vae_beta
-
-            # Shuffle data
-            perm = torch.randperm(embeddings.shape[0], device=self.device)
-            X_shuffled = embeddings[perm]
-
-            epoch_losses = []
-            epoch_cosine = []
-
-            for i in range(0, embeddings.shape[0], self.config.vae_batch_size):
-                batch = X_shuffled[i:i + self.config.vae_batch_size]
-
-                optimizer.zero_grad()
-                recon, mu, log_var, z = self.vae(batch)
-
-                # Losses
-                recon_loss = 1 - F.cosine_similarity(recon, batch, dim=1).mean()
-                kl_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp()) / batch.shape[0]
-                loss = recon_loss + current_beta * kl_loss
-
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.vae.parameters(), 1.0)
-                optimizer.step()
-
-                epoch_losses.append(loss.item())
-                epoch_cosine.append(1 - recon_loss.item())
-
-            scheduler.step()
-
-            avg_loss = sum(epoch_losses) / len(epoch_losses)
-            avg_cosine = sum(epoch_cosine) / len(epoch_cosine)
-
-            # Track reconstruction (not total loss) for early stopping
-            if avg_cosine > (1 - best_recon + 0.001):
-                best_recon = 1 - avg_cosine
-                patience_counter = 0
-            else:
-                patience_counter += 1
-
-            if verbose and (epoch + 1) % 500 == 0:
-                print(f"  Epoch {epoch + 1}: loss={avg_loss:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}")
-
-            if patience_counter >= self.config.vae_patience:
-                if verbose:
-                    print(f"  Early stopping at epoch {epoch + 1}")
-                break
+        if self.vae is None:
+            raise RuntimeError("VAE not trained. Call train_vae() first.")
 
         self.vae.eval()
 
-        # Create VAEWithAdapter
-        self.vae_with_adapter = VAEWithAdapter(
-            self.vae, self.config.latent_dim, self.config.gp_latent_dim
-        ).to(self.device)
+        # Evaluate on grid instructions only (the task-relevant ones)
+        if hasattr(self, 'grid_data') and self.grid_data is not None:
+            # grid_data is a list of dicts with 'instruction_text' key
+            embeddings = torch.stack([
+                self.gtr.encode_tensor(d["instruction_text"])
+                for d in self.grid_data
+            ]).to(self.device)
+            eval_name = "grid"
+        else:
+            embeddings = torch.stack([
+                self.gtr.encode_tensor(inst) for inst in self.instructions
+            ]).to(self.device)
+            eval_name = "all"
+
+        if verbose and hasattr(self, 'diverse_embeddings') and self.diverse_embeddings is not None:
+            # diverse_embeddings can be tensor or dict with 'embeddings' key
+            if isinstance(self.diverse_embeddings, dict):
+                diverse_count = len(self.diverse_embeddings.get("instructions", []))
+            else:
+                diverse_count = self.diverse_embeddings.shape[0]
+            print(f"  Note: Evaluating on {eval_name} ({embeddings.shape[0]} samples), "
+                  f"not diverse ({diverse_count} samples)")
+
+        with torch.no_grad():
+            x_recon, mu, log_var, z = self.vae(embeddings)
+
+        # Reconstruction metrics
+        cosine_sims = torch.nn.functional.cosine_similarity(embeddings, x_recon, dim=-1)
+        mse_values = ((embeddings - x_recon) ** 2).mean(dim=-1)
+        l2_relative = torch.norm(embeddings - x_recon, dim=-1) / torch.norm(embeddings, dim=-1)
+
+        # Latent space statistics
+        latent_norms = z.norm(dim=-1)
+        latent_var_per_dim = z.var(dim=0)
+
+        # KL divergence
+        kld_per_sample = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1)
+
+        # Posterior collapse detection (dimensions with very low variance)
+        active_dims = (latent_var_per_dim > 0.01).sum().item()
+        total_dims = z.shape[-1]
+
+        metrics = {
+            "cosine_mean": cosine_sims.mean().item(),
+            "cosine_std": cosine_sims.std().item(),
+            "cosine_min": cosine_sims.min().item(),
+            "cosine_max": cosine_sims.max().item(),
+            "mse_mean": mse_values.mean().item(),
+            "mse_std": mse_values.std().item(),
+            "l2_relative_error": l2_relative.mean().item(),
+            "latent_norm_mean": latent_norms.mean().item(),
+            "latent_norm_std": latent_norms.std().item(),
+            "latent_var_mean": latent_var_per_dim.mean().item(),
+            "latent_var_min": latent_var_per_dim.min().item(),
+            "latent_var_max": latent_var_per_dim.max().item(),
+            "active_dims": int(active_dims),
+            "total_dims": int(total_dims),
+            "kld_mean": kld_per_sample.mean().item(),
+            "kld_std": kld_per_sample.std().item(),
+            "posterior_collapsed": active_dims < total_dims * 0.5,
+        }
 
         if verbose:
-            print(f"  Final cosine similarity: {avg_cosine:.4f}")
-            print(f"  VAEWithAdapter created")
+            print("\n--- VAE Quality Metrics ---")
+            print("Reconstruction (Cosine Similarity):")
+            print(f"  Mean: {metrics['cosine_mean']:.4f} | Std: {metrics['cosine_std']:.4f} | "
+                  f"Min: {metrics['cosine_min']:.4f} | Max: {metrics['cosine_max']:.4f}")
+            print("Reconstruction (MSE):")
+            print(f"  Mean: {metrics['mse_mean']:.6f} | Std: {metrics['mse_std']:.6f}")
+            print(f"  Relative L2 Error: {metrics['l2_relative_error']:.4f}")
+            print("Latent Space:")
+            print(f"  Norm: mean={metrics['latent_norm_mean']:.4f}, std={metrics['latent_norm_std']:.4f}")
+            print(f"  Variance per dim: mean={metrics['latent_var_mean']:.4f}, "
+                  f"min={metrics['latent_var_min']:.4f}, max={metrics['latent_var_max']:.4f}")
+            print(f"  Active dimensions (var>0.01): {metrics['active_dims']}/{metrics['total_dims']}")
+            print("KL Divergence:")
+            print(f"  Mean: {metrics['kld_mean']:.4f} | Std: {metrics['kld_std']:.4f}")
+            if metrics['posterior_collapsed']:
+                print("  WARNING: Posterior may be collapsed!")
+            print("----------------------------")
 
-        return self.vae
+        return metrics
 
     def train_gp_from_grid(self, verbose: bool = True) -> GPWithEI:
         """Train GP directly from grid data (no Hyperband).
@@ -958,13 +930,13 @@ class InverseHbBoPsTrainer:
         # Create and train GP
         self.gp = GPWithEI(
             device=str(self.device),
-            latent_dim=self.config.latent_dim,
+            latent_dim=self.config.gp_latent_dim,  # Adapter output dim (10D)
         )
 
-        # Set feature extractor (VAEWithAdapter)
-        self.gp.feature_extractor = self.vae_with_adapter
+        # Set VAEWithAdapter (frozen VAE + trainable adapter)
+        self.gp.vae_with_adapter = self.vae_with_adapter
 
-        # Set training data
+        # Set training data (converts 768D embeddings to 64D VAE latents)
         self.gp.set_training_data(embeddings, error_rates)
 
         # Train GP

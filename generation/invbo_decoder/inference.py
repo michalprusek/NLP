@@ -256,7 +256,6 @@ class InvBOInference:
     def __init__(
         self,
         gp: GPWithEI,
-        decoder: nn.Module,
         gtr: Optional[GTRInstructionEncoder] = None,
         vec2text_steps: int = 50,
         vec2text_beam: int = 4,
@@ -266,8 +265,7 @@ class InvBOInference:
         """Initialize inference pipeline.
 
         Args:
-            gp: Trained GP with feature extractor
-            decoder: Trained latent decoder (VAEDecoderWrapper or similar)
+            gp: Trained GP with vae_with_adapter (provides decode functionality)
             gtr: GTR encoder (for validation)
             vec2text_steps: Vec2Text correction steps
             vec2text_beam: Vec2Text beam width
@@ -275,7 +273,7 @@ class InvBOInference:
             seed: Random seed for reproducible optimization
         """
         self.gp = gp
-        self.decoder = decoder
+        # Decoder accessed via gp.vae_with_adapter.decode()
         self.device = gp.device
         self.seed = seed
 
@@ -303,19 +301,22 @@ class InvBOInference:
         return best_latent, best_idx, best_error
 
     def _get_latent_bounds(self, margin: float = 0.2) -> torch.Tensor:
-        """Compute latent space bounds from training data.
+        """Compute VAE latent space bounds from training data.
+
+        X_train is already stored as 64D VAE latents, so we just normalize
+        and compute bounds with margin for exploration.
 
         Args:
             margin: Fraction to expand bounds beyond training data range
 
         Returns:
-            Bounds tensor, shape (2, latent_dim)
+            Bounds tensor, shape (2, 64) for 64D VAE latent space
         """
         from generation.invbo_decoder.botorch_acq import get_latent_bounds
 
         return get_latent_bounds(
-            encoder=self.gp.feature_extractor,
-            X_train=self.gp.X_train,
+            encoder=self.gp.vae_with_adapter,  # Unused, for API compatibility
+            X_train=self.gp.X_train,  # Already 64D VAE latents
             X_min=self.gp.X_min,
             X_max=self.gp.X_max,
             margin=margin,
@@ -323,28 +324,29 @@ class InvBOInference:
 
     def optimize_latent_botorch(
         self,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         verbose: bool = True,
     ) -> Tuple[torch.Tensor, float]:
-        """Optimize latent using BoTorch qLogExpectedImprovement.
+        """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
         Uses multi-start L-BFGS-B with proper gradient flow through:
-            latent z -> decoder -> embedding -> GP posterior -> qLogEI
+            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
 
         This is the recommended optimization method as it:
         1. Uses numerically stable LogEI formulation
-        2. Provides proper gradient-based optimization
-        3. Uses sophisticated multi-start initialization
+        2. Optimizes in rich 64D VAE latent space
+        3. Uses adapter to compress to 10D for efficient GP
+        4. Gradients flow through adapter for latent optimization
 
         Args:
-            num_restarts: Number of L-BFGS-B restarts (default: 20)
-            raw_samples: Raw samples for initialization seeding (default: 512)
+            num_restarts: Number of L-BFGS-B restarts (default: 64)
+            raw_samples: Raw samples for initialization seeding (default: 1024)
             verbose: Print progress
 
         Returns:
             (optimal_latent, log_ei) tuple where:
-            - optimal_latent: Best latent tensor, shape (10,)
+            - optimal_latent: Best VAE latent tensor, shape (64,)
             - log_ei: Log expected improvement value at optimal point
         """
         from generation.invbo_decoder.botorch_acq import LatentSpaceAcquisition
@@ -352,13 +354,13 @@ class InvBOInference:
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
 
-        # Get latent bounds from training data
+        # Get latent bounds from training data (64D VAE latent space)
         bounds = self._get_latent_bounds(margin=0.2)
 
         # Create acquisition optimizer
+        # No decoder needed - GP applies adapter internally
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
-            decoder=self.decoder,
             bounds=bounds,
             device=self.device,
         )
@@ -380,8 +382,8 @@ class InvBOInference:
 
     def run_single_iteration(
         self,
-        num_restarts: int = 20,
-        raw_samples: int = 512,
+        num_restarts: int = 64,
+        raw_samples: int = 1024,
         use_inversion: bool = True,
         max_inversion_iters: int = 3,
         gap_threshold: float = 0.1,
@@ -413,10 +415,10 @@ class InvBOInference:
             verbose=verbose,
         )
 
-        # Decode to embedding
-        self.decoder.eval()
+        # Decode 64D VAE latent to 768D embedding
+        self.gp.vae_with_adapter.eval()
         with torch.no_grad():
-            embedding = self.decoder(z_opt)
+            embedding = self.gp.vae_with_adapter._vae.decode(z_opt)
 
         # Invert to text
         text = self.inverter.invert(embedding.clone())
@@ -443,7 +445,7 @@ class InvBOInference:
                 # Re-decode from inverted latent
                 z_opt = inv_result.z_inv
                 with torch.no_grad():
-                    embedding = self.decoder(z_opt)
+                    embedding = self.gp.vae_with_adapter._vae.decode(z_opt)
                 text = self.inverter.invert(embedding.clone())
                 inv_iters += 1
 
@@ -484,7 +486,7 @@ class InvBOInference:
     ) -> torch.Tensor:
         """Find optimal latent using L-BFGS-B with EI acquisition.
 
-        Optimizes Expected Improvement in the 10D latent space.
+        Optimizes Expected Improvement in the 64D VAE latent space.
 
         Args:
             n_restarts: Number of random restarts
@@ -493,22 +495,18 @@ class InvBOInference:
             verbose: Print progress
 
         Returns:
-            Optimal 10D latent tensor
+            Optimal 64D VAE latent tensor
         """
         if verbose:
             print("Optimizing latent space with L-BFGS-B...")
 
-        # Get bounds from training data latents
-        encoder = self.gp.feature_extractor
-        encoder.eval()
+        # Get bounds from training data VAE latents (64D)
+        vae = self.gp.vae_with_adapter._vae
+        vae.eval()
 
         # Compute latent bounds from training embeddings
-        all_latents = []
         with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_norm = (self.gp.X_train - self.gp.X_min) / denom
-            all_latents = encoder(X_norm)
+            all_latents = vae.encode_mu(self.gp.X_train)
 
         z_min = all_latents.min(dim=0)[0].cpu().numpy()
         z_max = all_latents.max(dim=0)[0].cpu().numpy()
@@ -523,10 +521,10 @@ class InvBOInference:
             """Negative EI for minimization."""
             z = torch.tensor(z_np, dtype=torch.float32, device=self.device)
 
-            # Decode latent to embedding
-            self.decoder.eval()
+            # Decode VAE latent to embedding
+            self.gp.vae_with_adapter.eval()
             with torch.no_grad():
-                embedding = self.decoder(z)
+                embedding = self.gp.vae_with_adapter.decode(z)
 
             # Compute EI
             ei = self.gp.expected_improvement(embedding, xi=xi)
@@ -578,6 +576,7 @@ class InvBOInference:
         """Find optimal latent using random sampling.
 
         Faster alternative to L-BFGS-B for quick exploration.
+        Uses 64D VAE latent space.
 
         Args:
             n_candidates: Number of random candidates
@@ -585,20 +584,17 @@ class InvBOInference:
             verbose: Print progress
 
         Returns:
-            Best 10D latent tensor
+            Best 64D VAE latent tensor
         """
         if verbose:
             print(f"Sampling {n_candidates} latent candidates...")
 
-        encoder = self.gp.feature_extractor
-        encoder.eval()
+        vae = self.gp.vae_with_adapter._vae
+        vae.eval()
 
-        # Get latent distribution from training data
+        # Get VAE latent distribution from training data (64D)
         with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_norm = (self.gp.X_train - self.gp.X_min) / denom
-            all_latents = encoder(X_norm)
+            all_latents = vae.encode_mu(self.gp.X_train)
 
         z_mean = all_latents.mean(dim=0)
         z_std = all_latents.std(dim=0) + 1e-6
@@ -606,14 +602,14 @@ class InvBOInference:
         best_z = None
         best_ei = -float("inf")
 
-        self.decoder.eval()
+        self.gp.vae_with_adapter.eval()
 
         for i in range(n_candidates):
-            # Sample from Gaussian around observed latents
+            # Sample from Gaussian around observed VAE latents
             z = z_mean + z_std * torch.randn_like(z_mean) * 1.5
 
             with torch.no_grad():
-                embedding = self.decoder(z)
+                embedding = self.gp.vae_with_adapter.decode(z)
 
             ei = self.gp.expected_improvement(embedding, xi=xi)
 
@@ -649,9 +645,9 @@ class InvBOInference:
             print("Inverting latent to text...")
 
         # Decode latent to embedding
-        self.decoder.eval()
+        self.gp.vae_with_adapter.eval()
         with torch.no_grad():
-            embedding = self.decoder(latent)
+            embedding = self.gp.vae_with_adapter.decode(latent)
 
         # Invert to text
         instruction_text = self.inverter.invert(embedding)
@@ -749,6 +745,8 @@ class InvBOInference:
         This closes the loop and eliminates misalignment between decoder
         output and what Vec2Text can actually reconstruct.
 
+        Works in 64D VAE latent space (not 10D adapter output).
+
         Args:
             text: Text to invert (from Vec2Text)
             n_steps: Maximum optimization steps
@@ -762,15 +760,13 @@ class InvBOInference:
         # Get target embedding from text
         target_emb = self.gtr.encode_tensor(text)
 
-        # Warm start: encode target embedding to get initial z
-        encoder = self.gp.feature_extractor
-        encoder.eval()
+        # Warm start: encode target embedding using VAE (64D), not adapter (10D)
+        vae = self.gp.vae_with_adapter._vae
+        vae.eval()
 
         with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            target_norm = (target_emb - self.gp.X_min) / denom
-            z_init = encoder(target_norm.unsqueeze(0)).squeeze(0)
+            # VAE expects unnormalized 768D embeddings
+            z_init = vae.encode_mu(target_emb)
 
         # Clone for optimization
         z = z_init.clone().requires_grad_(True)
@@ -784,8 +780,8 @@ class InvBOInference:
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Decode latent to embedding (gradients flow through decoder in any mode)
-            decoded = self.decoder(z)
+            # Decode latent to embedding (gradients flow through decoder)
+            decoded = self.gp.vae_with_adapter.decode(z)
 
             # Cosine loss to target
             loss = 1 - F.cosine_similarity(
@@ -809,9 +805,9 @@ class InvBOInference:
         # Gap as cosine distance in embedding space (more stable than L2 in latent)
         # L2 in latent can be high even when embeddings are similar
         with torch.no_grad():
-            self.decoder.eval()
-            emb_original = self.decoder(z_original)
-            emb_inv = self.decoder(z_inv)
+            self.gp.vae_with_adapter.eval()
+            emb_original = self.gp.vae_with_adapter.decode(z_original)
+            emb_inv = self.gp.vae_with_adapter.decode(z_inv)
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
@@ -883,9 +879,9 @@ class InvBOInference:
                 print(f"\nInversion iteration {inv_iter + 1}/{max_inversion_iters}")
 
             # Decode to embedding
-            self.decoder.eval()
+            self.gp.vae_with_adapter.eval()
             with torch.no_grad():
-                embedding = self.decoder(z_star)
+                embedding = self.gp.vae_with_adapter.decode(z_star)
 
             # Invert to text
             text = self.inverter.invert(embedding.clone())
@@ -934,8 +930,9 @@ class InvBOInference:
     ) -> dict:
         """Measure inversion gap on random latent samples.
 
-        The inversion gap is ||z - encoder(GTR(Vec2Text(decoder(z))))||.
+        The inversion gap is ||z - vae.encode(GTR(Vec2Text(decoder(z))))||.
         This measures the full cycle: latent -> text -> latent.
+        Uses 64D VAE latent space.
 
         Args:
             n_samples: Number of samples to test
@@ -947,16 +944,13 @@ class InvBOInference:
         if verbose:
             print("\nMeasuring inversion gap...")
 
-        encoder = self.gp.feature_extractor
-        encoder.eval()
-        self.decoder.eval()
+        vae = self.gp.vae_with_adapter._vae
+        vae.eval()
+        self.gp.vae_with_adapter.eval()
 
-        # Get latent distribution
+        # Get VAE latent distribution (64D)
         with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_norm = (self.gp.X_train - self.gp.X_min) / denom
-            all_latents = encoder(X_norm)
+            all_latents = vae.encode_mu(self.gp.X_train)
 
         z_mean = all_latents.mean(dim=0)
         z_std = all_latents.std(dim=0) + 1e-6
@@ -965,23 +959,19 @@ class InvBOInference:
         cosines = []
 
         for i in range(n_samples):
-            # Sample latent
+            # Sample VAE latent (64D)
             z = z_mean + z_std * torch.randn_like(z_mean)
 
-            # Full cycle: z -> decode -> Vec2Text -> GTR -> encode
+            # Full cycle: z -> decode -> Vec2Text -> GTR -> VAE encode
             with torch.no_grad():
-                embedding = self.decoder(z)
+                embedding = self.gp.vae_with_adapter.decode(z)
 
             text = self.inverter.invert(embedding)
             reencoded = self.gtr.encode_tensor(text)
 
-            # Re-encode to latent
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            reencoded_norm = (reencoded - self.gp.X_min) / denom
-
+            # Re-encode to VAE latent (64D)
             with torch.no_grad():
-                z_recon = encoder(reencoded_norm.unsqueeze(0)).squeeze(0)
+                z_recon = vae.encode_mu(reencoded)
 
             gap = torch.norm(z - z_recon).item()
             cosine = F.cosine_similarity(

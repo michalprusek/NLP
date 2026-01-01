@@ -11,35 +11,17 @@ Algorithm based on Schneider et al. (2025)
 """
 
 import torch
-import torch.nn as nn
 import gpytorch
-from typing import List, Tuple, Dict, Optional, Callable, Any
+from typing import List, Tuple, Dict, Optional, Callable
 from collections import Counter
 import numpy as np
 import random
-from dataclasses import dataclass
 from scipy.stats import norm
 
+from inverse_hbbops.config import Config
 from inverse_hbbops.instruction import InstructionOnlyPrompt
 from inverse_hbbops.encoder import GTRInstructionEncoder, VAEWithAdapter
-from inverse_hbbops.gp import GPWithEI
-
-
-@dataclass
-class HyperbandConfig:
-    """Configuration for Hyperband."""
-    bmin: int = 10  # Minimum fidelity (samples)
-    eta: float = 2.0  # Downsampling rate
-    random_interleaving_prob: float = 0.1  # 10% random for exploration
-    gp_epochs: int = 3000
-    gp_lr: float = 0.01
-    gp_patience: int = 10
-    top_fidelity_pct: float = 0.75  # Train GP on top 75% fidelity levels
-    seed: int = 42
-
-
-# Note: InstructionDeepKernelGP is imported from gp.py to avoid duplication
-from inverse_hbbops.gp import InstructionDeepKernelGP
+from inverse_hbbops.gp import GPWithEI, InstructionDeepKernelGP
 
 
 class InverseHbBoPs:
@@ -59,7 +41,7 @@ class InverseHbBoPs:
         llm_evaluator: Callable[[InstructionOnlyPrompt, List[Dict]], float],
         vae_with_adapter: VAEWithAdapter,
         encoder: GTRInstructionEncoder,
-        config: Optional[HyperbandConfig] = None,
+        config: Config,
         device: str = "auto",
     ):
         """Initialize Hyperband.
@@ -70,10 +52,10 @@ class InverseHbBoPs:
             llm_evaluator: Function (prompt, data) -> error_rate
             vae_with_adapter: VAEWithAdapter for GP feature extraction
             encoder: GTR encoder for embeddings
-            config: Hyperband configuration
+            config: Unified pipeline configuration
             device: Device to use
         """
-        self.config = config or HyperbandConfig()
+        self.config = config
         self.device = self._get_device(device)
 
         # Store instructions as prompts
@@ -436,7 +418,13 @@ class InverseHbBoPs:
         gp_with_ei.y_mean = self.y_mean
         gp_with_ei.y_std = self.y_std
 
-        # Retrain GP with proper setup
-        gp_with_ei.train(epochs=3000, lr=0.01, patience=50, verbose=False)
+        # Retrain GP with params from config
+        hb_gp_params = self.config.for_hyperband_gp()
+        gp_with_ei.train(
+            epochs=hb_gp_params["epochs"],
+            lr=hb_gp_params["lr"],
+            patience=hb_gp_params["patience"],
+            verbose=False,
+        )
 
         return gp_with_ei

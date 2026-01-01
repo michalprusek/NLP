@@ -200,6 +200,24 @@ The file `datasets/inversion/diverse_instructions_1000.json` contains:
 VAE trains only on instructions with evaluations (accuracy + fidelity for contrastive loss).
 Note: Fidelity indicates how many validation samples were used. Lower fidelity = higher uncertainty.
 
+### Inverse HbBoPs (`inverse_hbbops/`)
+
+**Instruction-only optimization with VAE latent space and adapter-based GP:**
+
+**Datasets:**
+- Grid with evaluations: `/home/prusek/NLP/datasets/inversion/grid_100_qend.jsonl`
+- Diverse instructions for VAE training: `/home/prusek/NLP/datasets/inversion/diverse_instructions_1000.json`
+
+**Architecture:**
+- VAE: 768D GTR → 64D latent (frozen during GP training)
+- Adapter: 64D → 10D (trainable with GP)
+- GP: Matern 5/2 kernel on 10D adapter output
+
+**Optimization flow:**
+```
+z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+```
+
 ## Coding Standards
 
 ### Logging Generated Prompts

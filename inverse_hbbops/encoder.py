@@ -325,9 +325,15 @@ class InstructionVAE(nn.Module):
 class VAEWithAdapter(nn.Module):
     """Wrapper combining frozen VAE encoder with trainable adapter.
 
-    Used to allow GP's feature extractor to learn
-    while keeping VAE weights fixed. The adapter is an MLP
-    that transforms VAE latents (64D) to GP latents (10D).
+    Architecture for optimization:
+        z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+
+    The adapter compresses VAE latent for efficient GP modeling while
+    optimization happens in the full 64D space with gradients flowing
+    through the adapter.
+
+    For decoding after optimization:
+        z (64D) → VAE decoder → embedding (768D)
     """
 
     def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
@@ -341,7 +347,7 @@ class VAEWithAdapter(nn.Module):
         self.vae_latent_dim = vae_latent_dim
         self.gp_latent_dim = gp_latent_dim
 
-        # Trainable adapter: reduces VAE latents (64D) to GP latents (10D)
+        # Trainable adapter: compresses VAE latents (64D) to GP latents (10D)
         self.adapter = nn.Sequential(
             nn.Linear(vae_latent_dim, 32),
             nn.ReLU(),
@@ -349,8 +355,41 @@ class VAEWithAdapter(nn.Module):
             nn.Linear(32, gp_latent_dim),
         )
 
+    def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
+        """Encode embedding to 64D VAE latent (deterministic mu).
+
+        Use this for getting latent for optimization bounds.
+        """
+        return self._vae.encode_mu(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # VAE encoding (frozen params, but gradients flow through)
+        """Encode embedding to 10D GP latent (through adapter).
+
+        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
+
+        This is used for GP training.
+        """
         z = self._vae.encode_mu(x)
-        # Trainable adapter: 64D -> 10D
         return self.adapter(z)
+
+    def adapt(self, z: torch.Tensor) -> torch.Tensor:
+        """Apply adapter to VAE latent.
+
+        Args:
+            z: VAE latent tensor of shape (..., 64)
+
+        Returns:
+            GP latent tensor of shape (..., 10)
+        """
+        return self.adapter(z)
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """Decode 64D VAE latent to 768D embedding.
+
+        Args:
+            z: VAE latent tensor of shape (..., 64)
+
+        Returns:
+            Embedding tensor of shape (..., 768)
+        """
+        return self._vae.decode(z)

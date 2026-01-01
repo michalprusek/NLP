@@ -219,10 +219,16 @@ def main():
 
     # VAE parameters
     parser.add_argument(
+        "--vae-latent-dim",
+        type=int,
+        default=64,
+        help="VAE latent dimension (64D for better reconstruction)",
+    )
+    parser.add_argument(
         "--vae-beta",
         type=float,
-        default=0.02,
-        help="VAE KL regularization weight (0.02 optimal: sharp but smooth)",
+        default=0.003,
+        help="VAE KL regularization weight (0.003 optimal for 64D latent)",
     )
     parser.add_argument(
         "--vae-epochs",
@@ -253,7 +259,7 @@ def main():
     parser.add_argument(
         "--raw-samples",
         type=int,
-        default=512,
+        default=1024,
         help="Raw samples for BoTorch acquisition optimization initialization",
     )
 
@@ -299,7 +305,7 @@ def main():
         "--vec2text-model",
         type=str,
         choices=["32_tokens", "512_tokens"],
-        default="32_tokens",
+        default="512_tokens",
         help="Vec2Text model: '32_tokens' (ielabgroup, with corrector) or '512_tokens' (cowboys, simpler)",
     )
 
@@ -422,7 +428,8 @@ def main():
     if use_inversion:
         print(f"    Max inversion iters: {args.max_inversion_iters}, Gap threshold: {args.gap_threshold}")
     print(f"  Skip-eval: {args.skip_eval}")
-    print(f"  VAE: beta={args.vae_beta}, epochs={args.vae_epochs}, annealing={args.vae_annealing}")
+    print(f"  VAE: latent_dim={args.vae_latent_dim}, beta={args.vae_beta}, epochs={args.vae_epochs}, annealing={args.vae_annealing}")
+    print(f"  GP: latent_dim={args.latent_dim} (after adapter reduction)")
     print(f"  Vec2Text model: {args.vec2text_model}")
     print(f"Results directory: {results_dir}")
     print(f"Log file: {log_path}")
@@ -440,6 +447,7 @@ def main():
         grid_path=args.grid,
         diverse_instructions_path=diverse_instructions_path,
         latent_dim=args.latent_dim,
+        vae_latent_dim=args.vae_latent_dim,
         gp_epochs=args.gp_epochs,
         gp_lr=args.gp_lr,
         gp_patience=args.gp_patience,
@@ -474,10 +482,9 @@ def main():
         if args.save:
             trainer.save(args.save)
 
-    # Create inference pipeline
+    # Create inference pipeline (decoder accessed via gp.vae_with_adapter.decode())
     inference = InvBOInference(
         gp=trainer.gp,
-        decoder=trainer.decoder,
         gtr=trainer.gtr,
         vec2text_steps=args.vec2text_steps,
         vec2text_beam=args.vec2text_beam,

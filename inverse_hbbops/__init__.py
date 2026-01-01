@@ -15,15 +15,18 @@ Debug with 10 instructions:
     uv run python -m inverse_hbbops.run --iterations 1 --ape-instructions 10 --debug
 """
 
+from inverse_hbbops.config import Config
 from inverse_hbbops.instruction import InstructionOnlyPrompt
 from inverse_hbbops.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
 from inverse_hbbops.gp import GPWithEI, InstructionDeepKernelGP
-from inverse_hbbops.hyperband import InverseHbBoPs, HyperbandConfig
-from inverse_hbbops.training import InverseHbBoPsTrainer, TrainingConfig, APEGenerator
+from inverse_hbbops.hyperband import InverseHbBoPs
+from inverse_hbbops.training import InverseHbBoPsTrainer, APEGenerator
 from inverse_hbbops.inference import InverseHbBoPsInference, Vec2TextInverter, InversionResult
 from inverse_hbbops.evaluate import GSM8KEvaluator, create_evaluator_function
 
 __all__ = [
+    # Config (SSOT)
+    "Config",
     # Instruction
     "InstructionOnlyPrompt",
     # Encoder & VAE
@@ -35,10 +38,8 @@ __all__ = [
     "InstructionDeepKernelGP",
     # Hyperband
     "InverseHbBoPs",
-    "HyperbandConfig",
     # Training
     "InverseHbBoPsTrainer",
-    "TrainingConfig",
     "APEGenerator",
     # Inference
     "InverseHbBoPsInference",
