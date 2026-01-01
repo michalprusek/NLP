@@ -422,7 +422,7 @@ class GPWithEI:
             xi: Exploration-exploitation trade-off (default 0.01)
 
         Returns:
-            Expected improvement value (can be negative!)
+            Expected improvement value (non-negative by definition)
         """
         if self.gp_model is None or self.y_best is None:
             return 0.0

@@ -38,8 +38,8 @@ class TrainingConfig:
     # Validation data path
     validation_path: str = "hbbops_improved_2/data/validation.json"
 
-    # VAE training (synced with invbo_decoder)
-    vae_beta: float = 0.1  # KL regularization weight (was 0.02, synced with invbo_decoder)
+    # VAE training
+    vae_beta: float = 0.02  # KL regularization weight (matches run.py CLI default)
     vae_epochs: int = 10000
     vae_annealing_epochs: int = 500
     vae_patience: int = 500

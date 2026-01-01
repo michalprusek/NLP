@@ -38,38 +38,8 @@ class HyperbandConfig:
     seed: int = 42
 
 
-class InstructionDeepKernelGP(gpytorch.models.ExactGP):
-    """GP with deep kernel for instruction-only optimization.
-
-    Uses VAEWithAdapter as feature extractor (768D → 10D).
-    """
-
-    def __init__(
-        self,
-        train_x: torch.Tensor,
-        train_y: torch.Tensor,
-        likelihood: gpytorch.likelihoods.Likelihood,
-        feature_extractor: nn.Module,
-    ):
-        super().__init__(train_x, train_y, likelihood)
-        self.mean_module = gpytorch.means.ZeroMean()
-        self.covar_module = gpytorch.kernels.ScaleKernel(
-            gpytorch.kernels.MaternKernel(
-                nu=2.5,
-                ard_num_dims=10,  # 10D latent from VAE
-                lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
-            ),
-            outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
-        )
-        self.feature_extractor = feature_extractor
-
-    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultivariateNormal:
-        # x: (batch, 768) → feature_extractor → (batch, 10)
-        latent = self.feature_extractor(x)
-        return gpytorch.distributions.MultivariateNormal(
-            self.mean_module(latent),
-            self.covar_module(latent),
-        )
+# Note: InstructionDeepKernelGP is imported from gp.py to avoid duplication
+from inverse_hbbops.gp import InstructionDeepKernelGP
 
 
 class InverseHbBoPs:
@@ -243,7 +213,10 @@ class InverseHbBoPs:
         y_norm = (y - self.y_mean) / self.y_std
 
         # Create GP with VAEWithAdapter
-        self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+        # Noise constraint per CLAUDE.md: Interval(0.001, 0.1) for GP stability
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
+            noise_constraint=gpytorch.constraints.Interval(0.001, 0.1)
+        ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, self.vae_with_adapter
         ).to(self.device)
@@ -269,7 +242,12 @@ class InverseHbBoPs:
                         patience += 1
                     if patience >= self.config.gp_patience:
                         break
-                except Exception:
+                except RuntimeError as e:
+                    error_msg = str(e).lower()
+                    if "cholesky" in error_msg or "singular" in error_msg:
+                        print(f"  GP training: numerical error at epoch {epoch + 1}, stopping early")
+                    else:
+                        print(f"  GP training error at epoch {epoch + 1}: {e}")
                     if epoch == 0:
                         return False
                     break
@@ -296,7 +274,8 @@ class InverseHbBoPs:
                 pred = self.likelihood(self.gp_model(X_norm))
                 mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
                 std = pred.stddev.item() * self.y_std.item()
-        except Exception:
+        except RuntimeError as e:
+            print(f"  EI prediction error (falling back to random): {e}")
             return 0.0
 
         if std <= 0:

@@ -54,7 +54,7 @@ class CompositeLogEI(AcquisitionFunction):
         super().__init__(model=model)
         self.vae = vae
         self.best_f = best_f
-        # qLogEI with fat=True for numerical stability
+        # qLogEI for numerically stable expected improvement
         self._base_acq = qLogExpectedImprovement(
             model=model,
             best_f=best_f,

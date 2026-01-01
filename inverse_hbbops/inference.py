@@ -61,7 +61,7 @@ class Vec2TextInverter:
     """Vec2Text embedding-to-text inverter.
 
     Uses 512_tokens model (vec2text/gtr-512-noise-0.00001) by default.
-    This model is more exploratory and can generate diverse instructions.
+    This model supports longer sequences (up to 512 tokens vs 32 tokens).
     """
 
     def __init__(
@@ -534,7 +534,9 @@ class InverseHbBoPsInference:
                     best_log_ei = log_ei
                     best_z = result.x
 
-            except Exception:
+            except RuntimeError as e:
+                if verbose:
+                    print(f"  L-BFGS-B restart {restart + 1} failed: {e}")
                 continue
 
         if best_z is None:
@@ -665,13 +667,15 @@ class InverseHbBoPsInference:
                 print(f"  NEW BEST!")
 
         # Add to GP and retrain
-        self.gp.add_observation_and_retrain(
+        retrain_success = self.gp.add_observation_and_retrain(
             reencoded,
             error_to_use,
             epochs=500,
             patience=10,
             verbose=False,
         )
+        if not retrain_success and verbose:
+            print(f"  Warning: GP retraining failed (Cholesky error), continuing with previous model")
 
         record = IterationRecord(
             iteration=iteration,
