@@ -166,15 +166,36 @@ uv run python -m generation.invbo_decoder.run \
 - **Always evaluate on full validation set (1319 samples)** - this is the default. Never reduce `--eval-samples` for final results.
 
 **Architecture:**
-- `InstructionVAE`: 768D GTR → 10D latent → 768D with KL annealing
-- `VAEWithAdapter`: Frozen VAE encoder with trainable adapter MLP
-- `GPWithEI`: Deep kernel GP with LogEI acquisition (numerically stable for small EI values)
+- `InstructionVAE`: 768D GTR → 64D latent → 768D with KL annealing + contrastive loss
+- `VAEWithAdapter`: Frozen VAE encoder (64D) with trainable adapter MLP (64→32→10)
+- `GPWithEI`: Deep kernel GP with LogEI acquisition on 10D adapter output
+- `UncertaintyContinuousContrastiveLoss`: Structures latent space so distances reflect accuracy differences
 - Vec2Text inversion for text generation from embeddings
 
 **Key Design Decisions:**
 - LogEI instead of EI for numerical stability (avoids underflow with tiny improvement values)
 - Noise constraint `Interval(0.001, 0.1)` on GP to balance between over-confidence (too low) and underfitting (too high)
 - VAE early stopping tracks reconstruction loss (not total loss) to avoid premature stop during KL annealing
+- **Contrastive loss** weighted by evaluation uncertainty (binomial variance from fidelity)
+
+**Training Data Format:**
+The file `datasets/inversion/diverse_instructions_1000.json` contains:
+```python
+{
+    "instructions": [...],  # 1053 instruction strings
+    "hyperband_evaluations": {
+        "source": "path/to/log",
+        "num_evaluated": 225,  # Number of evaluated instructions
+        "max_fidelity": 1319,
+        "results": {
+            "0": {"error_rate": 0.19, "accuracy": 0.81, "fidelity": 1319},
+            "1": {"error_rate": 0.15, "accuracy": 0.85, "fidelity": 1319},
+            ...
+        }
+    }
+}
+```
+VAE trains only on instructions with evaluations (accuracy + fidelity for contrastive loss).
 
 ## Coding Standards
 

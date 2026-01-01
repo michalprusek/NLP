@@ -56,9 +56,9 @@ class TrainingConfig:
     top_fidelity_pct: float = 0.75
 
     # GP training (synced with invbo_decoder)
-    gp_epochs: int = 5000  # Was 3000, synced with invbo_decoder
+    gp_epochs: int = 10000
     gp_lr: float = 0.01
-    gp_patience: int = 50
+    gp_patience: int = 100
 
     # Device
     device: str = "cuda"
@@ -618,6 +618,7 @@ class InverseHbBoPsTrainer:
         self,
         grid_path: str,
         top_k: Optional[int] = None,
+        instructions_path: Optional[str] = None,
         verbose: bool = True,
     ) -> List[Tuple[str, float]]:
         """Load pre-evaluated instructions from grid.
@@ -627,6 +628,7 @@ class InverseHbBoPsTrainer:
         Args:
             grid_path: Path to grid JSONL file
             top_k: Number of top instructions to load (None = all)
+            instructions_path: Path to instructions file (for grids with instruction_id)
             verbose: Print progress
 
         Returns:
@@ -642,20 +644,63 @@ class InverseHbBoPsTrainer:
                 grid_data.append(json.loads(line))
 
         if verbose:
-            print(f"  Loaded {len(grid_data)} instructions from grid")
+            print(f"  Loaded {len(grid_data)} entries from grid")
+
+        # Check if grid has instruction_text or instruction_id
+        has_text = "instruction_text" in grid_data[0] if grid_data else False
+
+        # If grid only has IDs, load instruction texts from file
+        if not has_text:
+            if instructions_path is None:
+                # Auto-detect instructions file in same directory
+                grid_dir = Path(grid_path).parent
+                instructions_path = str(grid_dir / "instructions_25.txt")
+                if verbose:
+                    print(f"  Auto-detected instructions path: {instructions_path}")
+
+            # Load instruction texts from file
+            instruction_texts = self._load_instructions_file(instructions_path)
+            if verbose:
+                print(f"  Loaded {len(instruction_texts)} instruction texts")
+
+            # Add instruction_text to grid_data
+            for d in grid_data:
+                inst_id = d["instruction_id"]
+                if inst_id < len(instruction_texts):
+                    d["instruction_text"] = instruction_texts[inst_id]
+                else:
+                    d["instruction_text"] = f"[Unknown instruction {inst_id}]"
+
+        # Aggregate by instruction (average error rates across exemplars)
+        # Grid has instruction+exemplar combinations, but GP uses only instruction embeddings
+        instruction_errors = {}  # instruction_text -> list of error_rates
+        for d in grid_data:
+            inst = d["instruction_text"]
+            if inst not in instruction_errors:
+                instruction_errors[inst] = []
+            instruction_errors[inst].append(d["error_rate"])
+
+        # Compute mean error for each unique instruction
+        aggregated = []
+        for inst, errors in instruction_errors.items():
+            avg_error = sum(errors) / len(errors)
+            aggregated.append({"instruction_text": inst, "error_rate": avg_error})
+
+        if verbose:
+            print(f"  Aggregated {len(grid_data)} entries to {len(aggregated)} unique instructions")
 
         # Sort by error_rate (ascending - best first)
-        grid_data.sort(key=lambda x: x["error_rate"])
+        aggregated.sort(key=lambda x: x["error_rate"])
 
         # Take top-k if specified
         if top_k is not None:
-            grid_data = grid_data[:top_k]
+            aggregated = aggregated[:top_k]
             if verbose:
                 print(f"  Selected top {top_k} instructions")
 
         # Store instructions and their error rates
-        self.instructions = [d["instruction_text"] for d in grid_data]
-        self.grid_error_rates = [d["error_rate"] for d in grid_data]
+        self.instructions = [d["instruction_text"] for d in aggregated]
+        self.grid_error_rates = [d["error_rate"] for d in aggregated]
 
         # Pre-compute embeddings
         if verbose:
@@ -672,6 +717,36 @@ class InverseHbBoPsTrainer:
         self.grid_data = grid_data
 
         return list(zip(self.instructions, self.grid_error_rates))
+
+    def _load_instructions_file(self, path: str) -> List[str]:
+        """Load instructions from numbered text file.
+
+        Format:
+        # Comment lines start with #
+        1. First instruction text
+        2. Second instruction text
+        ...
+
+        Args:
+            path: Path to instructions text file
+
+        Returns:
+            List of instruction texts (indexed by instruction_id)
+        """
+        instructions = []
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if not line or line.startswith("#"):
+                    continue
+                # Parse numbered lines: "1. text" -> "text"
+                if line[0].isdigit():
+                    # Find the first ". " and take everything after
+                    dot_idx = line.find(". ")
+                    if dot_idx > 0:
+                        instructions.append(line[dot_idx + 2:])
+        return instructions
 
     def load_diverse_instructions(
         self,

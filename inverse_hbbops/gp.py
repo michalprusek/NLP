@@ -655,6 +655,7 @@ class GPWithEI:
         best_loss = float("inf")
         patience_counter = 0
 
+        final_epoch = 0
         with gpytorch.settings.cholesky_jitter(1e-4):
             for epoch in range(epochs):
                 try:
@@ -664,6 +665,7 @@ class GPWithEI:
                     loss.backward()
                     optimizer.step()
 
+                    final_epoch = epoch + 1
                     if loss.item() < best_loss:
                         best_loss = loss.item()
                         patience_counter = 0
@@ -675,8 +677,13 @@ class GPWithEI:
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
+                        if verbose:
+                            print(f"  GP retrain failed (Cholesky) at epoch {epoch}")
                         return False
                     raise
+
+        if verbose:
+            print(f"  GP retrained: {final_epoch} epochs, MLL={-best_loss:.4f}")
 
         return True
 

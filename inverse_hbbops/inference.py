@@ -672,7 +672,7 @@ class InverseHbBoPsInference:
             error_to_use,
             epochs=500,
             patience=10,
-            verbose=False,
+            verbose=True,
         )
         if not retrain_success and verbose:
             print(f"  Warning: GP retraining failed (Cholesky error), continuing with previous model")

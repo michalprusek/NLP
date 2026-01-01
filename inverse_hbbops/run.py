@@ -183,6 +183,10 @@ def main():
         help="Number of top instructions to load from grid (default: 25)"
     )
     parser.add_argument(
+        "--instructions-path", type=str, default=None,
+        help="Path to instructions text file (for grids with instruction_id)"
+    )
+    parser.add_argument(
         "--diverse-instructions", type=str, default=None,
         help="Path to diverse instructions JSON for VAE training (uses grid if not specified)"
     )
@@ -317,6 +321,7 @@ def main():
             trainer.load_from_grid(
                 args.load_grid,
                 top_k=None,  # Load ALL for Hyperband
+                instructions_path=args.instructions_path,
                 verbose=True,
             )
             trainer.train_vae(verbose=True)
@@ -350,6 +355,7 @@ def main():
             trainer.load_from_grid(
                 args.load_grid,
                 top_k=args.top_k,
+                instructions_path=args.instructions_path,
                 verbose=True,
             )
 
