@@ -2,7 +2,9 @@
 
 Provides:
 - InstructionDeepKernelGP: GP with Matern 5/2 kernel on 10D latent features
-- EI computation for acquisition-guided optimization
+- GPWithEI: Wrapper with Expected Improvement computation
+
+Self-contained - no imports from other modules.
 """
 
 import torch
@@ -12,14 +14,13 @@ import math
 import numpy as np
 from gpytorch.models import ExactGP
 from gpytorch.likelihoods import GaussianLikelihood
-from gpytorch.constraints import Interval
+from gpytorch.constraints import GreaterThan, Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
-from typing import Tuple, Optional
-
+from typing import Tuple, Optional, Dict, Any
 
 
 # =============================================================================
@@ -233,6 +234,9 @@ class GPWithEI:
         # Best observed value (for EI)
         self.y_best: Optional[float] = None
 
+        # Training stats (populated after train())
+        self.training_stats: Dict[str, Any] = {}
+
     def set_training_data(
         self,
         embeddings: torch.Tensor,
@@ -280,8 +284,6 @@ class GPWithEI:
         X_norm = (X - self.X_min) / denom
 
         # Standardize output transform (BoTorch standard approach)
-        # This replaces manual z-score normalization and ensures correct
-        # denormalization with posterior() and acquisition functions
         self.outcome_transform = Standardize(m=1).to(self.device)
         y_transformed, _ = self.outcome_transform(y.unsqueeze(-1))
         y_norm = y_transformed.squeeze(-1)
@@ -294,10 +296,9 @@ class GPWithEI:
         if self.feature_extractor is None:
             raise RuntimeError(
                 "feature_extractor must be set before training. "
-                "Use VAEWithAdapter from training.py."
+                "Use VAEWithAdapter from encoder.py."
             )
         # Noise constraint - allow GP to learn noise in reasonable range
-        # Too low (1e-4) causes overconfidence, too high causes underfitting
         self.likelihood = GaussianLikelihood(
             noise_constraint=Interval(0.001, 0.1)
         ).to(self.device)
@@ -306,7 +307,6 @@ class GPWithEI:
         ).to(self.device)
 
         # Register outcome transform for BoTorch compatibility
-        # This allows qLogEI to automatically untransform predictions
         self.gp_model.outcome_transform = self.outcome_transform
 
         # Training loop
@@ -351,6 +351,14 @@ class GPWithEI:
                             print(f"  Cholesky error at epoch {epoch + 1}")
                         return False
                     raise
+
+        # Store training stats
+        self.training_stats = {
+            "epochs_trained": epoch + 1,
+            "final_loss": float(best_loss),
+            "early_stopped": patience_counter >= patience,
+            "num_samples": len(X),
+        }
 
         if verbose:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
@@ -397,43 +405,6 @@ class GPWithEI:
 
         return mean, std
 
-    def validate_predictions(
-        self,
-        X: torch.Tensor,
-        y: torch.Tensor,
-    ) -> dict:
-        """Validate GP predictions against true values.
-
-        Useful for checking GP fit quality after training.
-
-        Args:
-            X: Embeddings to predict on (N, 768)
-            y: True error rates (N,)
-
-        Returns:
-            Dictionary with MAE, RMSE, and max error metrics
-        """
-        if self.gp_model is None:
-            raise RuntimeError("GP not trained.")
-
-        preds = []
-        for i in range(X.shape[0]):
-            mean, _ = self.predict(X[i])
-            preds.append(mean)
-
-        preds = torch.tensor(preds, device=self.device)
-        y = y.to(self.device)
-
-        mae = (preds - y).abs().mean()
-        rmse = ((preds - y) ** 2).mean().sqrt()
-        max_error = (preds - y).abs().max()
-
-        return {
-            "mae": mae.item(),
-            "rmse": rmse.item(),
-            "max_error": max_error.item(),
-        }
-
     def expected_improvement(
         self,
         embedding: torch.Tensor,
@@ -446,15 +417,12 @@ class GPWithEI:
 
         We minimize error, so improvement = y_best - mu(x).
 
-        Note: Does NOT clip to zero - allows negative EI values for better
-        gradient-based optimization (see LogEI paper, NeurIPS 2023).
-
         Args:
             embedding: Instruction embedding (768,)
             xi: Exploration-exploitation trade-off (default 0.01)
 
         Returns:
-            Expected improvement value (can be negative!)
+            Expected improvement value (non-negative by definition)
         """
         if self.gp_model is None or self.y_best is None:
             return 0.0
@@ -462,12 +430,10 @@ class GPWithEI:
         mean, std = self.predict(embedding)
 
         if std <= 0:
-            # Deterministic case: return raw improvement (no clipping)
             return self.y_best - mean
 
         z = (self.y_best - mean - xi) / std
         ei = (self.y_best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
-        # No clipping to zero - allows gradient flow for better optimization
         return ei
 
     def log_expected_improvement(
@@ -480,9 +446,7 @@ class GPWithEI:
         LogEI(x) = log_h(z) + log(σ(x))
         where z = (y_best - mu(x) - xi) / sigma(x)
 
-        This is numerically stable even when EI values are extremely small,
-        enabling better gradient-based optimization. Based on:
-        "Unexpected Improvements to Expected Improvement" (NeurIPS 2023)
+        This is numerically stable even when EI values are extremely small.
 
         Args:
             embedding: Instruction embedding (768,)
@@ -497,7 +461,6 @@ class GPWithEI:
         mean, std = self.predict(embedding)
 
         if std <= 1e-10:
-            # Near-deterministic: return -inf if no improvement possible
             if self.y_best > mean:
                 return math.log(self.y_best - mean) if self.y_best - mean > 0 else float("-inf")
             return float("-inf")
@@ -514,11 +477,10 @@ class GPWithEI:
     ) -> torch.Tensor:
         """Compute Log Expected Improvement as a differentiable tensor.
 
-        This version maintains gradients for optimization, allowing backprop
-        through the decoder -> embedding -> GP -> LogEI chain.
+        This version maintains gradients for optimization.
 
         Args:
-            embedding: Instruction embedding (768,) or (1, 768) - requires_grad allowed
+            embedding: Instruction embedding (768,) or (1, 768)
             xi: Exploration-exploitation trade-off (default 0.01)
 
         Returns:
@@ -544,8 +506,8 @@ class GPWithEI:
 
         with gpytorch.settings.fast_pred_var():
             pred = self.gp_model(X_norm)
-            mean_norm = pred.mean  # Keep as tensor
-            var_norm = pred.variance.clamp(min=1e-12)  # Clamp for numerical stability
+            mean_norm = pred.mean
+            var_norm = pred.variance.clamp(min=1e-12)
             std_norm = torch.sqrt(var_norm)
 
         # Denormalize (keep as tensors)
@@ -597,11 +559,6 @@ class GPWithEI:
     ) -> bool:
         """Add new observation and retrain GP with preserved normalization.
 
-        Uses incremental training that:
-        - Preserves original normalization statistics (X_min, X_max, y_mean, y_std)
-        - Warm-starts feature extractor from previous weights
-        - Uses lower learning rate for stability
-
         Args:
             embedding: New instruction embedding (768,)
             error_rate: Observed error rate for this embedding
@@ -636,7 +593,7 @@ class GPWithEI:
         # Incremental retrain with preserved normalization
         return self._incremental_retrain(
             epochs=epochs,
-            lr=0.001,  # Lower LR for stability (was 0.01)
+            lr=0.001,
             patience=patience,
             verbose=verbose,
         )
@@ -648,32 +605,21 @@ class GPWithEI:
         patience: int = 10,
         verbose: bool = False,
     ) -> bool:
-        """Incremental retrain with updated normalization and frozen feature extractor.
-
-        This method:
-        - Recomputes output normalization (y_mean, y_std) for new data
-        - Keeps input normalization (X_min, X_max) stable
-        - KEEPS existing feature extractor (critical for VAE mode!)
-        - Only retrains GP kernel hyperparameters
-        """
+        """Incremental retrain with updated normalization."""
         X = self.X_train
         y = self.y_train
 
-        # Keep input normalization stable (prevents latent space drift)
+        # Keep input normalization stable
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         X_norm = (X - self.X_min) / denom
 
         # Recompute output normalization for new data
-        # This is critical - old y_mean/y_std don't account for new observations
         self.outcome_transform = Standardize(m=1).to(self.device)
         y_transformed, _ = self.outcome_transform(y.unsqueeze(-1))
         y_norm = y_transformed.squeeze(-1)
         self.y_mean = self.outcome_transform.means.squeeze()
         self.y_std = self.outcome_transform.stdvs.squeeze()
-
-        # IMPORTANT: Keep existing feature_extractor!
-        # In VAE mode, this is VAEWithAdapter - don't replace it.
 
         # Save old GP kernel hyperparameters for warm-start
         old_covar_state = None
@@ -709,9 +655,6 @@ class GPWithEI:
         best_loss = float("inf")
         patience_counter = 0
 
-        if verbose:
-            print("Training GP...")
-
         with gpytorch.settings.cholesky_jitter(1e-4):
             for epoch in range(epochs):
                 try:
@@ -728,22 +671,12 @@ class GPWithEI:
                         patience_counter += 1
 
                     if patience_counter >= patience:
-                        if verbose:
-                            print(f"  Early stopping at epoch {epoch + 1}")
                         break
-
-                    if verbose and (epoch + 1) % 100 == 0:
-                        print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
 
                 except RuntimeError as e:
                     if "cholesky" in str(e).lower():
-                        if verbose:
-                            print(f"  Cholesky error at epoch {epoch + 1}")
                         return False
                     raise
-
-        if verbose:
-            print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
 
         return True
 

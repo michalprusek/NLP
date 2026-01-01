@@ -7,6 +7,7 @@ Provides:
 """
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.optimize import minimize
@@ -14,10 +15,8 @@ from scipy.stats import norm
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
-from generation.invbo_decoder.encoder import GTRInstructionEncoder, InstructionVAE, InstructionFeatureExtractor
+from generation.invbo_decoder.encoder import GTRInstructionEncoder, InstructionVAE
 from generation.invbo_decoder.gp import GPWithEI
-from generation.invbo_decoder.decoder import LatentDecoder
-from generation.invbo_decoder.trust_region import TrustRegionManager, TRConfig
 
 
 @dataclass
@@ -32,7 +31,6 @@ class IterationRecord:
     gap: float
     improved: bool
     best_error_so_far: float
-    trust_region_radius: Optional[float]
     gp_samples: int
     log_ei: Optional[float] = None
     inversion_iters: int = 1
@@ -258,24 +256,22 @@ class InvBOInference:
     def __init__(
         self,
         gp: GPWithEI,
-        decoder: LatentDecoder,
+        decoder: nn.Module,
         gtr: Optional[GTRInstructionEncoder] = None,
         vec2text_steps: int = 50,
         vec2text_beam: int = 4,
         vec2text_model: str = "ielabgroup",
-        trust_region_config: Optional[TRConfig] = None,
         seed: Optional[int] = None,
     ):
         """Initialize inference pipeline.
 
         Args:
             gp: Trained GP with feature extractor
-            decoder: Trained latent decoder
+            decoder: Trained latent decoder (VAEDecoderWrapper or similar)
             gtr: GTR encoder (for validation)
             vec2text_steps: Vec2Text correction steps
             vec2text_beam: Vec2Text beam width
             vec2text_model: "ielabgroup" (with corrector) or "cowboys" (simpler)
-            trust_region_config: Optional trust region configuration
             seed: Random seed for reproducible optimization
         """
         self.gp = gp
@@ -290,27 +286,6 @@ class InvBOInference:
             device=str(self.device),
             model_type=vec2text_model,
         )
-
-        # Trust region (initialized lazily)
-        self.trust_region: Optional[TrustRegionManager] = None
-        self.trust_region_config = trust_region_config
-
-    def init_trust_region(self, anchor_latent: torch.Tensor) -> TrustRegionManager:
-        """Initialize trust region around anchor latent.
-
-        Args:
-            anchor_latent: Best known latent (10,)
-
-        Returns:
-            Initialized TrustRegionManager
-        """
-        config = self.trust_region_config or TRConfig()
-        self.trust_region = TrustRegionManager(
-            anchor=anchor_latent,
-            config=config,
-            device=str(self.device),
-        )
-        return self.trust_region
 
     def get_best_training_latent(self) -> Tuple[torch.Tensor, int, float]:
         """Get latent of best training sample (lowest error).
@@ -403,63 +378,6 @@ class InvBOInference:
         # Return as 1D tensor
         return z_opt.squeeze(), log_ei.item()
 
-    def optimize_latent_adaptive(
-        self,
-        n_candidates: int = 500,
-        xi: float = 0.01,
-        use_trust_region: bool = True,
-        verbose: bool = True,
-    ) -> Tuple[torch.Tensor, float]:
-        """Optimize latent using adaptive trust region sampling.
-
-        Combines trust region constraints with EI optimization.
-        Best for iterative optimization as it respects trust region bounds.
-
-        Args:
-            n_candidates: Number of candidates to sample
-            xi: EI exploration parameter
-            use_trust_region: Whether to use trust region constraints
-            verbose: Print progress
-
-        Returns:
-            (optimal_latent, log_ei) tuple
-        """
-        if use_trust_region and self.trust_region is None:
-            # Initialize trust region from best training sample
-            best_latent, _, _ = self.get_best_training_latent()
-            self.init_trust_region(best_latent)
-
-        if verbose:
-            if use_trust_region:
-                print(f"Sampling {n_candidates} candidates in trust region (radius={self.trust_region.radius:.4f})...")
-            else:
-                print(f"Sampling {n_candidates} candidates globally...")
-
-        best_z = None
-        best_log_ei = -float("inf")
-
-        self.decoder.eval()
-
-        for i in range(n_candidates):
-            if use_trust_region:
-                z = self.trust_region.sample_in_region(n_samples=1)
-            else:
-                z = self.sample_in_trust_region(n_samples=1, radius=0.3)
-
-            with torch.no_grad():
-                embedding = self.decoder(z)
-
-            log_ei = self.gp.log_expected_improvement(embedding, xi=xi)
-
-            if log_ei > best_log_ei:
-                best_log_ei = log_ei
-                best_z = z
-
-        if verbose:
-            print(f"  Best LogEI: {best_log_ei:.4f}")
-
-        return best_z, best_log_ei
-
     def run_single_iteration(
         self,
         num_restarts: int = 20,
@@ -532,7 +450,8 @@ class InvBOInference:
                 if verbose:
                     print(f"  Re-generated:\n{text}")
 
-        # Re-encode for validation
+        # Re-encode for validation and GP prediction
+        # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
         reencoded = self.gtr.encode_tensor(text)
         cosine_sim = F.cosine_similarity(
             embedding.unsqueeze(0), reencoded.unsqueeze(0)
@@ -541,14 +460,14 @@ class InvBOInference:
         if verbose:
             print(f"  Cosine similarity: {cosine_sim:.4f}")
 
-        # GP prediction
-        pred_mean, pred_std = self.gp.predict(embedding)
-        ei = self.gp.expected_improvement(embedding)
+        # GP prediction on re-encoded embedding (matches training data distribution)
+        pred_mean, pred_std = self.gp.predict(reencoded)
+        ei = self.gp.expected_improvement(reencoded)
 
         result = InversionResult(
             instruction_text=text,
             latent=z_opt,
-            embedding=embedding,
+            embedding=reencoded,  # Use GTR embedding, not decoder output
             cosine_similarity=cosine_sim,
             predicted_error=pred_mean,
             ei_value=ei,
@@ -769,17 +688,15 @@ class InvBOInference:
         method: str = "lbfgs",
         n_restarts: int = 10,
         n_candidates: int = 1000,
-        trust_radius: float = 0.3,
         xi: float = 0.01,
         verbose: bool = True,
     ) -> InversionResult:
         """Run complete optimization pipeline.
 
         Args:
-            method: "lbfgs", "random", or "trust_region"
+            method: "lbfgs" or "random"
             n_restarts: L-BFGS restarts
-            n_candidates: Random/trust-region sampling candidates
-            trust_radius: Perturbation radius for trust_region method
+            n_candidates: Random sampling candidates
             xi: EI exploration parameter
             verbose: Print progress
 
@@ -796,10 +713,6 @@ class InvBOInference:
         if method == "lbfgs":
             optimal_latent = self.optimize_latent_lbfgs(
                 n_restarts=n_restarts, xi=xi, verbose=verbose
-            )
-        elif method == "trust_region":
-            optimal_latent = self.optimize_latent_trust_region(
-                n_candidates=n_candidates, radius=trust_radius, xi=xi, verbose=verbose
             )
         else:
             optimal_latent = self.optimize_latent_random(
@@ -893,8 +806,8 @@ class InvBOInference:
 
         z_inv = z.detach()
 
-        # Gap jako cosine distance v embedding space (stabilnější než L2 v latentu)
-        # L2 v latentu může být vysoká i když embeddingy jsou podobné
+        # Gap as cosine distance in embedding space (more stable than L2 in latent)
+        # L2 in latent can be high even when embeddings are similar
         with torch.no_grad():
             self.decoder.eval()
             emb_original = self.decoder(z_original)
@@ -902,7 +815,7 @@ class InvBOInference:
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
-        gap = cosine_gap  # Nyní v rozsahu [0, 2] místo [0, ∞)
+        gap = cosine_gap  # Now in range [0, 2] instead of [0, infinity)
 
         if verbose:
             print(f"  Inversion: gap = {gap:.4f}, loss = {final_loss:.4f}, converged = {converged}")
@@ -920,10 +833,9 @@ class InvBOInference:
         method: str = "lbfgs",
         n_restarts: int = 10,
         n_candidates: int = 1000,
-        trust_radius: float = 0.3,
         xi: float = 0.01,
         max_inversion_iters: int = 3,
-        gap_threshold: float = 0.1,  # Cosine distance threshold (bylo 0.5 pro L2)
+        gap_threshold: float = 0.1,
         verbose: bool = True,
     ) -> InversionResult:
         """Run optimization with InvBO-style inversion loop.
@@ -938,10 +850,9 @@ class InvBOInference:
                  goto 2
 
         Args:
-            method: "lbfgs", "random", or "trust_region"
+            method: "lbfgs" or "random"
             n_restarts: L-BFGS restarts
-            n_candidates: Random/trust-region sampling candidates
-            trust_radius: Perturbation radius for trust_region method
+            n_candidates: Random sampling candidates
             xi: EI exploration parameter
             max_inversion_iters: Maximum inversion iterations
             gap_threshold: Threshold for re-inversion
@@ -960,10 +871,6 @@ class InvBOInference:
         if method == "lbfgs":
             z_star = self.optimize_latent_lbfgs(
                 n_restarts=n_restarts, xi=xi, verbose=verbose
-            )
-        elif method == "trust_region":
-            z_star = self.optimize_latent_trust_region(
-                n_candidates=n_candidates, radius=trust_radius, xi=xi, verbose=verbose
             )
         else:
             z_star = self.optimize_latent_random(
@@ -1019,98 +926,6 @@ class InvBOInference:
             print("-" * 40)
 
         return result
-
-    def sample_in_trust_region(
-        self,
-        n_samples: int = 1,
-        radius: float = 0.3,
-    ) -> torch.Tensor:
-        """Sample latents within trust region of known training latents.
-
-        Uses convex combinations of known latents plus small perturbations.
-        This ensures samples stay near the decoder's training distribution.
-
-        Args:
-            n_samples: Number of samples to generate
-            radius: Perturbation radius (as fraction of latent std)
-
-        Returns:
-            Tensor of shape (n_samples, latent_dim) with trust-region samples
-        """
-        encoder = self.gp.feature_extractor
-        encoder.eval()
-
-        # Get training latents
-        with torch.no_grad():
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_norm = (self.gp.X_train - self.gp.X_min) / denom
-            anchor_latents = encoder(X_norm)
-
-        n_anchors = len(anchor_latents)
-        z_std = anchor_latents.std(dim=0)
-
-        samples = []
-        for _ in range(n_samples):
-            # Random convex combination weights
-            weights = torch.rand(n_anchors, device=self.device)
-            weights = weights / weights.sum()
-
-            # Convex combination of anchors
-            center = (weights.unsqueeze(-1) * anchor_latents).sum(0)
-
-            # Small perturbation
-            noise = torch.randn_like(center) * z_std * radius
-            sample = center + noise
-
-            samples.append(sample)
-
-        return torch.stack(samples) if n_samples > 1 else samples[0]
-
-    def optimize_latent_trust_region(
-        self,
-        n_candidates: int = 500,
-        radius: float = 0.3,
-        xi: float = 0.01,
-        verbose: bool = True,
-    ) -> torch.Tensor:
-        """Find optimal latent using trust-region constrained sampling.
-
-        Faster and safer alternative to random sampling - stays near known latents.
-
-        Args:
-            n_candidates: Number of trust-region candidates
-            radius: Perturbation radius for trust region
-            xi: EI exploration parameter
-            verbose: Print progress
-
-        Returns:
-            Best 10D latent tensor
-        """
-        if verbose:
-            print(f"Sampling {n_candidates} trust-region candidates (radius={radius})...")
-
-        best_z = None
-        best_ei = -float("inf")
-
-        self.decoder.eval()
-
-        for i in range(n_candidates):
-            z = self.sample_in_trust_region(n_samples=1, radius=radius)
-
-            with torch.no_grad():
-                embedding = self.decoder(z)
-
-            ei = self.gp.expected_improvement(embedding, xi=xi)
-
-            if ei > best_ei:
-                best_ei = ei
-                best_z = z
-
-        if verbose:
-            print(f"  Best EI: {best_ei:.6f}")
-
-        return best_z
 
     def validate_inversion_gap(
         self,

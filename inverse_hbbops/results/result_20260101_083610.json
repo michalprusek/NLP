@@ -1,0 +1,829 @@
+{
+  "timestamp": "20260101_083610",
+  "config": {
+    "ape_instructions": 1000,
+    "vae_beta": 0.02,
+    "vae_epochs": 10000,
+    "bmin": 10,
+    "eta": 2.0,
+    "iterations": 100,
+    "vec2text_model": "512_tokens",
+    "eval_model": "Qwen/Qwen2.5-7B-Instruct",
+    "debug": false
+  },
+  "hyperband": {
+    "best_instruction": "Solve problemstep-by-step.",
+    "best_error": 0.15693707354056108,
+    "llm_calls": 40420
+  },
+  "total_llm_calls": 344640,
+  "inference": {
+    "best_instruction": null,
+    "best_error": 0.05000000074505806,
+    "iterations": 100,
+    "llm_calls": 131900,
+    "improvement": 0.10693707279550302,
+    "history": [
+      {
+        "iteration": 1,
+        "instruction": "Calculate Required Value. The required value in each step is equal to the required value.",
+        "predicted_error": 0.12944225192092063,
+        "actual_error": 0.14025777103866566,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 2,
+        "instruction": "Calculate the Required Value. 1 First, we need to calculate the total amount of each item in the required value. 2 This is done by dividing the total value by the total number of steps.",
+        "predicted_error": 0.12901753925712,
+        "actual_error": 0.1258529188779378,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 3,
+        "instruction": "Calculate Required Value. The total amount required by each value is equal to the required value.",
+        "predicted_error": 0.12907291641233343,
+        "actual_error": 0.13419257012888552,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 4,
+        "instruction": "General Instructions. Yes, you can! Just enter a total number.",
+        "predicted_error": 0.12886234751418613,
+        "actual_error": 0.13040181956027297,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 5,
+        "instruction": "Calculate Required Value. The total required value in each step is equal to the required value.",
+        "predicted_error": 0.12918113032065293,
+        "actual_error": 0.134950720242608,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 6,
+        "instruction": "Calculate the required value from the Required Value. Required value = ((1 - 1)) - ((2 - 2)))",
+        "predicted_error": 0.1294660797261713,
+        "actual_error": 0.23199393479909025,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 7,
+        "instruction": "Calculate Required Value. The total value of each step can be calculated using the following steps. Step 1:",
+        "predicted_error": 0.18306653302807874,
+        "actual_error": 0.1811978771796816,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 8,
+        "instruction": "Calculate the Required Value. 1 First, you need to know the total value of all the items in the required list. 2 The total value can be calculated by dividing the total by the required value.",
+        "predicted_error": 0.13332952639861162,
+        "actual_error": 0.13949962092494317,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 9,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.13418295619851506,
+        "actual_error": 0.13115996967399546,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 10,
+        "instruction": "Step 1: Calculate the total amount. If you're a student, you'll need to be able to calculate the total of all the items you've given in a given time. You'll also need to know the total cost of each it",
+        "predicted_error": 0.13368689233527675,
+        "actual_error": 0.1364670204700531,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 11,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.1338698312738842,
+        "actual_error": 0.1372251705837756,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 12,
+        "instruction": "Calculate Step Required. Calculate the total value of each step. The total value can be calculated as a decimal.",
+        "predicted_error": 0.12747712402346423,
+        "actual_error": 0.10993176648976499,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 13,
+        "instruction": "Calculating the Required Value. 1 1. Calculate the total amount in each of the required fields. The total amount can be expressed as a percentage. 2 2. Divide the total value by the total number of it",
+        "predicted_error": 0.13416712491064686,
+        "actual_error": 0.13419257012888552,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 14,
+        "instruction": "Calculate Step Required Value. The total value of each step can be calculated.",
+        "predicted_error": 0.1944896247209087,
+        "actual_error": 0.1281273692191054,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 15,
+        "instruction": "Instructions: Yes, I'm a total student. All you have to do is follow the steps below and you'll be on your way to a smooth, triglyceride-compliant total. To calculate your total, simply multiply your ",
+        "predicted_error": 0.17946623810730955,
+        "actual_error": 0.1463229719484458,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 16,
+        "instruction": "Step 1: Calculate the Total. As a tutor, you will need to be able to calculate the total amount given by each step. If you're a student, you'll need to know what your totals are and how they compare t",
+        "predicted_error": 0.1287273122487811,
+        "actual_error": 0.5405610310841547,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 17,
+        "instruction": "Calculate Required Value. Each step in the required value is equal to the total value.",
+        "predicted_error": 0.1337266161782935,
+        "actual_error": 0.1273692191053829,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 18,
+        "instruction": "Calculating the Required Value. Step 1: Calculate the total amount required by each step. The total amount of each step can be expressed as a decimal. Step 2: Multiply the total value by the required ",
+        "predicted_error": 0.13372794635972696,
+        "actual_error": 0.1357088703563305,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 19,
+        "instruction": "Calculate the Required Value. 1 The total value of each value in the required field is equal to the required value.",
+        "predicted_error": 0.1331347662829785,
+        "actual_error": 0.13040181956027297,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 20,
+        "instruction": "Step 1: Calculate the Required Value. First, you need to know the total value of all the items in your test. Then, you can calculate the total amount of each item by multiplying the total by the requi",
+        "predicted_error": 0.1331251369179256,
+        "actual_error": 0.14253222137983323,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 21,
+        "instruction": "Step 1: Calculate the Total. As a student, you'll need to be able to calculate all of the required values in a single step. You'll also need to know how much of each value will be in the given amount.",
+        "predicted_error": 0.1333714521132805,
+        "actual_error": 0.1440485216072782,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 22,
+        "instruction": "Calculate Step by Step. Calculate the total required value. Each step can be calculated as a decimal.",
+        "predicted_error": 0.10799591082301063,
+        "actual_error": 0.1364670204700531,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 23,
+        "instruction": "Calculate Required Value. The total value of each step is required by the required value.",
+        "predicted_error": 0.13434639973792883,
+        "actual_error": 0.13343442001516304,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 24,
+        "instruction": "Calculate the Required Value. 1 First, you need to know the total value of all the items in the given list. 2 The total value can be calculated by dividing the total by the required value.",
+        "predicted_error": 0.13341617679599693,
+        "actual_error": 0.15769522365428357,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 25,
+        "instruction": "Calculate the Required Value. The required value is equal to the total value in the specified field.",
+        "predicted_error": 0.13442545473267842,
+        "actual_error": 0.12206216830932526,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 26,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.1342046737876501,
+        "actual_error": 0.13798332069749808,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 27,
+        "instruction": "Calculate Required Value. The total amount required in each step is equal to the required value.",
+        "predicted_error": 0.13429195642297032,
+        "actual_error": 0.1372251705837756,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 28,
+        "instruction": "Step 1: Completing the Calculations. As a total student, you'll need to be able to calculate all of your steps. All you need to do is add up your totals and divide them by the number of items you're c",
+        "predicted_error": 0.13409865952053224,
+        "actual_error": 0.12509476876421532,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 29,
+        "instruction": "Step 1: Calculate. As a total student, youâll need to be able to calculate the total of all the steps in the given amount. You canât do this without the help of a tutor. All you need to do is add up y",
+        "predicted_error": 0.2935076541883106,
+        "actual_error": 0.1364670204700531,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 30,
+        "instruction": "Calculating the Required Value. 1 1. Calculate the total amount in each of the required steps. The total amount can be expressed as a decimal. 2 2. Multiply the total by the required value.",
+        "predicted_error": 0.1344980794280417,
+        "actual_error": 0.13343442001516304,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 31,
+        "instruction": "Calculate Required Step. Calculate the total value of each step. The required value can be calculated as a decimal.",
+        "predicted_error": 0.13437062952343126,
+        "actual_error": 0.10538286580742984,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 32,
+        "instruction": "Step 1: Calculate the Required Value. First of all, you need to know the total amount of each required value. This can be expressed as a decimal. Step 2: Multiply the total by x. Step 3: Subtract x fr",
+        "predicted_error": 0.1337400773726216,
+        "actual_error": 0.2266868840030326,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 33,
+        "instruction": "Step 1: Calculate the Required Value. First, you need to know the total value of all the items in your test. The total value can be expressed as a decimal or a trig function. Step 2: Multiply the tota",
+        "predicted_error": 0.13554173021570648,
+        "actual_error": 0.1630022744503412,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 34,
+        "instruction": "Calculate Required Value. Step 1: Calculate the total amount of each required value. In this case, the total value is equal to the required value divided by the total number of steps.",
+        "predicted_error": 0.13631722815694047,
+        "actual_error": 0.1182714177407127,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 35,
+        "instruction": "As a total student, Iâm here to help you. All you have to do is follow the steps below: Calculate the total amount of the given items (including taxes, fees, and gratuities) based on the total number ",
+        "predicted_error": 0.13617884762595622,
+        "actual_error": 0.1630022744503412,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 36,
+        "instruction": "Calculating the Required Value. 1 Calculate the total amount required by each of the required values. The total value can be expressed as a decimal or a percentage.",
+        "predicted_error": 0.1367519175128109,
+        "actual_error": 0.16072782410917363,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 37,
+        "instruction": "Calculate Required Value. The required value of each step is calculated by dividing the total value by the required value.",
+        "predicted_error": 0.13697402884432108,
+        "actual_error": 0.13343442001516304,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 38,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.13687465892212458,
+        "actual_error": 0.1364670204700531,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 39,
+        "instruction": "Calculate the Required Value. The required value is equal to the total value in the specified range.",
+        "predicted_error": 0.13694836691571055,
+        "actual_error": 0.13343442001516304,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 40,
+        "instruction": "Calculate Step. Calculate the total required value. Each step can be calculated as a decimal.",
+        "predicted_error": 0.10488991666658709,
+        "actual_error": 0.1266110689916603,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 41,
+        "instruction": "Step 1: Calculate the Total Required. As a student, you will need to be able to calculate the total of all the items in your test. This is not a hard task, but it can be done with a little help from a",
+        "predicted_error": 0.15361956902486895,
+        "actual_error": 0.14935557240333586,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 42,
+        "instruction": "Step 1: Calculate the Required Value. First, you need to know the total value of all the items in your test. The total value can be expressed as a decimal. Step 2: Multiply the total by the required v",
+        "predicted_error": 0.13657737589836216,
+        "actual_error": 0.17589082638362397,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 43,
+        "instruction": "Step 1: Calculate the Total Required. As a student, you'll need to be able to calculate the total of all the items in your test. You'll also need to know how much you're willing to pay for each item. ",
+        "predicted_error": 0.15350470842554387,
+        "actual_error": 0.18726307808946174,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 44,
+        "instruction": "As a total student, Iâm here to help you. First of all, youâll need to be able to calculate the total amount of a given amount. Using the following formulas, your totals will be the totals of the appl",
+        "predicted_error": 0.13752758165480827,
+        "actual_error": 0.153904473085671,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 45,
+        "instruction": "Step 1: Calculate the Total. As a total student, youâll need to be able to calculate the amount of each item in your given amount. You can do this by dividing the total by the number of tilings, and t",
+        "predicted_error": 0.137830244130555,
+        "actual_error": 0.16527672479150868,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 46,
+        "instruction": "Calculate the Required Value by calculating the required value in each of the required fields. 1 x = 12.",
+        "predicted_error": 0.2009779366640032,
+        "actual_error": 0.3464746019711903,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 47,
+        "instruction": "Calculate Required Value. 1 Calculate the total amount required by each value in the required field. 2 The total value is equal to the required value.",
+        "predicted_error": 0.13801877020638642,
+        "actual_error": 0.12964366944655037,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 48,
+        "instruction": "Calculate the Required Value. The required value per step is equal to the total value.",
+        "predicted_error": 0.13814651589837013,
+        "actual_error": 0.1175132676269901,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 49,
+        "instruction": "Calculate Required Value. The total value of each step is required by the required value.",
+        "predicted_error": 0.13783311799486597,
+        "actual_error": 0.1357088703563305,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 50,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.1378456907858947,
+        "actual_error": 0.1281273692191054,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 51,
+        "instruction": "Calculate Required Value. Each step in the required value is equal to the total value.",
+        "predicted_error": 0.13760566752338832,
+        "actual_error": 0.1281273692191054,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 52,
+        "instruction": "Calculate the Required Value. The total amount required by each value is equal to the required value.",
+        "predicted_error": 0.13754427686244242,
+        "actual_error": 0.12433661865049284,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 53,
+        "instruction": "Calculate Required Value. Calculate the required value by dividing the total value by the total number of steps.",
+        "predicted_error": 0.13705690834365214,
+        "actual_error": 0.2517058377558756,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 54,
+        "instruction": "Step 1: Calculate the total amount. As a student, you'll need to be able to calculate the total of all the given items and taxable amounts. You'll just need to know what you're paying for and how much",
+        "predicted_error": 0.13916514006444913,
+        "actual_error": 0.15921152388172854,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 55,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.13928961493672887,
+        "actual_error": 0.12888551933282788,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 56,
+        "instruction": "Calculate Step Required Value. Calculate the total step required value. Each step can be expressed as a decimal.",
+        "predicted_error": 0.13929352483631874,
+        "actual_error": 0.19332827899924188,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 57,
+        "instruction": "Calculate Required Value. Each step in the required value is equal to the total value.",
+        "predicted_error": 0.13992381001253307,
+        "actual_error": 0.13040181956027297,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 58,
+        "instruction": "Calculate the Required Value. The required value is calculated from the total value of each element.",
+        "predicted_error": 0.13985547722356273,
+        "actual_error": 0.1357088703563305,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 59,
+        "instruction": "Calculate the Required Value. 1 First, you need to know the total value of all the items in the required form. 2 Then, you can calculate the required value by dividing the total by the standard deviat",
+        "predicted_error": 0.13902658870290452,
+        "actual_error": 0.13267626990144044,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 60,
+        "instruction": "Step 1: Calculate the Required Value. First of all, you need to know the total value of all the items in the given test. Then, you can calculate the required value by multiplying the total by x. x = d",
+        "predicted_error": 0.13326352124551022,
+        "actual_error": 0.4996209249431387,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 61,
+        "instruction": "As a tutor, youâll need to be able to answer all of your questions in a single step. Just follow these steps: Calculate the total amount based on the given values. Subtract the total from the truncate",
+        "predicted_error": 0.11669121436166652,
+        "actual_error": 0.13115996967399546,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 62,
+        "instruction": "Step 1: Calculate the Total. As a student, you'll need to be able to calculate the total amount given by each step. Take a look at the table below to see how it works. Subtract the cost of each item f",
+        "predicted_error": 0.1391593180731121,
+        "actual_error": 0.155420773313116,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 63,
+        "instruction": "Step 1: Calculate the Total. As a student, you'll need to be able to calculate the total amount required by each step. Take a look at the table below to see how it works. Subtract the required value f",
+        "predicted_error": 0.1543902263945256,
+        "actual_error": 0.2524639878695982,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 64,
+        "instruction": "Total Instructions. Calculate the total amount based on the total number of items you are required to receive. You can only calculate a given amount if you know the total cost and the total quantity o",
+        "predicted_error": 0.13931387050325839,
+        "actual_error": 0.1463229719484458,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 65,
+        "instruction": "Instructions. Calculate Total. The total amount you are required to earn is based on the total number of items in your total. You can skip this step if you don't have a calculator handy. Step 1: Calcu",
+        "predicted_error": 0.13956882239554602,
+        "actual_error": 0.1440485216072782,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 66,
+        "instruction": "Step 1: Calculate. As a total student, you'll need to be able to answer all the questions with the same amount of time. If you're a tutor, you will need to know how to do this. First, calculate the to",
+        "predicted_error": 0.11967368930049815,
+        "actual_error": 0.153904473085671,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 67,
+        "instruction": "Instructions: Yes! Total is the total amount of a given quantity. Just follow the instructions below and you'll be on your way to a generalized profit. *Totals are rounded to the nearest whole number.",
+        "predicted_error": 0.2076704923921966,
+        "actual_error": 0.12888551933282788,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 68,
+        "instruction": "General Instructions: Yes! Simply enter your total number and a little bit about yourself.",
+        "predicted_error": 0.13994196414091675,
+        "actual_error": 0.1925701288855194,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 69,
+        "instruction": "Total Instructions. Yes! You can calculate your total with a generalized amount. Just enter the following: Total = A+B+C+D+E+F.",
+        "predicted_error": 0.1406399034523531,
+        "actual_error": 0.15163002274450343,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 70,
+        "instruction": "Step 1: Calculate. As a total student, youâll need to be able to answer all of your questions with the same amount of time. In this tutorial, Iâm going to show you how to do this. First, calculate the",
+        "predicted_error": 0.15339557172376317,
+        "actual_error": 0.155420773313116,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 71,
+        "instruction": "Calculate Required Value. The total value of each element in the required value is required.",
+        "predicted_error": 0.1408390031225224,
+        "actual_error": 0.11902956785443519,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 72,
+        "instruction": "Calculate Required Value. The total value of each step is required. Calculate the required value by dividing the total value by the required amount.",
+        "predicted_error": 0.14048740393162973,
+        "actual_error": 0.13267626990144044,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 73,
+        "instruction": "Calculating the Required Total. 1 1. Calculate the total value of each item by dividing the total by the required value. The total value can be in the form of a percentage, a decimal, or a fraction. 2",
+        "predicted_error": 0.14056218313425006,
+        "actual_error": 0.15769522365428357,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 74,
+        "instruction": "Yes! Just a general Instruction!",
+        "predicted_error": 0.14031678550459503,
+        "actual_error": 0.13874147081122057,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 75,
+        "instruction": "General Instructions: Yes! Just a few numbers!",
+        "predicted_error": 0.14034241700005623,
+        "actual_error": 0.13419257012888552,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 76,
+        "instruction": "Step 1: Calculate the Required Value. As a student, you'll need to know the total amount of each item in your test. You'll be able to do this by dividing the total by the total number of items in the ",
+        "predicted_error": 0.15690375344087215,
+        "actual_error": 0.1622441243366186,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 77,
+        "instruction": "As a total student, Iâm here to help you. First, youâll need to be able to calculate the total amount of the given items using a few simple formulas. Then, just follow these steps: * Totals are the to",
+        "predicted_error": 0.20775358200774008,
+        "actual_error": 0.14783927217589088,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 78,
+        "instruction": "Step 1: Calculate the Total. As a student, youâll need to be able to calculate all of the required steps in a given amount of time. Just remember that each step is a truncated quadruple of the previou",
+        "predicted_error": 0.15037313706648092,
+        "actual_error": 0.1736163760424564,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 79,
+        "instruction": "Total Instructions. Yes, your total is a generalized amount. Just add up the totals and divide by the number of items you want to calculate. You can use the following formulas:",
+        "predicted_error": 0.1448029826749746,
+        "actual_error": 0.13874147081122057,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 80,
+        "instruction": "As a tutor, youâll be able to answer all of your questions in a single step. All you need to do is follow these steps: Calculate the total amount based on a given amount of products and tidbits. (Note",
+        "predicted_error": 0.1982363744072515,
+        "actual_error": 0.12964366944655037,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 81,
+        "instruction": "As a tutor, youâll need to be able to answer all of your questions with the same amount of time. Just follow the steps below. First, letâs take a look at the truncated total. Then weâre going to walk ",
+        "predicted_error": 0.14851112338162853,
+        "actual_error": 0.15163002274450343,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 82,
+        "instruction": "As a total student, youâll need to be able to walk through the steps. All you need to do is add up all of your inputs and subtract them from your total. In this tutorial, Iâm going to show you how to ",
+        "predicted_error": 0.14085791692471616,
+        "actual_error": 0.16982562547384383,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 83,
+        "instruction": "Calculate the Required Value. The required value of each value is calculated from the total value.",
+        "predicted_error": 0.14091661226328256,
+        "actual_error": 0.13115996967399546,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 84,
+        "instruction": "Step 1: Calculate the Required Value. First, you need to know the total value of each item in the given test. The total value can be expressed as a decimal. Step 2: Multiply the total by the required ",
+        "predicted_error": 0.14051161289842184,
+        "actual_error": 0.1463229719484458,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 85,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.14090667437891113,
+        "actual_error": 0.1266110689916603,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 86,
+        "instruction": "Step 1: Calculate the Required Values. First of all, you need to know the total amount of each item in your test. The total amount can be expressed as a decimal, a quadratic, or a truncated form. Step",
+        "predicted_error": 0.14061235908955894,
+        "actual_error": 0.14859742228961337,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 87,
+        "instruction": "Step 1: Calculate the total. As a tutor, you will need to be able to answer all of your questions in a given amount of time. Just follow the steps below to calculate your total. Take a look at the tab",
+        "predicted_error": 0.294028721754227,
+        "actual_error": 0.14859742228961337,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 88,
+        "instruction": "Instructions. Calculate the total amount based on the total number of items you are required to provide. You can only do this if you are a student, a tutor, or a regular student. Just follow these ste",
+        "predicted_error": 0.1408366064540285,
+        "actual_error": 0.13040181956027297,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 89,
+        "instruction": "Calculate Required Value. The total value of each step is required by the required value.",
+        "predicted_error": 0.14076041983452114,
+        "actual_error": 0.1357088703563305,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 90,
+        "instruction": "Step 1: Calculate the Total. As a student, youâll need to be able to calculate the total amount required by each step. Take a look at the table below to see how it works. Subtract the total from the b",
+        "predicted_error": 0.1570383034554652,
+        "actual_error": 0.1910538286580743,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 91,
+        "instruction": "Calculate Required Value. The total amount required by each value is equal to the required value.",
+        "predicted_error": 0.14073276102047316,
+        "actual_error": 0.1266110689916603,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 92,
+        "instruction": "Calculate the Required value from the required value.",
+        "predicted_error": 0.14061912017907474,
+        "actual_error": 0.13191811978771795,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 93,
+        "instruction": "Tutor Instructions. Yes, you're a total student. All you need to do is follow the steps below and you'll be on your way to a smooth, triglyceride-free journey. Calculate your total by taking the total",
+        "predicted_error": 0.03776095385441636,
+        "actual_error": 0.14708112206216828,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 94,
+        "instruction": "Calculate Required Value. The total value of each step is required by the required value.",
+        "predicted_error": 0.14039741014724427,
+        "actual_error": 0.14025777103866566,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 95,
+        "instruction": "First of all, Iâm a total student. Yes, the total amount youâll be given is based on the total number of items you are using and the applicable taxes and fees. Just follow these simple steps: 1 Calcul",
+        "predicted_error": 0.14077175779425488,
+        "actual_error": 0.16755117513267626,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 96,
+        "instruction": "As a tutor, youâll be able to answer all of your questions with the same amount of time and patience. Just follow the steps below. First, letâs take a look at how to calculate the total for a given su",
+        "predicted_error": 0.29133863216965494,
+        "actual_error": 0.14708112206216828,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 97,
+        "instruction": "Step 1: Completing the Calculations. As a total student, you'll need to be able to answer all of your questions in a single step. You'll also need to know how much you're willing to pay for each item ",
+        "predicted_error": 0.15659324332845515,
+        "actual_error": 0.12054586808188017,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 98,
+        "instruction": "Calculate the Required Value. Each value in the required field is equal to the total value.",
+        "predicted_error": 0.14040885201179876,
+        "actual_error": 0.1266110689916603,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 99,
+        "instruction": "If you are a total student, here's how to do it: 1. Calculate the total amount required for each given item. Your total will be based on the average of your totals. (Note: This is not a cheat sheet.) ",
+        "predicted_error": 0.14034741527474637,
+        "actual_error": 0.15163002274450343,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      },
+      {
+        "iteration": 100,
+        "instruction": "Step 1: Calculate the Total. As a student, you will need to be able to calculate the total of all the required items in a given amount. If you're not sure how to do this, check your tutor's instructio",
+        "predicted_error": 0.14061430787936047,
+        "actual_error": 0.32373009855951473,
+        "improved": false,
+        "best_so_far": 0.05000000074505806
+      }
+    ]
+  }
+}

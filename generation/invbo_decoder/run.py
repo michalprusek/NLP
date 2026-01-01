@@ -1,17 +1,12 @@
 """CLI entry point for InvBO decoder inversion.
 
 Usage:
-    # Standard: Train and run 10 iterations (VAE enabled by default)
+    # Standard: Train and run 10 iterations
     uv run python -m generation.invbo_decoder.run --iterations 10
 
-    # With optimal hyperparameters
+    # With custom hyperparameters
     uv run python -m generation.invbo_decoder.run --iterations 10 \
         --vae-beta 0.01 --vae-annealing 500
-
-    # Disable VAE (not recommended)
-    uv run python -m generation.invbo_decoder.run --no-vae
-
-NOTE: Do not use --trust-region flag - it doesn't work well in practice.
 """
 
 import argparse
@@ -52,7 +47,6 @@ def set_seed(seed: int) -> None:
 
 from generation.invbo_decoder.training import InvBOTrainer, TrainingConfig
 from generation.invbo_decoder.inference import InvBOInference, IterationRecord
-from generation.invbo_decoder.trust_region import TRConfig
 
 
 class TeeOutput:
@@ -217,44 +211,13 @@ def main():
         help="GP training learning rate",
     )
     parser.add_argument(
-        "--decoder-epochs",
-        type=int,
-        default=1000,
-        help="Decoder training epochs",
-    )
-    parser.add_argument(
         "--latent-dim",
         type=int,
         default=10,
         help="Latent space dimension",
     )
 
-    # Loss parameters
-    parser.add_argument(
-        "--lambda-cycle",
-        type=float,
-        default=1.0,
-        help="Cyclic loss weight",
-    )
-    parser.add_argument(
-        "--lambda-embedding",
-        type=float,
-        default=0.5,
-        help="Embedding cosine loss weight",
-    )
-    parser.add_argument(
-        "--tolerance",
-        type=float,
-        default=0.1,
-        help="Soft tolerance for cyclic loss",
-    )
-
-    # VAE mode parameters
-    parser.add_argument(
-        "--no-vae",
-        action="store_true",
-        help="Disable VAE mode (VAE is enabled by default)",
-    )
+    # VAE parameters
     parser.add_argument(
         "--vae-beta",
         type=float,
@@ -278,31 +241,6 @@ def main():
         type=int,
         default=500,
         help="VAE early stopping patience (higher = longer training)",
-    )
-
-    # Trust region parameters (disabled by default)
-    parser.add_argument(
-        "--trust-region",
-        action="store_true",
-        help="Enable trust region (disabled by default)",
-    )
-    parser.add_argument(
-        "--tr-initial",
-        type=float,
-        default=0.5,
-        help="Initial trust region radius",
-    )
-    parser.add_argument(
-        "--tr-min",
-        type=float,
-        default=0.05,
-        help="Minimum trust region radius",
-    )
-    parser.add_argument(
-        "--tr-max",
-        type=float,
-        default=2.0,
-        help="Maximum trust region radius",
     )
 
     # BoTorch optimization parameters
@@ -483,7 +421,6 @@ def main():
     print(f"  Inversion: {'enabled' if use_inversion else 'disabled'}")
     if use_inversion:
         print(f"    Max inversion iters: {args.max_inversion_iters}, Gap threshold: {args.gap_threshold}")
-    print(f"  Trust Region: {'enabled' if args.trust_region else 'disabled'}")
     print(f"  Skip-eval: {args.skip_eval}")
     print(f"  VAE: beta={args.vae_beta}, epochs={args.vae_epochs}, annealing={args.vae_annealing}")
     print(f"  Vec2Text model: {args.vec2text_model}")
@@ -506,11 +443,6 @@ def main():
         gp_epochs=args.gp_epochs,
         gp_lr=args.gp_lr,
         gp_patience=args.gp_patience,
-        decoder_epochs=args.decoder_epochs,
-        lambda_cycle=args.lambda_cycle,
-        lambda_cosine=args.lambda_embedding,
-        cycle_tolerance=args.tolerance,
-        use_vae=not args.no_vae,
         vae_beta=args.vae_beta,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
@@ -533,24 +465,14 @@ def main():
         print("\nStarting training...")
         gp, decoder = trainer.train(verbose=True)
 
-        # Evaluate VAE quality if using VAE
-        if not args.no_vae:
-            print("\n" + "=" * 60)
-            print("Evaluating VAE Quality")
-            print("=" * 60)
-            vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
+        # Evaluate VAE quality
+        print("\n" + "=" * 60)
+        print("Evaluating VAE Quality")
+        print("=" * 60)
+        vae_quality_metrics = trainer.evaluate_vae_quality(verbose=True)
 
         if args.save:
             trainer.save(args.save)
-
-    # Trust region config
-    tr_config = None
-    if args.trust_region:
-        tr_config = TRConfig(
-            initial_radius=args.tr_initial,
-            min_radius=args.tr_min,
-            max_radius=args.tr_max,
-        )
 
     # Create inference pipeline
     inference = InvBOInference(
@@ -560,7 +482,6 @@ def main():
         vec2text_steps=args.vec2text_steps,
         vec2text_beam=args.vec2text_beam,
         vec2text_model=args.vec2text_model,
-        trust_region_config=tr_config,
         seed=args.seed,
     )
 
@@ -576,10 +497,6 @@ def main():
     print("=" * 70)
     print(f"Initial best error (grid): {best_error:.4f}")
 
-    if args.trust_region:
-        inference.init_trust_region(best_latent)
-        print(f"Trust region initialized: radius={inference.trust_region.radius:.4f}")
-
     # Iteration history
     iteration_history: List[Dict[str, Any]] = []
     best_instruction = trainer.instructions[best_idx] if best_idx < len(trainer.instructions) else ""
@@ -591,8 +508,6 @@ def main():
         print(f"Iteration {iteration}/{args.iterations}")
         print("=" * 60)
         print(f"Current best error: {best_error:.4f}")
-        if args.trust_region:
-            print(f"Trust region radius: {inference.trust_region.radius:.4f}")
 
         # Run single iteration with BoTorch qLogEI optimization
         result, gap, log_ei = inference.run_single_iteration(
@@ -627,15 +542,6 @@ def main():
             best_instruction = result.instruction_text
             print(f"  *** NEW BEST: {actual_error:.4f} ***")
 
-        # Update trust region
-        if args.trust_region:
-            inference.trust_region.update(
-                result.latent,
-                actual_error,
-                best_error if not improved else actual_error + 0.001,  # Trick to detect improvement
-                verbose=True,
-            )
-
         # Update GP with new observation
         if iteration % args.retrain_interval == 0:
             print(f"\n--- Updating GP ---")
@@ -660,7 +566,6 @@ def main():
             "log_ei": log_ei,
             "improved": improved,
             "best_error_so_far": best_error,
-            "trust_region_radius": inference.trust_region.radius if args.trust_region else None,
             "gp_samples": trainer.gp.get_training_size(),
         }
         iteration_history.append(iter_record)
@@ -675,7 +580,6 @@ def main():
                     center_latent=result.latent,
                     realized_text=result.instruction_text,
                     best_y=best_error,
-                    trust_region=inference.trust_region if args.trust_region else None,
                     save_path=str(vis_path),
                 )
                 print(f"  Visualization saved: {vis_path}")

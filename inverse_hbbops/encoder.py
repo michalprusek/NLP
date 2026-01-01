@@ -1,15 +1,17 @@
-"""Instruction encoder for GP latent space.
+"""Instruction encoder for inverse HbBoPs.
 
 Provides:
-- GTRInstructionEncoder: GTR-T5-Base encoder wrapper
+- GTRInstructionEncoder: GTR-T5-Base encoder wrapper (Vec2Text compatible)
 - InstructionVAE: Variational autoencoder with KL regularization for smooth latent space
+
+Self-contained - no imports from other modules.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Tuple, Optional
 
 
 class GTRInstructionEncoder:
@@ -318,3 +320,34 @@ class InstructionVAE(nn.Module):
         """
         alphas = torch.linspace(0, 1, n_steps, device=z1.device)
         return torch.stack([(1 - a) * z1 + a * z2 for a in alphas])
+
+
+class VAEWithAdapter(nn.Module):
+    """Wrapper combining frozen VAE encoder with trainable adapter.
+
+    Used to allow GP's feature extractor to learn
+    while keeping VAE weights fixed. The adapter is a small MLP
+    that transforms VAE latents.
+    """
+
+    def __init__(self, vae: nn.Module, latent_dim: int):
+        super().__init__()
+        # Freeze VAE (don't register as submodule to avoid saving it twice)
+        object.__setattr__(self, '_vae', vae)
+        vae.eval()
+        for param in vae.parameters():
+            param.requires_grad = False
+
+        # Trainable adapter: transforms VAE latents for GP
+        self.adapter = nn.Sequential(
+            nn.Linear(latent_dim, latent_dim * 2),
+            nn.ReLU(),
+            nn.LayerNorm(latent_dim * 2),
+            nn.Linear(latent_dim * 2, latent_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # VAE encoding (frozen params, but gradients flow through)
+        z = self._vae.encode_mu(x)
+        # Trainable adapter
+        return self.adapter(z)
