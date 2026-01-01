@@ -99,12 +99,12 @@ def _validate_hyperband_ranking(trainer, grid_path: str, verbose: bool = True) -
         print(f"\nTop 5 by Grid:")
         for i, inst in enumerate(grid_sorted[:5]):
             hb_err, hb_fid = hb_results.get(inst, (None, None))
-            print(f"  {i+1}. Grid={grid_truth[inst]:.4f}, HB={hb_err:.4f} (fid={hb_fid}): {inst[:50]}...")
+            print(f"  {i+1}. Grid={grid_truth[inst]:.4f}, HB={hb_err:.4f} (fid={hb_fid}):\n      {inst}")
 
         print(f"\nTop 5 by Hyperband:")
         for i, inst in enumerate(hb_sorted[:5]):
             hb_err, hb_fid = hb_results[inst]
-            print(f"  {i+1}. HB={hb_err:.4f}, Grid={grid_truth[inst]:.4f}: {inst[:50]}...")
+            print(f"  {i+1}. HB={hb_err:.4f}, Grid={grid_truth[inst]:.4f}:\n      {inst}")
 
     return {
         "common_count": len(common_insts),
@@ -335,7 +335,7 @@ def main():
             )
 
             print(f"\nHyperband validation complete!")
-            print(f"  Best prompt: {best_prompt.instruction[:100]}...")
+            print(f"  Best prompt:\n{best_prompt.instruction}")
             print(f"  Best error: {best_error:.4f}")
             print(f"  LLM calls (Hyperband): {trainer.total_llm_calls}")
 
@@ -366,7 +366,7 @@ def main():
             best_prompt, best_error = trainer.get_best_from_grid()
 
             print(f"\nGrid loading complete!")
-            print(f"  Best prompt (from grid): {best_prompt.instruction[:100]}...")
+            print(f"  Best prompt (from grid):\n{best_prompt.instruction}")
             print(f"  Best error (from grid): {best_error:.4f}")
 
     # =========================================================================
@@ -402,7 +402,7 @@ def main():
         )
 
         print(f"\nHyperband complete!")
-        print(f"  Best prompt: {best_prompt.instruction[:100]}...")
+        print(f"  Best prompt:\n{best_prompt.instruction}")
         print(f"  Best error: {best_error:.4f}")
         print(f"  LLM calls (Hyperband): {trainer.total_llm_calls}")
 
