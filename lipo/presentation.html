@@ -1070,23 +1070,52 @@
 
         <!-- Slide 2: Problem -->
         <div class="slide" data-slide="2">
-            <h2>The Problem</h2>
-            <p style="margin-bottom: 2rem;">
-                Manual prompt engineering is slow, inconsistent, and doesn't scale.<br>
-                We need automated discovery of optimal instructions.
-            </p>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-value">1000+</div>
-                    <div class="stat-label">Candidate prompts</div>
+            <h2>A Different Approach</h2>
+            <div class="two-col" style="max-width: 1000px;">
+                <div class="col">
+                    <h3>Mainstream: LLM-based</h3>
+                    <p style="text-align: left; font-size: 0.85rem; margin-bottom: 1rem;">
+                        OPRO, APE, ProTeGi — all use LLMs to generate and refine prompts.
+                        <span style="color: var(--accent-orange);">Expensive, discrete, no gradient signal.</span>
+                    </p>
+                    <h3 style="margin-top: 1rem;">My Approach: Latent Space BO</h3>
+                    <p style="text-align: left; font-size: 0.85rem;">
+                        Optimize in <span style="color: var(--accent-cyan);">continuous latent space</span> with Gaussian Process,
+                        then decode back to text via Vec2Text.
+                    </p>
                 </div>
-                <div class="stat-card">
-                    <div class="stat-value">768D</div>
-                    <div class="stat-label">Embedding space</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">∞</div>
-                    <div class="stat-label">Search space</div>
+                <div class="col">
+                    <h3>Key Challenges to Solve</h3>
+                    <div class="feature-list" style="gap: 0.6rem;">
+                        <div class="feature-item" style="padding: 0.7rem 1rem;">
+                            <div class="feature-icon" style="font-size: 1rem;">🎯</div>
+                            <div class="feature-content">
+                                <h4 style="font-size: 0.85rem;">Decoder Uncertainty</h4>
+                                <p style="font-size: 0.75rem;">BO explores areas with no training data → unreliable decoding</p>
+                            </div>
+                        </div>
+                        <div class="feature-item" style="padding: 0.7rem 1rem;">
+                            <div class="feature-icon" style="font-size: 1rem;">📉</div>
+                            <div class="feature-content">
+                                <h4 style="font-size: 0.85rem;">Value Discrepancy</h4>
+                                <p style="font-size: 0.75rem;">Latent optimum ≠ decoded optimum (reconstruction gap)</p>
+                            </div>
+                        </div>
+                        <div class="feature-item" style="padding: 0.7rem 1rem;">
+                            <div class="feature-icon" style="font-size: 1rem;">📏</div>
+                            <div class="feature-content">
+                                <h4 style="font-size: 0.85rem;">Vec2Text Length Limit</h4>
+                                <p style="font-size: 0.75rem;">92% exact match @32 tokens, only 8% @128 tokens</p>
+                            </div>
+                        </div>
+                        <div class="feature-item" style="padding: 0.7rem 1rem;">
+                            <div class="feature-icon" style="font-size: 1rem;">🔺</div>
+                            <div class="feature-content">
+                                <h4 style="font-size: 0.85rem;">Embedding Anisotropy</h4>
+                                <p style="font-size: 0.75rem;">Embeddings cluster in narrow cones → KL regularization needed</p>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
