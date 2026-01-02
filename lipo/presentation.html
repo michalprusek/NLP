@@ -792,6 +792,230 @@
             text-transform: uppercase;
         }
 
+        /* ========================================
+           FULL COMPONENT DIAGRAM
+           ======================================== */
+        .full-diagram {
+            width: 100%;
+            max-width: 950px;
+            position: relative;
+        }
+
+        .fd-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            align-items: center;
+        }
+
+        /* Component rows */
+        .fd-row {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.8rem 1.2rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-subtle);
+            position: relative;
+        }
+
+        .fd-row.training {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 25px rgba(0, 229, 199, 0.1);
+        }
+
+        .fd-row.gp-flow {
+            border-color: var(--accent-purple);
+            box-shadow: 0 0 25px rgba(167, 139, 250, 0.1);
+        }
+
+        .fd-row.inversion {
+            border-color: var(--accent-orange);
+            box-shadow: 0 0 25px rgba(251, 146, 60, 0.1);
+        }
+
+        .fd-row-label {
+            position: absolute;
+            top: -10px;
+            left: 20px;
+            background: var(--bg-deep);
+            padding: 0 0.5rem;
+            font-size: 0.65rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .fd-row.training .fd-row-label { color: var(--accent-cyan); }
+        .fd-row.gp-flow .fd-row-label { color: var(--accent-purple); }
+        .fd-row.inversion .fd-row-label { color: var(--accent-orange); }
+
+        /* Component boxes */
+        .fd-component {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0.6rem 0.9rem;
+            border-radius: 8px;
+            background: var(--bg-deep);
+            border: 2px solid var(--border-subtle);
+            min-width: 75px;
+            transition: all 0.3s ease;
+        }
+
+        .fd-component.gtr {
+            border-color: var(--accent-green);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(74, 222, 128, 0.05) 100%);
+        }
+
+        .fd-component.vae-enc {
+            border-color: var(--accent-cyan);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(0, 229, 199, 0.05) 100%);
+        }
+
+        .fd-component.vae-dec {
+            border-color: var(--accent-cyan);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(0, 229, 199, 0.05) 100%);
+        }
+
+        .fd-component.latent {
+            border-color: var(--accent-purple);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(167, 139, 250, 0.08) 100%);
+            box-shadow: 0 0 15px rgba(167, 139, 250, 0.15);
+        }
+
+        .fd-component.adapter {
+            border-color: var(--accent-pink);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(244, 114, 182, 0.05) 100%);
+        }
+
+        .fd-component.gp {
+            border-color: var(--accent-purple);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(167, 139, 250, 0.08) 100%);
+        }
+
+        .fd-component.kernel {
+            border-color: var(--accent-orange);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(251, 146, 60, 0.05) 100%);
+        }
+
+        .fd-component.vec2text {
+            border-color: var(--accent-orange);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(251, 146, 60, 0.08) 100%);
+        }
+
+        .fd-component.text {
+            border-color: var(--accent-green);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(74, 222, 128, 0.05) 100%);
+        }
+
+        .fd-component.acq {
+            border-color: var(--accent-pink);
+            background: linear-gradient(135deg, var(--bg-deep) 0%, rgba(244, 114, 182, 0.08) 100%);
+        }
+
+        .fd-comp-name {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .fd-comp-dim {
+            font-size: 0.6rem;
+            color: var(--text-dim);
+            margin-top: 0.15rem;
+        }
+
+        .fd-comp-desc {
+            font-size: 0.55rem;
+            color: var(--text-dim);
+            margin-top: 0.1rem;
+            opacity: 0.8;
+        }
+
+        /* Arrows */
+        .fd-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            color: var(--text-dim);
+            font-size: 0.55rem;
+            min-width: 35px;
+        }
+
+        .fd-arrow-icon {
+            font-size: 1rem;
+            color: var(--accent-cyan);
+            opacity: 0.7;
+        }
+
+        .fd-arrow.purple .fd-arrow-icon { color: var(--accent-purple); }
+        .fd-arrow.orange .fd-arrow-icon { color: var(--accent-orange); }
+        .fd-arrow.green .fd-arrow-icon { color: var(--accent-green); }
+
+        /* Vertical connector */
+        .fd-vertical {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            margin: 0.3rem 0;
+        }
+
+        .fd-vline {
+            width: 2px;
+            height: 20px;
+            background: linear-gradient(180deg, var(--accent-purple) 0%, var(--accent-cyan) 100%);
+            opacity: 0.5;
+        }
+
+        .fd-vlabel {
+            font-size: 0.6rem;
+            color: var(--text-dim);
+            padding: 0.2rem 0.5rem;
+            background: var(--bg-elevated);
+            border-radius: 4px;
+        }
+
+        /* Legend */
+        .fd-legend {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 0.8rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .fd-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.65rem;
+            color: var(--text-dim);
+        }
+
+        .fd-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+            border: 2px solid;
+        }
+
+        .fd-legend-dot.gtr { border-color: var(--accent-green); }
+        .fd-legend-dot.vae { border-color: var(--accent-cyan); }
+        .fd-legend-dot.latent { border-color: var(--accent-purple); }
+        .fd-legend-dot.vec2text { border-color: var(--accent-orange); }
+
+        /* Animation for diagram */
+        .slide.active .fd-row { animation: fadeUp 0.5s both; }
+        .slide.active .fd-row:nth-child(1) { animation-delay: 0.1s; }
+        .slide.active .fd-row:nth-child(2) { animation-delay: 0.2s; }
+        .slide.active .fd-row:nth-child(3) { animation-delay: 0.25s; }
+        .slide.active .fd-row:nth-child(4) { animation-delay: 0.35s; }
+        .slide.active .fd-vertical { animation: fadeUp 0.4s 0.15s both; }
+        .slide.active .fd-legend { animation: fadeUp 0.4s 0.45s both; }
+
         /* Animation delays */
         .slide.active .arch-phase { animation: slideIn 0.4s both; }
         .slide.active .arch-phase:nth-child(1) { animation-delay: 0.05s; }
@@ -905,8 +1129,191 @@
             </div>
         </div>
 
-        <!-- Slide 4: VAE -->
+        <!-- Slide 4: Full Component Diagram -->
         <div class="slide" data-slide="4">
+            <h2>Component Architecture</h2>
+            <div class="full-diagram">
+                <div class="fd-container">
+                    <!-- Training/Encoding Flow -->
+                    <div class="fd-row training">
+                        <span class="fd-row-label">Encoding (Training)</span>
+                        <div class="fd-component text">
+                            <span class="fd-comp-name">Text</span>
+                            <span class="fd-comp-dim">instruction</span>
+                        </div>
+                        <div class="fd-arrow">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component gtr">
+                            <span class="fd-comp-name">GTR</span>
+                            <span class="fd-comp-dim">T5-Base</span>
+                            <span class="fd-comp-desc">Vec2Text compatible</span>
+                        </div>
+                        <div class="fd-arrow">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>768D</span>
+                        </div>
+                        <div class="fd-component vae-enc">
+                            <span class="fd-comp-name">VAE Enc</span>
+                            <span class="fd-comp-dim">768→64→32→128</span>
+                            <span class="fd-comp-desc">μ + log σ²</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>sample</span>
+                        </div>
+                        <div class="fd-component latent">
+                            <span class="fd-comp-name">z</span>
+                            <span class="fd-comp-dim">64D</span>
+                            <span class="fd-comp-desc">VAE latent</span>
+                        </div>
+                        <div class="fd-arrow">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component vae-dec">
+                            <span class="fd-comp-name">VAE Dec</span>
+                            <span class="fd-comp-dim">64→256→768</span>
+                            <span class="fd-comp-desc">L2 norm</span>
+                        </div>
+                        <div class="fd-arrow">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>768D</span>
+                        </div>
+                        <div class="fd-component gtr">
+                            <span class="fd-comp-name">Recon</span>
+                            <span class="fd-comp-dim">embedding</span>
+                        </div>
+                    </div>
+
+                    <!-- Vertical connector showing shared latent -->
+                    <div class="fd-vertical">
+                        <div class="fd-vline"></div>
+                        <span class="fd-vlabel">shared 64D latent space</span>
+                        <div class="fd-vline"></div>
+                    </div>
+
+                    <!-- GP/Acquisition Flow -->
+                    <div class="fd-row gp-flow">
+                        <span class="fd-row-label">GP Modeling (Bayesian Optimization)</span>
+                        <div class="fd-component latent">
+                            <span class="fd-comp-name">z</span>
+                            <span class="fd-comp-dim">64D</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component adapter">
+                            <span class="fd-comp-name">Adapter</span>
+                            <span class="fd-comp-dim">64→32→10</span>
+                            <span class="fd-comp-desc">trainable MLP</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>10D</span>
+                        </div>
+                        <div class="fd-component gp">
+                            <span class="fd-comp-name">GP</span>
+                            <span class="fd-comp-dim">GPyTorch</span>
+                            <span class="fd-comp-desc">ExactGP</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component kernel">
+                            <span class="fd-comp-name">Matérn</span>
+                            <span class="fd-comp-dim">ν=5/2</span>
+                            <span class="fd-comp-desc">ARD kernel</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component acq">
+                            <span class="fd-comp-name">qLogEI</span>
+                            <span class="fd-comp-dim">BoTorch</span>
+                            <span class="fd-comp-desc">acquisition</span>
+                        </div>
+                        <div class="fd-arrow purple">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component latent">
+                            <span class="fd-comp-name">z*</span>
+                            <span class="fd-comp-dim">64D opt</span>
+                        </div>
+                    </div>
+
+                    <!-- Inversion Flow -->
+                    <div class="fd-row inversion">
+                        <span class="fd-row-label">Inversion (Text Generation)</span>
+                        <div class="fd-component latent">
+                            <span class="fd-comp-name">z*</span>
+                            <span class="fd-comp-dim">optimal</span>
+                        </div>
+                        <div class="fd-arrow orange">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component vae-dec">
+                            <span class="fd-comp-name">VAE Dec</span>
+                            <span class="fd-comp-dim">decode</span>
+                        </div>
+                        <div class="fd-arrow orange">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>768D</span>
+                        </div>
+                        <div class="fd-component vec2text">
+                            <span class="fd-comp-name">Vec2Text</span>
+                            <span class="fd-comp-dim">512 tokens</span>
+                            <span class="fd-comp-desc">beam search</span>
+                        </div>
+                        <div class="fd-arrow orange">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component text">
+                            <span class="fd-comp-name">Text</span>
+                            <span class="fd-comp-dim">novel instruction</span>
+                        </div>
+                        <div class="fd-arrow green">
+                            <span class="fd-arrow-icon">→</span>
+                        </div>
+                        <div class="fd-component gtr">
+                            <span class="fd-comp-name">GTR</span>
+                            <span class="fd-comp-dim">re-encode</span>
+                        </div>
+                        <div class="fd-arrow green">
+                            <span class="fd-arrow-icon">→</span>
+                            <span>768D</span>
+                        </div>
+                        <div class="fd-component kernel">
+                            <span class="fd-comp-name">Gap?</span>
+                            <span class="fd-comp-dim">cos_sim</span>
+                            <span class="fd-comp-desc">≤0.1 → done</span>
+                        </div>
+                    </div>
+
+                    <!-- Legend -->
+                    <div class="fd-legend">
+                        <div class="fd-legend-item">
+                            <div class="fd-legend-dot gtr"></div>
+                            <span>GTR Encoder (frozen)</span>
+                        </div>
+                        <div class="fd-legend-item">
+                            <div class="fd-legend-dot vae"></div>
+                            <span>VAE (frozen during BO)</span>
+                        </div>
+                        <div class="fd-legend-item">
+                            <div class="fd-legend-dot latent"></div>
+                            <span>Latent Space (64D)</span>
+                        </div>
+                        <div class="fd-legend-item">
+                            <div class="fd-legend-dot vec2text"></div>
+                            <span>Vec2Text Inversion</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 5: VAE -->
+        <div class="slide" data-slide="5">
             <h2>Variational Autoencoder</h2>
             <div class="two-col">
                 <div class="col">
@@ -940,8 +1347,8 @@ Dec: 64→32→64→256→768</div>
             </div>
         </div>
 
-        <!-- Slide 5: Hyperband -->
-        <div class="slide" data-slide="5">
+        <!-- Slide 6: Hyperband -->
+        <div class="slide" data-slide="6">
             <h2>Hyperband Multi-Fidelity</h2>
             <div class="two-col">
                 <div class="col">
@@ -976,8 +1383,8 @@ Dec: 64→32→64→256→768</div>
             </div>
         </div>
 
-        <!-- Slide 6: GP -->
-        <div class="slide" data-slide="6">
+        <!-- Slide 7: GP -->
+        <div class="slide" data-slide="7">
             <h2>Deep Kernel GP</h2>
             <div class="diagram-container" style="margin-bottom: 1.5rem;">
                 <div class="diagram-row">
@@ -1001,8 +1408,8 @@ Dec: 64→32→64→256→768</div>
             </div>
         </div>
 
-        <!-- Slide 7: InvBO -->
-        <div class="slide" data-slide="7">
+        <!-- Slide 8: InvBO -->
+        <div class="slide" data-slide="8">
             <h2>InvBO Inference</h2>
             <div class="two-col">
                 <div class="col">
@@ -1035,8 +1442,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 8: Inversion Loop - VISUAL DIAGRAM -->
-        <div class="slide" data-slide="8">
+        <!-- Slide 9: Inversion Loop - VISUAL DIAGRAM -->
+        <div class="slide" data-slide="9">
             <h2>Inversion Loop</h2>
             <p style="margin-bottom: 1.5rem; font-size: 0.9rem;">
                 Closing the gap between decoder output and Vec2Text reconstruction
@@ -1111,8 +1518,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 9: Design Decisions -->
-        <div class="slide" data-slide="9">
+        <!-- Slide 10: Design Decisions -->
+        <div class="slide" data-slide="10">
             <h2>Key Design Decisions</h2>
             <div class="feature-list">
                 <div class="feature-item">
@@ -1139,8 +1546,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 10: Results Placeholder -->
-        <div class="slide" data-slide="10">
+        <!-- Slide 11: Results Placeholder -->
+        <div class="slide" data-slide="11">
             <h2>Results</h2>
             <div class="placeholder-box">
                 <div class="icon">📊</div>
@@ -1149,8 +1556,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 11: Summary -->
-        <div class="slide" data-slide="11">
+        <!-- Slide 12: Summary -->
+        <div class="slide" data-slide="12">
             <h2>Summary</h2>
             <div class="summary-grid">
                 <div class="summary-item">
@@ -1181,7 +1588,7 @@ txt = vec2text.<span class="function">invert</span>(emb)
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="slide-counter" id="slideCounter">1 / 11</div>
+        <div class="slide-counter" id="slideCounter">1 / 12</div>
     </div>
 
     <!-- Navigation hints -->
