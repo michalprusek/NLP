@@ -7,6 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <!-- KaTeX for LaTeX formulas -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
     <style>
         :root {
             --bg-deep: #05080f;
@@ -1007,6 +1011,306 @@
         .fd-legend-dot.latent { border-color: var(--accent-purple); }
         .fd-legend-dot.vec2text { border-color: var(--accent-orange); }
 
+        /* ========================================
+           U-NET SHAPE VAE DIAGRAM - WIDE HORIZONTAL
+           ======================================== */
+        .vae-unet-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.2rem;
+            width: 100%;
+        }
+
+        .vae-unet-wide {
+            display: flex;
+            align-items: flex-end;
+            gap: 1rem;
+            padding: 2rem 2.5rem;
+            padding-top: 3rem;
+            background: var(--bg-card);
+            border-radius: 14px;
+            border: 1px solid var(--border-subtle);
+            position: relative;
+        }
+
+        .vae-header {
+            position: absolute;
+            top: 0.6rem;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .vae-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--accent-purple);
+            letter-spacing: 0.2em;
+        }
+
+        .vae-loss-bottom {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.6rem;
+            margin-top: 1.5rem;
+            padding: 1.2rem 2rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .vae-loss-formula {
+            font-size: 1.1rem;
+        }
+
+        .vae-loss-note {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            background: var(--bg-elevated);
+            padding: 0.3rem 0.7rem;
+            border-radius: 4px;
+        }
+
+        .vae-unet-encoder, .vae-unet-decoder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.35rem;
+            position: relative;
+            padding: 1rem 1.2rem;
+            padding-top: 1.5rem;
+            border-radius: 10px;
+        }
+
+        .vae-unet-encoder {
+            background: linear-gradient(180deg, rgba(0, 229, 199, 0.08) 0%, rgba(0, 229, 199, 0.02) 100%);
+            border: 1px solid rgba(0, 229, 199, 0.3);
+        }
+
+        .vae-unet-decoder {
+            background: linear-gradient(0deg, rgba(0, 229, 199, 0.08) 0%, rgba(0, 229, 199, 0.02) 100%);
+            border: 1px solid rgba(0, 229, 199, 0.3);
+            flex-direction: column-reverse;
+        }
+
+        .vae-unet-label {
+            position: absolute;
+            top: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-card);
+            padding: 0.15rem 0.7rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+            border-radius: 4px;
+        }
+
+        .vae-unet-layer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.2rem;
+            padding: 0.45rem 0.9rem;
+            background: var(--bg-deep);
+            border: 2px solid var(--border-subtle);
+            border-radius: 6px;
+            min-width: 130px;
+        }
+
+        .vae-unet-layer.input, .vae-unet-layer.output {
+            border-color: var(--accent-green);
+            background: linear-gradient(90deg, var(--bg-deep) 0%, rgba(74, 222, 128, 0.1) 100%);
+        }
+
+        .vae-unet-layer.latent {
+            border-color: var(--accent-purple);
+            background: linear-gradient(135deg, rgba(167, 139, 250, 0.12) 0%, rgba(167, 139, 250, 0.06) 100%);
+            box-shadow: 0 0 20px rgba(167, 139, 250, 0.3);
+            flex-direction: column;
+            align-items: center;
+            gap: 0.15rem;
+            padding: 0.6rem 1.2rem;
+            min-width: 120px;
+        }
+
+        .vae-unet-layer.mu, .vae-unet-layer.logvar {
+            border-color: var(--accent-pink);
+            background: linear-gradient(90deg, var(--bg-deep) 0%, rgba(244, 114, 182, 0.1) 100%);
+            min-width: 90px;
+            justify-content: center;
+            padding: 0.4rem 0.7rem;
+        }
+
+        .vae-unet-name {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .vae-unet-dim {
+            font-size: 0.8rem;
+            color: var(--accent-cyan);
+            font-weight: 700;
+        }
+
+        .vae-unet-desc {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+        }
+
+        /* μ and log σ² stacked vertically */
+        .vae-mu-logvar-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            align-items: center;
+            align-self: flex-end;
+        }
+
+        .vae-unet-arrow-down, .vae-unet-arrow-up {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.1rem;
+            padding: 0.15rem 0;
+        }
+
+        .vae-arrow-line {
+            font-size: 1rem;
+            color: var(--text-dim);
+        }
+
+        .vae-arrow-op {
+            font-size: 0.6rem;
+            color: var(--accent-orange);
+            font-weight: 500;
+            background: rgba(251, 146, 60, 0.1);
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+
+        /* Horizontal arrows */
+        .vae-arrow-horizontal {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            align-self: flex-end;
+        }
+
+        .vae-arrow-line-h {
+            font-size: 1.5rem;
+            color: var(--accent-purple);
+        }
+
+        /* Latent block centered */
+        .vae-latent-block {
+            display: flex;
+            align-items: center;
+            align-self: flex-end;
+        }
+
+        /* ========================================
+           VAE TRAINING SLIDE STYLES
+           ======================================== */
+        .ape-styles {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .ape-style-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.8rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+
+        .ape-style-item:hover {
+            border-color: var(--accent-cyan);
+        }
+
+        .ape-style-name {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--accent-purple);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .ape-style-desc {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+        }
+
+        .training-params {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .param-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.4rem 0.7rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 5px;
+        }
+
+        .param-name {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .param-value {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--accent-cyan);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .param-note {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            font-weight: 400;
+        }
+
+        /* Animation for VAE Training slide */
+        .slide.active .ape-style-item { animation: slideIn 0.4s both; }
+        .slide.active .ape-style-item:nth-child(1) { animation-delay: 0.05s; }
+        .slide.active .ape-style-item:nth-child(2) { animation-delay: 0.1s; }
+        .slide.active .ape-style-item:nth-child(3) { animation-delay: 0.15s; }
+        .slide.active .ape-style-item:nth-child(4) { animation-delay: 0.2s; }
+        .slide.active .ape-style-item:nth-child(5) { animation-delay: 0.25s; }
+
+        .slide.active .param-row { animation: fadeUp 0.4s both; }
+        .slide.active .param-row:nth-child(1) { animation-delay: 0.1s; }
+        .slide.active .param-row:nth-child(2) { animation-delay: 0.15s; }
+        .slide.active .param-row:nth-child(3) { animation-delay: 0.2s; }
+        .slide.active .param-row:nth-child(4) { animation-delay: 0.25s; }
+        .slide.active .param-row:nth-child(5) { animation-delay: 0.3s; }
+        .slide.active .param-row:nth-child(6) { animation-delay: 0.35s; }
+
+        /* Animation for VAE diagram */
+        .slide.active .vae-unet-wide { animation: fadeUp 0.5s 0.1s both; }
+        .slide.active .vae-loss-bottom { animation: fadeUp 0.5s 0.3s both; }
+
         /* Animation for diagram */
         .slide.active .fd-row { animation: fadeUp 0.5s both; }
         .slide.active .fd-row:nth-child(1) { animation-delay: 0.1s; }
@@ -1124,35 +1428,51 @@
         <div class="slide" data-slide="3">
             <h2>Pipeline Architecture</h2>
             <div class="architecture">
-                <div class="arch-phase">
-                    <span class="arch-phase-num">01</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">01</span>
                     <div class="arch-phase-content">
-                        <h4>APE Generation</h4>
-                        <span>1000 diverse instructions</span>
+                        <h4 style="font-size: 0.9rem;">APE</h4>
+                        <span style="font-size: 0.7rem;">1000 instructions</span>
                     </div>
                 </div>
                 <span class="arch-arrow-h">→</span>
-                <div class="arch-phase">
-                    <span class="arch-phase-num">02</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">02</span>
                     <div class="arch-phase-content">
-                        <h4>VAE Training</h4>
-                        <span>768D → 64D latent</span>
+                        <h4 style="font-size: 0.9rem;">GTR</h4>
+                        <span style="font-size: 0.7rem;">768D embeddings</span>
                     </div>
                 </div>
                 <span class="arch-arrow-h">→</span>
-                <div class="arch-phase">
-                    <span class="arch-phase-num">03</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">03</span>
                     <div class="arch-phase-content">
-                        <h4>Hyperband</h4>
-                        <span>Multi-fidelity eval</span>
+                        <h4 style="font-size: 0.9rem;">VAE</h4>
+                        <span style="font-size: 0.7rem;">768D → 64D</span>
                     </div>
                 </div>
                 <span class="arch-arrow-h">→</span>
-                <div class="arch-phase">
-                    <span class="arch-phase-num">04</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">04</span>
                     <div class="arch-phase-content">
-                        <h4>InvBO</h4>
-                        <span>Latent optimization</span>
+                        <h4 style="font-size: 0.9rem;">Hyperband</h4>
+                        <span style="font-size: 0.7rem;">→ GP data</span>
+                    </div>
+                </div>
+                <span class="arch-arrow-h">→</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">05</span>
+                    <div class="arch-phase-content">
+                        <h4 style="font-size: 0.9rem;">InvBO</h4>
+                        <span style="font-size: 0.7rem;">qLogEI optim</span>
+                    </div>
+                </div>
+                <span class="arch-arrow-h">→</span>
+                <div class="arch-phase" style="padding: 0.8rem 1rem;">
+                    <span class="arch-phase-num" style="font-size: 1.4rem;">06</span>
+                    <div class="arch-phase-content">
+                        <h4 style="font-size: 0.9rem;">Vec2Text</h4>
+                        <span style="font-size: 0.7rem;">→ instruction</span>
                     </div>
                 </div>
             </div>
@@ -1185,7 +1505,7 @@
                         <div class="fd-component vae-enc">
                             <span class="fd-comp-name">VAE Enc</span>
                             <span class="fd-comp-dim">768→384→192→128</span>
-                            <span class="fd-comp-desc">μ + log σ²</span>
+                            <span class="fd-comp-desc">$\mu + \log\sigma^2$</span>
                         </div>
                         <div class="fd-arrow purple">
                             <span class="fd-arrow-icon">→</span>
@@ -1250,7 +1570,7 @@
                         </div>
                         <div class="fd-component kernel">
                             <span class="fd-comp-name">Matérn</span>
-                            <span class="fd-comp-dim">ν=5/2</span>
+                            <span class="fd-comp-dim">$\nu=5/2$</span>
                             <span class="fd-comp-desc">ARD kernel</span>
                         </div>
                         <div class="fd-arrow purple">
@@ -1344,40 +1664,224 @@
         <!-- Slide 5: VAE -->
         <div class="slide" data-slide="5">
             <h2>Variational Autoencoder</h2>
-            <div class="two-col">
-                <div class="col">
-                    <h3>Architecture</h3>
-                    <div class="diagram-container">
-                        <div class="diagram-row">
-                            <div class="diagram-box">GTR<div class="dim">768D</div></div>
-                            <span class="diagram-arrow">→</span>
-                            <div class="diagram-box highlight">Latent<div class="dim">64D</div></div>
-                            <span class="diagram-arrow">→</span>
-                            <div class="diagram-box">Recon<div class="dim">768D</div></div>
+            <!-- U-Net Shape VAE Diagram - Horizontal Bottleneck -->
+            <div class="vae-unet-container">
+                <div class="vae-unet-wide">
+                    <!-- VAE Title -->
+                    <div class="vae-header">
+                        <div class="vae-title">VAE</div>
+                    </div>
+
+
+                    <!-- Encoder (left side going down) -->
+                    <div class="vae-unet-encoder">
+                        <div class="vae-unet-label">Encoder</div>
+                        <div class="vae-unet-layer input">
+                            <span class="vae-unet-name">Input (GTR)</span>
+                            <span class="vae-unet-dim">768</span>
+                        </div>
+                        <div class="vae-unet-arrow-down">
+                            <span class="vae-arrow-line">↓</span>
+                            <span class="vae-arrow-op">Linear + GELU</span>
+                        </div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc1</span>
+                            <span class="vae-unet-dim">384</span>
+                        </div>
+                        <div class="vae-unet-arrow-down">
+                            <span class="vae-arrow-line">↓</span>
+                            <span class="vae-arrow-op">Linear + GELU</span>
+                        </div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc2</span>
+                            <span class="vae-unet-dim">192</span>
+                        </div>
+                        <div class="vae-unet-arrow-down">
+                            <span class="vae-arrow-line">↓</span>
+                            <span class="vae-arrow-op">Linear + GELU</span>
+                        </div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc3</span>
+                            <span class="vae-unet-dim">128</span>
                         </div>
                     </div>
-                    <div class="ascii-diagram">Enc: 768→384→192→2×64 (μ,σ²)
-Dec: 64→192→384→768</div>
+
+                    <!-- Horizontal arrow to μ/logσ² -->
+                    <div class="vae-arrow-horizontal">
+                        <span class="vae-arrow-op">Linear</span>
+                        <span class="vae-arrow-line-h">→</span>
+                    </div>
+
+                    <!-- μ and log σ² stacked vertically outside encoder -->
+                    <div class="vae-mu-logvar-stack">
+                        <div class="vae-unet-layer mu">
+                            <span class="vae-unet-name">μ</span>
+                            <span class="vae-unet-dim">64</span>
+                        </div>
+                        <div class="vae-unet-layer logvar">
+                            <span class="vae-unet-name">log σ²</span>
+                            <span class="vae-unet-dim">64</span>
+                        </div>
+                    </div>
+
+                    <!-- Horizontal arrow: reparametrize -->
+                    <div class="vae-arrow-horizontal">
+                        <span class="vae-arrow-op">reparametrize</span>
+                        <span class="vae-arrow-line-h">→</span>
+                    </div>
+
+                    <!-- Latent z -->
+                    <div class="vae-latent-block">
+                        <div class="vae-unet-layer latent">
+                            <span class="vae-unet-name">z</span>
+                            <span class="vae-unet-dim">64D</span>
+                            <span class="vae-unet-desc">$z = \mu + \sigma \cdot \varepsilon$</span>
+                        </div>
+                    </div>
+
+                    <!-- Horizontal arrow: Linear + GELU -->
+                    <div class="vae-arrow-horizontal">
+                        <span class="vae-arrow-op">Linear + GELU</span>
+                        <span class="vae-arrow-line-h">→</span>
+                    </div>
+
+                    <!-- Decoder (right side going up) -->
+                    <div class="vae-unet-decoder">
+                        <div class="vae-unet-label">Decoder</div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc1</span>
+                            <span class="vae-unet-dim">192</span>
+                        </div>
+                        <div class="vae-unet-arrow-up">
+                            <span class="vae-arrow-op">Linear + GELU</span>
+                            <span class="vae-arrow-line">↑</span>
+                        </div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc2</span>
+                            <span class="vae-unet-dim">384</span>
+                        </div>
+                        <div class="vae-unet-arrow-up">
+                            <span class="vae-arrow-op">Linear + GELU</span>
+                            <span class="vae-arrow-line">↑</span>
+                        </div>
+                        <div class="vae-unet-layer">
+                            <span class="vae-unet-name">fc3</span>
+                            <span class="vae-unet-dim">768</span>
+                        </div>
+                        <div class="vae-unet-arrow-up">
+                            <span class="vae-arrow-op">L2 normalize</span>
+                            <span class="vae-arrow-line">↑</span>
+                        </div>
+                        <div class="vae-unet-layer output">
+                            <span class="vae-unet-name">Output</span>
+                            <span class="vae-unet-dim">768</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Loss function - centered below diagram -->
+                <div class="vae-loss-bottom">
+                    <div class="vae-loss-formula">
+                        $$\mathcal{L} = \underbrace{1 - \cos(\mathbf{x}, \hat{\mathbf{x}})}_{\text{reconstruction term}} + \beta \cdot \underbrace{D_{\text{KL}}}_{\text{regularization term}}$$
+                    </div>
+                    <span class="vae-loss-note">β: 0→0.003 / 500 epochs</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 6: VAE Training -->
+        <div class="slide" data-slide="6">
+            <h2>VAE Training</h2>
+            <div class="two-col" style="max-width: 1050px;">
+                <div class="col">
+                    <h3>APE Instruction Generation</h3>
+                    <p style="text-align: left; font-size: 0.8rem; margin-bottom: 0.8rem;">
+                        <span style="color: var(--accent-cyan);">1000 diverse instructions</span> via style-constrained prompts:
+                    </p>
+                    <div class="ape-styles">
+                        <div class="ape-style-item">
+                            <span class="ape-style-name">minimalist</span>
+                            <span class="ape-style-desc">1-5 words, T=1.0</span>
+                        </div>
+                        <div class="ape-style-item">
+                            <span class="ape-style-name">direct_command</span>
+                            <span class="ape-style-desc">6-15 words, T=0.9</span>
+                        </div>
+                        <div class="ape-style-item">
+                            <span class="ape-style-name">chain_of_thought</span>
+                            <span class="ape-style-desc">step-by-step, T=0.8</span>
+                        </div>
+                        <div class="ape-style-item">
+                            <span class="ape-style-name">pedagogical</span>
+                            <span class="ape-style-desc">tutor persona, T=0.9</span>
+                        </div>
+                        <div class="ape-style-item">
+                            <span class="ape-style-name">analytical</span>
+                            <span class="ape-style-desc">logical structure, T=0.8</span>
+                        </div>
+                    </div>
+                    <p style="text-align: left; font-size: 0.75rem; color: var(--text-dim); margin-top: 0.8rem;">
+                        Model: Qwen2.5-7B-Instruct
+                    </p>
                 </div>
                 <div class="col">
-                    <h3>Loss Function</h3>
-                    <div class="formula">ℒ = ℒ<sub>recon</sub> + β·KL</div>
-                    <div class="code-block">
-<span class="comment"># Cosine reconstruction</span>
-<span class="function">recon</span> = <span class="number">1</span> - <span class="function">cos_sim</span>(x, x̂)
+                    <h3>Training Parameters</h3>
+                    <div class="training-params">
+                        <div class="param-row">
+                            <span class="param-name">Epochs</span>
+                            <span class="param-value">6783 <span class="param-note">(early stop)</span></span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">Learning rate</span>
+                            <span class="param-value">3×10⁻⁴</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">Batch size</span>
+                            <span class="param-value">64</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">KL annealing</span>
+                            <span class="param-value">β: 0→0.003 / 500 ep</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">Patience</span>
+                            <span class="param-value">500 epochs</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">Scheduler</span>
+                            <span class="param-value">CosineAnnealing</span>
+                        </div>
+                    </div>
 
-<span class="comment"># KL to N(0,1)</span>
-<span class="function">kl</span> = -<span class="number">0.5</span>*<span class="function">sum</span>(<span class="number">1</span>+logσ²-μ²-σ²)
+                    <h3 style="margin-top: 1.2rem;">Validation Results</h3>
+                    <div class="stats-grid" style="grid-template-columns: repeat(2, 1fr); max-width: 280px; gap: 0.8rem;">
+                        <div class="stat-card" style="padding: 0.8rem;">
+                            <div class="stat-value" style="font-size: 1.6rem;">97.98%</div>
+                            <div class="stat-label">Cosine Sim</div>
+                        </div>
+                        <div class="stat-card" style="padding: 0.8rem;">
+                            <div class="stat-value" style="font-size: 1.6rem;">64/64</div>
+                            <div class="stat-label">Active Dims</div>
+                        </div>
+                    </div>
 
-<span class="comment"># Annealing: β = 0 → 0.003</span>
-β = <span class="number">0.003</span> * epoch/<span class="number">500</span>
+                    <h3 style="margin-top: 1rem;">Latent Space</h3>
+                    <div class="training-params" style="max-width: 280px;">
+                        <div class="param-row">
+                            <span class="param-name">Norm</span>
+                            <span class="param-value">7.97 <span class="param-note">±0.63</span></span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-name">Var/dim</span>
+                            <span class="param-value">0.978</span>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Slide 6: Hyperband -->
-        <div class="slide" data-slide="6">
+        <!-- Slide 7: Hyperband -->
+        <div class="slide" data-slide="7">
             <h2>Hyperband Multi-Fidelity</h2>
             <div class="two-col">
                 <div class="col">
@@ -1397,11 +1901,11 @@ Dec: 64→192→384→768</div>
                     <div class="stats-grid" style="grid-template-columns: 1fr 1fr; max-width: 300px;">
                         <div class="stat-card">
                             <div class="stat-value">10</div>
-                            <div class="stat-label">b<sub>min</sub></div>
+                            <div class="stat-label">$b_{\min}$</div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-value">2.0</div>
-                            <div class="stat-label">η</div>
+                            <div class="stat-label">$\eta$</div>
                         </div>
                     </div>
                     <p style="margin-top: 1rem; text-align: left; font-size: 0.85rem;">
@@ -1412,8 +1916,8 @@ Dec: 64→192→384→768</div>
             </div>
         </div>
 
-        <!-- Slide 7: GP -->
-        <div class="slide" data-slide="7">
+        <!-- Slide 8: GP -->
+        <div class="slide" data-slide="8">
             <h2>Deep Kernel GP</h2>
             <div class="diagram-container" style="margin-bottom: 1.5rem;">
                 <div class="diagram-row">
@@ -1437,8 +1941,8 @@ Dec: 64→192→384→768</div>
             </div>
         </div>
 
-        <!-- Slide 8: InvBO -->
-        <div class="slide" data-slide="8">
+        <!-- Slide 9: InvBO -->
+        <div class="slide" data-slide="9">
             <h2>InvBO Inference</h2>
             <div class="two-col">
                 <div class="col">
@@ -1459,20 +1963,20 @@ txt = vec2text.<span class="function">invert</span>(emb)
                 </div>
                 <div class="col">
                     <h3>LogEI Stability</h3>
-                    <div class="formula">LogEI = log h(z) + log σ</div>
+                    <div class="formula">$$\log \text{EI}(z) = \log h(z) + \log \sigma$$</div>
                     <p style="text-align: left; font-size: 0.8rem; margin-top: 0.8rem;">
                         Standard EI underflows near optimum.<br><br>
                         <span style="color: var(--accent-cyan);">Three branches:</span><br>
-                        • z > -1: Direct<br>
-                        • -1/√ε < z ≤ -1: erfcx<br>
-                        • z ≤ -1/√ε: Asymptotic
+                        • $z > -1$: Direct<br>
+                        • $-1/\sqrt{\varepsilon} < z \leq -1$: erfcx<br>
+                        • $z \leq -1/\sqrt{\varepsilon}$: Asymptotic
                     </p>
                 </div>
             </div>
         </div>
 
-        <!-- Slide 9: Inversion Loop - VISUAL DIAGRAM -->
-        <div class="slide" data-slide="9">
+        <!-- Slide 10: Inversion Loop - VISUAL DIAGRAM -->
+        <div class="slide" data-slide="10">
             <h2>Inversion Loop</h2>
             <p style="margin-bottom: 1.5rem; font-size: 0.9rem;">
                 Closing the gap between decoder output and Vec2Text reconstruction
@@ -1516,15 +2020,15 @@ txt = vec2text.<span class="function">invert</span>(emb)
                     <div class="inv-feedback">
                         <div class="inv-step">
                             <span class="inv-step-num">1</span>
-                            <span>Find z<sub>inv</sub>: min ‖dec(z) - target‖</span>
+                            <span>Find $z_{\text{inv}} = \arg\min \|\text{dec}(z) - \text{target}\|$</span>
                         </div>
                         <div class="inv-step">
                             <span class="inv-step-num">2</span>
-                            <span>Compute gap = 1 - cos_sim</span>
+                            <span>Compute $\text{gap} = 1 - \cos(\mathbf{e}, \mathbf{t})$</span>
                         </div>
                         <div class="inv-condition">
                             <span class="inv-condition-icon">⟳</span>
-                            <span>if <code>gap > 0.1</code>: re-decode & repeat</span>
+                            <span>if $\text{gap} > 0.1$: re-decode & repeat</span>
                         </div>
                     </div>
 
@@ -1547,8 +2051,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 10: Design Decisions -->
-        <div class="slide" data-slide="10">
+        <!-- Slide 11: Design Decisions -->
+        <div class="slide" data-slide="11">
             <h2>Key Design Decisions</h2>
             <div class="feature-list">
                 <div class="feature-item">
@@ -1575,8 +2079,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 11: Results Placeholder -->
-        <div class="slide" data-slide="11">
+        <!-- Slide 12: Results Placeholder -->
+        <div class="slide" data-slide="12">
             <h2>Results</h2>
             <div class="placeholder-box">
                 <div class="icon">📊</div>
@@ -1585,8 +2089,8 @@ txt = vec2text.<span class="function">invert</span>(emb)
             </div>
         </div>
 
-        <!-- Slide 12: Summary -->
-        <div class="slide" data-slide="12">
+        <!-- Slide 13: Summary -->
+        <div class="slide" data-slide="13">
             <h2>Summary</h2>
             <div class="summary-grid">
                 <div class="summary-item">
@@ -1617,7 +2121,7 @@ txt = vec2text.<span class="function">invert</span>(emb)
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="slide-counter" id="slideCounter">1 / 12</div>
+        <div class="slide-counter" id="slideCounter">1 / 13</div>
     </div>
 
     <!-- Navigation hints -->
@@ -1688,6 +2192,18 @@ txt = vec2text.<span class="function">invert</span>(emb)
         });
 
         updateSlide();
+
+        // Initialize KaTeX
+        document.addEventListener("DOMContentLoaded", function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '$', right: '$', display: false},
+                    {left: '\\(', right: '\\)', display: false}
+                ]
+            });
+        });
     </script>
 </body>
 </html>
