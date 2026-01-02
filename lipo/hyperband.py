@@ -466,14 +466,16 @@ class LIPOHyperband:
 
         embeddings = torch.stack([obs[0] for obs in best_observations.values()])
         errors = torch.tensor([obs[1] for obs in best_observations.values()], dtype=torch.float32)
+        fidelities = torch.tensor([obs[2] for obs in best_observations.values()], dtype=torch.float32)
 
         print(f"  GP training data: {len(best_observations)} unique prompts")
+        print(f"  Fidelity range: [{fidelities.min().item():.0f}, {fidelities.max().item():.0f}]")
 
-        gp_with_ei.set_training_data(embeddings, errors)
-        gp_with_ei.X_min = self.X_min
-        gp_with_ei.X_max = self.X_max
-        gp_with_ei.y_mean = self.y_mean
-        gp_with_ei.y_std = self.y_std
+        # Pass fidelities for heteroscedastic noise (Bernoulli variance weighting)
+        gp_with_ei.set_training_data(embeddings, errors, fidelities)
+
+        # Note: train() will recompute X_min, X_max, y_mean, y_std from training data
+        # No need to set them manually here
 
         # Retrain GP with params from config
         hb_gp_params = self.config.for_hyperband_gp()

@@ -45,7 +45,7 @@ class CompositeLogEI(AcquisitionFunction):
 
         Args:
             model: GP model that accepts 64D VAE latents and applies adapter internally
-            best_f: Best observed objective value (error rate to minimize)
+            best_f: Best observed negated error rate (max of -error_rates for BoTorch maximization)
             sampler: Optional MC sampler for qLogEI
         """
         super().__init__(model=model)
@@ -118,7 +118,7 @@ class LatentSpaceAcquisition:
         3. Returns best result across all restarts
 
         Args:
-            best_f: Best observed objective value
+            best_f: Best observed negated error rate (max of -error_rates for BoTorch maximization)
             num_restarts: Number of L-BFGS-B restarts
             raw_samples: Number of initial random samples for seeding
             options: Additional options for L-BFGS-B

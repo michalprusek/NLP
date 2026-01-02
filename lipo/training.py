@@ -196,9 +196,32 @@ Your instruction:"""
         if cache_file.exists() and not force_regenerate:
             if verbose:
                 print(f"Loading cached instructions from {cache_path}...")
-            with open(cache_path, "r") as f:
-                data = json.load(f)
+            try:
+                with open(cache_path, "r") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid JSON in APE cache file: {cache_path}\n"
+                    f"Delete the file and regenerate with --force-regenerate-ape\n"
+                    f"Error: {e}"
+                )
+
             instructions = data if isinstance(data, list) else data.get("instructions", data)
+
+            if not instructions:
+                raise ValueError(
+                    f"APE cache file exists but contains no instructions: {cache_path}\n"
+                    f"Delete the file and regenerate with --force-regenerate-ape"
+                )
+
+            # Validate instruction content
+            invalid_count = sum(1 for inst in instructions if not inst or not isinstance(inst, str))
+            if invalid_count > 0:
+                raise ValueError(
+                    f"APE cache contains {invalid_count} invalid instructions (empty or non-string)\n"
+                    f"Cache file: {cache_path}"
+                )
+
             if verbose:
                 print(f"  Loaded {len(instructions)} instructions")
             return instructions[:num_instructions]
@@ -494,8 +517,8 @@ class LIPOHyperbandTrainer:
         # Store GP stats if available
         if hasattr(self.gp, 'training_stats') and self.gp.training_stats:
             self.gp_stats = self.gp.training_stats.copy()
-            if self.gp.y_best is not None:
-                self.gp_stats["best_observed_error"] = float(self.gp.y_best)
+            if self.gp.best_error_rate is not None:
+                self.gp_stats["best_observed_error"] = float(self.gp.best_error_rate)
 
         return self.gp
 
@@ -792,22 +815,19 @@ class LIPOHyperbandTrainer:
     def load_from_hyperband_evaluations(
         self,
         evals_path: str,
-        top_fidelity_fraction: float = 0.25,
         verbose: bool = True,
     ) -> Tuple[List[str], List[float], List[int]]:
         """Load instructions and evaluations from saved hyperband_evaluations JSON.
 
-        This allows skipping HbBoPs run by using pre-existing evaluations.
-        Only uses evaluations with fidelity in the top fraction (like HbBoPs).
+        Uses ALL evaluated instructions - FixedNoiseGaussianLikelihood with Bernoulli
+        variance weights observations by fidelity (low fidelity = high uncertainty).
 
         Args:
-            evals_path: Path to JSON file with 'instructions' and 'hyperband_evaluations' keys
-            top_fidelity_fraction: Only use evaluations with fidelity >= max_fidelity * (1 - fraction)
-                                   e.g., 0.25 means keep top 25% of fidelity range (default: 0.25)
+            evals_path: Path to JSON file with evaluation results
             verbose: Print progress
 
         Returns:
-            Tuple of (instructions, error_rates, fidelities) for high-fidelity evaluated instructions only
+            Tuple of (instructions, error_rates, fidelities) for all evaluated instructions
         """
         if verbose:
             print(f"\nLoading hyperband evaluations: {evals_path}")
@@ -815,28 +835,31 @@ class LIPOHyperbandTrainer:
         with open(evals_path, "r") as f:
             data = json.load(f)
 
-        # Load all instructions
-        all_instructions = data.get("instructions", [])
-        if verbose:
-            print(f"  Total instructions: {len(all_instructions)}")
+        # Detect format: new hbbops_results format vs old hyperband_evaluations format
+        if "metadata" in data and "results" in data:
+            # New format from hbbops_results.py
+            # Results contain instruction text directly
+            results = data["results"]
+            max_fidelity = data["metadata"].get("max_fidelity", 1319)
+            all_instructions = None  # Instructions are in results
+            if verbose:
+                print(f"  Format: hbbops_results (new)")
+                print(f"  Evaluated instructions: {len(results)}")
+                print(f"  Max fidelity: {max_fidelity}")
+        else:
+            # Old format: separate instructions list + hyperband_evaluations
+            all_instructions = data.get("instructions", [])
+            hb_evals = data.get("hyperband_evaluations", {})
+            results = hb_evals.get("results", {})
+            max_fidelity = hb_evals.get("max_fidelity", 1319)
+            if verbose:
+                print(f"  Format: hyperband_evaluations (legacy)")
+                print(f"  Total instructions: {len(all_instructions)}")
+                print(f"  Evaluated instructions: {len(results)}")
+                print(f"  Max fidelity: {max_fidelity}")
 
-        # Load hyperband evaluations
-        hb_evals = data.get("hyperband_evaluations", {})
-        results = hb_evals.get("results", {})
-        max_fidelity = hb_evals.get("max_fidelity", 1319)
-
-        if verbose:
-            print(f"  Evaluated instructions: {len(results)}")
-            print(f"  Max fidelity: {max_fidelity}")
-
-        # Compute threshold: top 25% means fidelity >= max_fidelity * 0.75
-        fidelity_threshold = int(max_fidelity * (1 - top_fidelity_fraction))
-
-        if verbose:
-            print(f"  Fidelity threshold (top {top_fidelity_fraction*100:.0f}%): >= {fidelity_threshold}")
-
-        # Build lists of evaluated instructions with their error rates and fidelities
-        # Only include high-fidelity evaluations
+        # Build lists of ALL evaluated instructions with their error rates and fidelities
+        # FixedNoiseGaussianLikelihood will weight by fidelity (Bernoulli variance)
         evaluated_instructions = []
         error_rates = []
         fidelities = []
@@ -844,16 +867,54 @@ class LIPOHyperbandTrainer:
         for idx_str, result in results.items():
             idx = int(idx_str)
             fidelity = result.get("fidelity", max_fidelity)
-            if idx < len(all_instructions) and fidelity >= fidelity_threshold:
-                evaluated_instructions.append(all_instructions[idx])
-                error_rates.append(result["error_rate"])
-                fidelities.append(fidelity)
+
+            # Validate fidelity to prevent division by zero in noise computation
+            if fidelity < 1:
+                fidelity = 1
+
+            # Get instruction text based on format
+            if all_instructions is not None:
+                # Legacy format: instruction from separate list
+                if idx >= len(all_instructions):
+                    continue
+                instruction = all_instructions[idx]
+            else:
+                # New format: instruction directly in result
+                instruction = result.get("instruction")
+                if instruction is None:
+                    continue
+
+            evaluated_instructions.append(instruction)
+
+            # Laplace smoothing: (errors + 1) / (n + 2)
+            # This penalizes "lucky guesses" on low-fidelity samples:
+            # - 0/10 → 1/12 = 0.083 (was 0.0)
+            # - 0/1319 → 1/1321 = 0.00076 (stays near 0)
+            raw_error = result["error_rate"]
+            num_errors = raw_error * fidelity
+            smoothed_error = (num_errors + 1) / (fidelity + 2)
+            error_rates.append(smoothed_error)
+            fidelities.append(fidelity)
 
         if verbose:
-            print(f"  High-fidelity instructions: {len(evaluated_instructions)} (filtered from {len(results)})")
+            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Laplace-smoothed)")
             errors = sorted(error_rates)
-            print(f"  Error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
-            print(f"  Best 5 errors: {[f'{e:.4f}' for e in errors[:5]]}")
+            print(f"  Smoothed error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
+            print(f"  Best 5 smoothed errors: {[f'{e:.4f}' for e in errors[:5]]}")
+            # Fidelity distribution
+            fid_sorted = sorted(fidelities)
+            print(f"  Fidelity range: [{fid_sorted[0]}, {fid_sorted[-1]}]")
+            full_fid_count = sum(1 for f in fidelities if f == max_fidelity)
+            print(f"  Full fidelity ({max_fidelity}): {full_fid_count}/{len(fidelities)}")
+
+            # Show best from full-fidelity vs best overall (for debugging)
+            full_fid_errors = [e for e, f in zip(error_rates, fidelities) if f == max_fidelity]
+            if full_fid_errors:
+                best_full_fid = min(full_fid_errors)
+                best_overall = min(error_rates)
+                if abs(best_full_fid - best_overall) > 1e-6:
+                    print(f"  NOTE: Best overall ({best_overall:.4f}) differs from best full-fidelity ({best_full_fid:.4f})")
+                    print(f"        Only full-fidelity best will be used for optimization target.")
 
         # Store for VAE and GP training
         self.instructions = evaluated_instructions
@@ -880,12 +941,34 @@ class LIPOHyperbandTrainer:
         if verbose:
             print(f"  Encoded {len(self.instruction_embeddings)} instructions")
 
-        # Store for diverse VAE training (all 1000+ instructions)
-        self.diverse_instructions = all_instructions
+        # Always load APE instructions for VAE training (better coverage)
+        ape_path = "lipo/data/ape_instructions.json"
+        try:
+            with open(ape_path, "r") as f:
+                ape_data = json.load(f)
+            diverse_source = ape_data.get("instructions", [])
+            if not diverse_source:
+                raise ValueError(f"APE instructions file is empty or has wrong format: {ape_path}")
+            if verbose:
+                print(f"Loaded {len(diverse_source)} APE instructions for VAE from {ape_path}")
+        except FileNotFoundError:
+            # Fallback: use evaluated instructions - warn loudly as this is significant degradation
+            if all_instructions is not None:
+                diverse_source = all_instructions
+            else:
+                diverse_source = [r.get("instruction") for r in results.values() if r.get("instruction")]
+
+            print(f"WARNING: APE instructions not found at {ape_path}")
+            print(f"  Falling back to {len(diverse_source)} evaluated instructions for VAE training.")
+            print(f"  This may significantly degrade VAE quality!")
+            print(f"  Expected ~2000 diverse instructions, got {len(diverse_source)}.")
+            print(f"  To fix: generate APE instructions or provide --ape-cache-path")
+
+        self.diverse_instructions = diverse_source
         self.diverse_embeddings = {}
         if verbose:
-            print("Encoding all diverse instructions for VAE...")
-        for idx, inst in enumerate(all_instructions):
+            print(f"Encoding {len(diverse_source)} diverse instructions for VAE...")
+        for idx, inst in enumerate(diverse_source):
             self.diverse_embeddings[idx] = self.gtr.encode_tensor(inst)
         if verbose:
             print(f"  Encoded {len(self.diverse_embeddings)} diverse instructions")
@@ -1030,9 +1113,21 @@ class LIPOHyperbandTrainer:
             device=self.device
         )
 
+        # Get fidelities (sample counts) for heteroscedastic noise
+        if hasattr(self, 'fidelities') and self.fidelities:
+            fidelities = torch.tensor(
+                self.fidelities,
+                dtype=torch.float32,
+                device=self.device
+            )
+        else:
+            # Default: assume max fidelity for all
+            fidelities = torch.ones(len(embeddings), dtype=torch.float32, device=self.device) * 1319
+
         if verbose:
             print(f"  Training on {len(embeddings)} grid samples")
             print(f"  Error range: [{error_rates.min():.4f}, {error_rates.max():.4f}]")
+            print(f"  Fidelity range: [{fidelities.min():.0f}, {fidelities.max():.0f}]")
 
         # Create and train GP
         self.gp = GPWithEI(
@@ -1043,8 +1138,8 @@ class LIPOHyperbandTrainer:
         # Set VAEWithAdapter (frozen VAE + trainable adapter)
         self.gp.vae_with_adapter = self.vae_with_adapter
 
-        # Set training data (converts 768D embeddings to 64D VAE latents)
-        self.gp.set_training_data(embeddings, error_rates)
+        # Set training data with fidelities for heteroscedastic noise
+        self.gp.set_training_data(embeddings, error_rates, fidelities)
 
         # Train GP
         self.gp.train(
@@ -1056,19 +1151,26 @@ class LIPOHyperbandTrainer:
 
         # Store GP training stats
         self.gp_stats = self.gp.training_stats.copy()
-        self.gp_stats["best_observed_error"] = float(self.gp.y_best)
+        self.gp_stats["best_observed_error"] = float(self.gp.best_error_rate)
         self.gp_stats["error_range"] = {
             "min": float(error_rates.min()),
             "max": float(error_rates.max()),
         }
 
         if verbose:
-            print(f"  GP trained, best error: {self.gp.y_best:.4f}")
+            print(f"  GP trained, best error: {self.gp.best_error_rate:.4f}")
 
         return self.gp
 
-    def get_best_from_grid(self) -> Tuple[InstructionOnlyPrompt, float]:
+    def get_best_from_grid(
+        self,
+        full_fidelity_only: bool = True,
+    ) -> Tuple[InstructionOnlyPrompt, float]:
         """Get best prompt from loaded grid data.
+
+        Args:
+            full_fidelity_only: If True, only consider prompts evaluated at full fidelity.
+                               This is the default since low-fidelity evaluations are unreliable.
 
         Returns:
             (best_prompt, best_error) tuple
@@ -1076,9 +1178,74 @@ class LIPOHyperbandTrainer:
         if not hasattr(self, 'grid_data') or not self.grid_data:
             raise RuntimeError("No grid data. Call load_from_grid() first.")
 
-        best = self.grid_data[0]  # Already sorted by error
+        # Determine max fidelity from data
+        max_fidelity = max(
+            d.get("fidelity", 1319) for d in self.grid_data
+        )
+
+        if full_fidelity_only:
+            # Filter to full-fidelity prompts only
+            full_fidelity_data = [
+                d for d in self.grid_data
+                if d.get("fidelity", 1319) >= max_fidelity
+            ]
+            if not full_fidelity_data:
+                print(f"WARNING: No full-fidelity ({max_fidelity}) prompts found!")
+                print(f"  Falling back to best from all {len(self.grid_data)} prompts")
+                full_fidelity_data = self.grid_data
+
+            # grid_data is sorted by error, but we need to re-sort filtered data
+            best = min(full_fidelity_data, key=lambda d: d["error_rate"])
+        else:
+            best = self.grid_data[0]  # Already sorted by error
+
+        # Find the index in the instructions list
+        try:
+            best_idx = self.instructions.index(best["instruction_text"])
+        except ValueError:
+            best_idx = 0
+
         best_prompt = InstructionOnlyPrompt(
             instruction=best["instruction_text"],
-            instruction_id=0,
+            instruction_id=best_idx,
+        )
+        return best_prompt, best["error_rate"]
+
+    def get_full_fidelity_best(self) -> Tuple[Optional[InstructionOnlyPrompt], Optional[float]]:
+        """Get best prompt from full-fidelity evaluations only.
+
+        This is the authoritative "best" since low-fidelity evaluations have high variance.
+
+        Returns:
+            (best_prompt, best_error) tuple, or (None, None) if no full-fidelity data
+        """
+        if not hasattr(self, 'grid_data') or not self.grid_data:
+            return None, None
+
+        # Determine max fidelity
+        fidelities = [d.get("fidelity", 1319) for d in self.grid_data]
+        max_fidelity = max(fidelities)
+
+        # Filter to full-fidelity only
+        full_fidelity_data = [
+            d for d in self.grid_data
+            if d.get("fidelity", 1319) >= max_fidelity
+        ]
+
+        if not full_fidelity_data:
+            return None, None
+
+        # Find best among full-fidelity
+        best = min(full_fidelity_data, key=lambda d: d["error_rate"])
+
+        # Find index in instructions list
+        try:
+            best_idx = self.instructions.index(best["instruction_text"])
+        except ValueError:
+            best_idx = 0
+
+        best_prompt = InstructionOnlyPrompt(
+            instruction=best["instruction_text"],
+            instruction_id=best_idx,
         )
         return best_prompt, best["error_rate"]

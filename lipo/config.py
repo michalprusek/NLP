@@ -24,7 +24,7 @@ class Config:
     """
 
     # === APE Generation ===
-    ape_num_instructions: int = 1000
+    ape_num_instructions: int = 2000
     ape_model: str = "Qwen/Qwen2.5-7B-Instruct"
     ape_backend: str = "vllm"
     ape_cache_path: str = "lipo/data/ape_instructions.json"
@@ -64,10 +64,13 @@ class Config:
     use_inversion: bool = True  # Use InvBO inversion loop
     max_inversion_iters: int = 3  # Maximum inversion iterations per step
     gap_threshold: float = 0.1  # Gap threshold for re-inversion (cosine distance)
+    cosine_sim_threshold: float = 0.90  # Min cosine similarity between decoder(z) and GTR(text)
+    max_rejection_attempts: int = 5  # Max attempts to find aligned candidate before falling back
 
     # === Vec2Text ===
     vec2text_beam: int = 8  # Beam width for Vec2Text generation
     vec2text_model: str = "512_tokens"  # "32_tokens" or "512_tokens"
+    vec2text_max_length: int = 128  # Maximum output tokens for Vec2Text
 
     # === Inversion Optimization ===
     inversion_n_steps: int = 100  # Adam optimization steps
@@ -76,9 +79,9 @@ class Config:
     latent_margin: float = 0.2  # Margin for latent bounds expansion
 
     # === GP Retrain (during inference) ===
-    gp_retrain_epochs: int = 500
+    gp_retrain_epochs: int = 1000
     gp_retrain_lr: float = 0.001
-    gp_retrain_patience: int = 10
+    gp_retrain_patience: int = 50  # Increased from 10 to allow better convergence
 
     # === Device/Paths ===
     device: str = "cuda"
