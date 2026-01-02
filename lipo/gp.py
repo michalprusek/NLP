@@ -4,7 +4,7 @@ Provides:
 - InstructionDeepKernelGP: GP with Matern 5/2 kernel on 10D latent features
 - GPWithEI: Wrapper with Expected Improvement computation
 
-Self-contained - no imports from other modules.
+Self-contained within the lipo package (no imports from other lipo/ modules).
 """
 
 import torch
@@ -13,14 +13,14 @@ import gpytorch
 import math
 import numpy as np
 from gpytorch.models import ExactGP
-from gpytorch.likelihoods import GaussianLikelihood
+from gpytorch.likelihoods import GaussianLikelihood, FixedNoiseGaussianLikelihood
 from gpytorch.constraints import Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, Union
 
 
 # =============================================================================
@@ -147,15 +147,15 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         self,
         train_x: torch.Tensor,
         train_y: torch.Tensor,
-        likelihood: GaussianLikelihood,
+        likelihood: Union[GaussianLikelihood, FixedNoiseGaussianLikelihood],
         adapter: nn.Module,
     ):
         """Initialize GP.
 
         Args:
             train_x: Training VAE latents (N, 64)
-            train_y: Training targets (N,) - error rates
-            likelihood: Gaussian likelihood
+            train_y: Training targets (N,) - negated error rates (for BoTorch maximization)
+            likelihood: Gaussian or FixedNoiseGaussian likelihood
             adapter: Trainable adapter MLP (64D → 10D)
         """
         # Ensure train_y is 1D for ExactGP
@@ -227,7 +227,9 @@ class GPWithEI:
 
         # Training data - stored as 64D VAE latents
         self.X_train: Optional[torch.Tensor] = None  # (N, 64) VAE latents
-        self.y_train: Optional[torch.Tensor] = None  # (N,)
+        self.y_train: Optional[torch.Tensor] = None  # (N,) negated error rates (internal)
+        self.fidelity_train: Optional[torch.Tensor] = None  # (N,) sample counts for each observation
+        self._error_rates_original: Optional[torch.Tensor] = None  # (N,) positive error rates for noise computation
 
         # Normalization parameters (for 64D latents)
         self.X_min: Optional[torch.Tensor] = None
@@ -245,14 +247,25 @@ class GPWithEI:
         self,
         embeddings: torch.Tensor,
         error_rates: torch.Tensor,
+        fidelities: Optional[torch.Tensor] = None,
     ):
         """Set training data for GP.
 
         Transforms embeddings to 64D VAE latents using frozen VAE encoder.
 
+        IMPORTANT: We negate error_rates for BoTorch compatibility.
+        BoTorch's qLogExpectedImprovement MAXIMIZES by default:
+            EI(x) = E[max(f(x) - best_f, 0)]
+        To minimize error_rate, we store y = -error_rate so that:
+            - Low error (0.05) → y = -0.05 (closer to 0, better for maximization)
+            - High error (0.30) → y = -0.30 (more negative, worse for maximization)
+        The GP learns to predict -error_rate, and EI seeks to maximize it
+        (i.e., find the least negative value = lowest error).
+
         Args:
             embeddings: Instruction embeddings (N, 768)
-            error_rates: Error rates (N,)
+            error_rates: Error rates (N,) in [0, 1] - will be negated internally
+            fidelities: Sample counts for each observation (N,) - used for heteroscedastic noise
         """
         if self.vae_with_adapter is None:
             raise RuntimeError("vae_with_adapter must be set before setting training data.")
@@ -281,8 +294,56 @@ class GPWithEI:
             )
 
         self.X_train = vae_latents  # (N, 64)
-        self.y_train = error_rates.to(self.device)
-        self.y_best = self.y_train.min().item()
+
+        # Store original error rates for noise computation (needs positive values)
+        self._error_rates_original = error_rates.to(self.device)
+
+        # CRITICAL: Negate error rates for BoTorch maximization → minimization
+        # GP predicts -error_rate, so lower error → higher predicted value
+        self.y_train = -error_rates.to(self.device)
+
+        # y_best is the maximum of negated errors = minimum of original errors
+        self.y_best = self.y_train.max().item()  # max(-error) = -min(error)
+
+        # Store fidelities for heteroscedastic noise computation
+        if fidelities is not None:
+            self.fidelity_train = fidelities.to(self.device)
+        else:
+            # Fidelities are required for heteroscedastic noise computation
+            raise ValueError(
+                f"fidelities must be provided for {len(self.y_train)} observations. "
+                f"Heteroscedastic noise computation requires sample counts. "
+                f"If all observations are full-fidelity, pass fidelities=torch.ones(n) * max_fidelity"
+            )
+
+    def _compute_observation_noise(self, y: torch.Tensor, fidelity: torch.Tensor) -> torch.Tensor:
+        """Compute observation noise variance based on Bernoulli statistics.
+
+        For error_rate measured on n samples, variance is: Var = p(1-p)/n
+        where p is error_rate and n is fidelity (sample count).
+
+        This gives GP information about observation reliability:
+        - Low fidelity (small n) → high variance → less trust
+        - High fidelity (large n) → low variance → more trust
+
+        Args:
+            y: Error rates (N,)
+            fidelity: Sample counts (N,)
+
+        Returns:
+            Observation noise variance for each point (N,)
+        """
+        # Bernoulli variance: p(1-p)/n
+        # Clamp fidelity to minimum of 1 to avoid division by zero
+        safe_fidelity = torch.clamp(fidelity, min=1.0)
+        variance = (y * (1 - y)) / safe_fidelity
+
+        # Clamp to avoid numerical issues:
+        # - min: prevent zero variance (causes numerical issues)
+        # - max: prevent extremely high variance for low-fidelity points
+        variance = torch.clamp(variance, min=1e-6, max=0.1)
+
+        return variance
 
     def train(
         self,
@@ -295,6 +356,9 @@ class GPWithEI:
 
         Trains adapter (64D→10D) and GP kernel jointly.
         VAE encoder is frozen.
+
+        Uses FixedNoiseGaussianLikelihood with heteroscedastic noise based on
+        Bernoulli variance: Var = p(1-p)/n, where n is fidelity (sample count).
 
         Args:
             epochs: Maximum training epochs
@@ -337,9 +401,24 @@ class GPWithEI:
         # Get trainable adapter from VAEWithAdapter
         adapter = self.vae_with_adapter.adapter
 
-        # Noise constraint - allow GP to learn noise in reasonable range
-        self.likelihood = GaussianLikelihood(
-            noise_constraint=Interval(0.001, 0.1)
+        # Compute heteroscedastic noise from Bernoulli variance
+        # Use original (positive) error rates for variance computation: p(1-p)/n
+        # Noise in standardized space: scale by y_std^2
+        raw_noise = self._compute_observation_noise(self._error_rates_original, self.fidelity_train)
+        # Transform noise to standardized space (divide by y_std^2)
+        # Clamp to prevent extreme values when y_std is near zero
+        noise_standardized = raw_noise / (self.y_std ** 2 + 1e-8)
+        noise_standardized = torch.clamp(noise_standardized, max=1.0)
+
+        if verbose:
+            print(f"  Observation noise: min={raw_noise.min():.6f}, max={raw_noise.max():.6f}")
+            print(f"  Fidelity range: {self.fidelity_train.min().item():.0f} - {self.fidelity_train.max().item():.0f}")
+
+        # FixedNoiseGaussianLikelihood with heteroscedastic noise
+        # learn_additional_noise=True allows GP to learn residual noise beyond Bernoulli variance
+        self.likelihood = FixedNoiseGaussianLikelihood(
+            noise=noise_standardized,
+            learn_additional_noise=True,
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
             X_norm, y_norm, self.likelihood, adapter
@@ -385,15 +464,26 @@ class GPWithEI:
                         print(f"  Epoch {epoch + 1}: loss = {loss.item():.4f}")
 
                 except RuntimeError as e:
-                    error_msg = str(e).lower()
-                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
-                        print(f"WARNING: GP training failed - numerical instability")
+                    error_msg = str(e)
+                    # Only handle specific GPyTorch/PyTorch numerical errors
+                    numerical_error_patterns = [
+                        "not positive definite",
+                        "cholesky_cpu",
+                        "cholesky_cuda",
+                        "singular matrix",
+                        "LinAlgError",
+                    ]
+                    is_numerical_error = any(pattern in error_msg for pattern in numerical_error_patterns)
+
+                    if is_numerical_error:
+                        print(f"ERROR: GP training failed - numerical instability")
                         print(f"  Epoch: {epoch + 1}, Training samples: {len(X)}")
                         print(f"  Output range: [{y.min().item():.4f}, {y.max().item():.4f}]")
+                        print(f"  Error type: {type(e).__name__}")
+                        print(f"  Error: {error_msg}")
                         print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
-                        if verbose:
-                            print(f"  Error: {e}")
                         return False
+                    # Re-raise all other RuntimeErrors - they indicate bugs, not expected failures
                     raise
 
         # Store training stats
@@ -407,7 +497,66 @@ class GPWithEI:
         if verbose:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
 
+        # Validation: compute MAE on full-fidelity samples
+        if verbose and self.fidelity_train is not None:
+            self._validate_on_full_fidelity()
+
         return True
+
+    def _validate_on_full_fidelity(self):
+        """Validate GP predictions on full-fidelity samples only.
+
+        Computes MAE between GP predictions and actual error rates for
+        samples with fidelity == max_fidelity (most reliable observations).
+
+        Note: Internally uses negated values but reports in positive error rate space.
+        """
+        if self.X_train is None or self.y_train is None:
+            return
+
+        max_fid = self.fidelity_train.max().item()
+        full_fid_mask = self.fidelity_train >= max_fid * 0.99  # Allow small tolerance
+
+        if full_fid_mask.sum() < 3:
+            print(f"  WARNING: Only {full_fid_mask.sum().item()} full-fidelity samples (need >= 3 for validation)")
+            print(f"    Max fidelity: {max_fid:.0f}, threshold: {max_fid * 0.99:.0f}")
+            print(f"    Consider using more full-fidelity evaluations for reliable GP quality assessment")
+            return
+
+        # Get full-fidelity samples
+        X_val = self.X_train[full_fid_mask]
+        # y_train is negated (-error_rate), use original for comparison
+        y_val_original = self._error_rates_original[full_fid_mask]
+
+        # Normalize X for prediction
+        denom = self.X_max - self.X_min
+        denom[denom == 0] = 1.0
+        X_val_norm = (X_val - self.X_min) / denom
+
+        # Get predictions
+        self.gp_model.eval()
+        self.likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            pred = self.likelihood(self.gp_model(X_val_norm))
+            pred_mean_norm = pred.mean
+
+        # Denormalize predictions (GP predicts -error_rate)
+        pred_neg_error = pred_mean_norm * self.y_std + self.y_mean
+        # Negate to get positive error rate
+        pred_mean = -pred_neg_error
+
+        # Compute MAE against original (positive) error rates
+        mae = (pred_mean - y_val_original).abs().mean().item()
+        rmse = ((pred_mean - y_val_original) ** 2).mean().sqrt().item()
+
+        # Also compute correlation
+        pred_np = pred_mean.cpu().numpy()
+        y_np = y_val_original.cpu().numpy()
+        correlation = float(np.corrcoef(pred_np, y_np)[0, 1]) if len(pred_np) > 1 else 0.0
+
+        print(f"  GP Validation (n={full_fid_mask.sum().item()} full-fidelity):")
+        print(f"    MAE: {mae:.4f}, RMSE: {rmse:.4f}, Corr: {correlation:.4f}")
 
     def predict(
         self,
@@ -415,11 +564,14 @@ class GPWithEI:
     ) -> Tuple[float, float]:
         """Predict error rate for embedding.
 
+        The GP internally predicts -error_rate (for BoTorch maximization).
+        This method negates the prediction to return positive error_rate.
+
         Args:
             embedding: Instruction embedding (768,) or (1, 768)
 
         Returns:
-            (mean, std) predictions in original scale
+            (mean, std) predictions as positive error rates in [0, 1]
         """
         if self.gp_model is None:
             raise RuntimeError("GP not trained.")
@@ -461,11 +613,26 @@ class GPWithEI:
                 ) from e
             raise
 
-        # Denormalize
-        mean = mean_norm * self.y_std.item() + self.y_mean.item()
+        # Denormalize (GP predicts in standardized -error_rate space)
+        neg_error = mean_norm * self.y_std.item() + self.y_mean.item()
         std = std_norm * self.y_std.item()
 
+        # CRITICAL: Negate back to positive error rate
+        # GP predicts -error_rate, so we return -predicted = error_rate
+        mean = -neg_error
+
         return mean, std
+
+    @property
+    def best_error_rate(self) -> Optional[float]:
+        """Get best observed error rate (positive).
+
+        Internally y_best stores -min_error for BoTorch compatibility.
+        This property returns the positive error rate.
+        """
+        if self.y_best is None:
+            return None
+        return -self.y_best  # Negate back: -(-min_error) = min_error
 
     def expected_improvement(
         self,
@@ -474,10 +641,11 @@ class GPWithEI:
     ) -> float:
         """Compute Expected Improvement for embedding.
 
-        EI(x) = (y_best - mu(x)) * Phi(z) + sigma(x) * phi(z)
-        where z = (y_best - mu(x) - xi) / sigma(x)
+        EI(x) = (best - mu(x)) * Phi(z) + sigma(x) * phi(z)
+        where z = (best - mu(x) - xi) / sigma(x)
 
-        We minimize error, so improvement = y_best - mu(x).
+        We minimize error, so improvement = best_error - predicted_error.
+        Uses positive error rates for interpretability.
 
         Args:
             embedding: Instruction embedding (768,)
@@ -489,14 +657,15 @@ class GPWithEI:
         if self.gp_model is None or self.y_best is None:
             return 0.0
 
-        mean, std = self.predict(embedding)
+        mean, std = self.predict(embedding)  # Returns positive error rate
+        best = self.best_error_rate  # Positive error rate
 
         if std <= 0:
-            return self.y_best - mean
+            return max(0.0, best - mean)
 
-        z = (self.y_best - mean - xi) / std
-        ei = (self.y_best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
-        return ei
+        z = (best - mean - xi) / std
+        ei = (best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
+        return max(0.0, ei)
 
     def log_expected_improvement(
         self,
@@ -506,9 +675,10 @@ class GPWithEI:
         """Compute Log Expected Improvement for embedding.
 
         LogEI(x) = log_h(z) + log(σ(x))
-        where z = (y_best - mu(x) - xi) / sigma(x)
+        where z = (best - mu(x) - xi) / sigma(x)
 
         This is numerically stable even when EI values are extremely small.
+        Uses positive error rates for interpretability.
 
         Args:
             embedding: Instruction embedding (768,)
@@ -520,14 +690,16 @@ class GPWithEI:
         if self.gp_model is None or self.y_best is None:
             return float("-inf")
 
-        mean, std = self.predict(embedding)
+        mean, std = self.predict(embedding)  # Returns positive error rate
+        best = self.best_error_rate  # Positive error rate
 
         if std <= 1e-10:
-            if self.y_best > mean:
-                return math.log(self.y_best - mean) if self.y_best - mean > 0 else float("-inf")
+            improvement = best - mean
+            if improvement > 0:
+                return math.log(improvement)
             return float("-inf")
 
-        z = (self.y_best - mean - xi) / std
+        z = (best - mean - xi) / std
 
         # LogEI = log_h(z) + log(σ)
         return log_h(z) + math.log(std)
@@ -540,6 +712,8 @@ class GPWithEI:
         """Compute Log Expected Improvement as a differentiable tensor.
 
         This version maintains gradients for optimization.
+        Note: This is a standalone method for debugging/analysis.
+        The main optimization uses BoTorch's qLogExpectedImprovement.
 
         Args:
             embedding: Instruction embedding (768,) or (1, 768)
@@ -562,7 +736,7 @@ class GPWithEI:
         denom[denom == 0] = 1.0
         X_norm = (embedding - self.X_min) / denom
 
-        # Get GP prediction with gradients
+        # Get GP prediction with gradients (predicts -error_rate)
         self.gp_model.eval()
         self.likelihood.eval()
 
@@ -572,12 +746,16 @@ class GPWithEI:
             var_norm = pred.variance.clamp(min=1e-12)
             std_norm = torch.sqrt(var_norm)
 
-        # Denormalize (keep as tensors)
-        mean = mean_norm * self.y_std + self.y_mean
+        # Denormalize (GP predicts -error_rate)
+        neg_error = mean_norm * self.y_std + self.y_mean
         std = std_norm * self.y_std
 
-        # Compute z-score
-        z = (self.y_best - mean - xi) / std.clamp(min=1e-10)
+        # Convert to positive error rate space for EI
+        mean = -neg_error  # Positive error rate
+        best = -self.y_best  # Positive best error rate (self.y_best = -min_error)
+
+        # Compute z-score: improvement = best - mean (lower error is better)
+        z = (best - mean - xi) / std.clamp(min=1e-10)
 
         # LogEI = log_h(z) + log(σ)
         log_ei = log_h_tensor(z) + torch.log(std.clamp(min=1e-10))
@@ -618,153 +796,83 @@ class GPWithEI:
 
         return latent.squeeze(0)
 
-    def add_observation_and_retrain(
-        self,
-        embedding: torch.Tensor,
-        error_rate: float,
-        epochs: int = 500,
-        patience: int = 10,
-        verbose: bool = False,
-    ) -> bool:
-        """Add new observation and retrain GP with preserved normalization.
-
-        Args:
-            embedding: New instruction embedding (768,)
-            error_rate: Observed error rate for this embedding
-            epochs: Training epochs for retraining
-            patience: Early stopping patience
-            verbose: Print progress
-
-        Returns:
-            True if retraining succeeded
-        """
-        if self.X_train is None or self.y_train is None:
-            raise RuntimeError("No training data. Call set_training_data() first.")
-
-        # Convert embedding (768D) to VAE latent (64D)
-        embedding = embedding.to(self.device)
-        if embedding.dim() == 1:
-            embedding = embedding.unsqueeze(0)
-
-        self.vae_with_adapter.eval()
-        with torch.no_grad():
-            z_vae = self.vae_with_adapter.encode_vae(embedding)
-
-        # Add 64D VAE latent to training data
-        self.X_train = torch.cat([self.X_train, z_vae], dim=0)
-        self.y_train = torch.cat([
-            self.y_train,
-            torch.tensor([error_rate], dtype=torch.float32, device=self.device)
-        ])
-
-        # Update best
-        if error_rate < self.y_best:
-            self.y_best = error_rate
-
-        if verbose:
-            print(f"  GP updated (total samples: {len(self.y_train)})")
-
-        # Incremental retrain with preserved normalization
-        return self._incremental_retrain(
-            epochs=epochs,
-            lr=0.001,
-            patience=patience,
-            verbose=verbose,
-        )
-
-    def _incremental_retrain(
-        self,
-        epochs: int = 500,
-        lr: float = 0.001,
-        patience: int = 10,
-        verbose: bool = False,
-    ) -> bool:
-        """Incremental retrain with updated normalization."""
-        X = self.X_train
-        y = self.y_train
-
-        # Keep input normalization stable
-        denom = self.X_max - self.X_min
-        denom[denom == 0] = 1.0
-        X_norm = (X - self.X_min) / denom
-
-        # Recompute output normalization for new data
-        self.outcome_transform = Standardize(m=1).to(self.device)
-        y_transformed, _ = self.outcome_transform(y.unsqueeze(-1))
-        y_norm = y_transformed.squeeze(-1)
-        self.y_mean = self.outcome_transform.means.squeeze()
-        self.y_std = self.outcome_transform.stdvs.squeeze()
-
-        # Save old GP kernel hyperparameters for warm-start
-        old_covar_state = None
-        old_likelihood_state = None
-        if self.gp_model is not None:
-            old_covar_state = self.gp_model.covar_module.state_dict()
-            old_likelihood_state = self.likelihood.state_dict()
-
-        # Create new likelihood and GP model with existing adapter
-        self.likelihood = GaussianLikelihood(
-            noise_constraint=Interval(0.001, 0.1)
-        ).to(self.device)
-        self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, self.vae_with_adapter.adapter
-        ).to(self.device)
-
-        # Warm-start: restore kernel hyperparameters
-        if old_covar_state is not None:
-            self.gp_model.covar_module.load_state_dict(old_covar_state)
-        if old_likelihood_state is not None:
-            self.likelihood.load_state_dict(old_likelihood_state)
-
-        # Register outcome transform for BoTorch compatibility
-        self.gp_model.outcome_transform = self.outcome_transform
-
-        # Training loop
-        self.gp_model.train()
-        self.likelihood.train()
-
-        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=lr)
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
-
-        best_loss = float("inf")
-        patience_counter = 0
-
-        final_epoch = 0
-        with gpytorch.settings.cholesky_jitter(1e-4):
-            for epoch in range(epochs):
-                try:
-                    optimizer.zero_grad()
-                    output = self.gp_model(X_norm)
-                    loss = -mll(output, y_norm)
-                    loss.backward()
-                    optimizer.step()
-
-                    final_epoch = epoch + 1
-                    if loss.item() < best_loss:
-                        best_loss = loss.item()
-                        patience_counter = 0
-                    else:
-                        patience_counter += 1
-
-                    if patience_counter >= patience:
-                        break
-
-                except RuntimeError as e:
-                    error_msg = str(e).lower()
-                    if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
-                        print(f"WARNING: GP retraining failed - numerical instability")
-                        print(f"  Epoch: {epoch + 1}, Training samples: {self.get_training_size()}")
-                        print(f"  Possible causes: duplicate inputs, near-constant outputs, or ill-conditioned kernel")
-                        if verbose:
-                            print(f"  Error: {e}")
-                        return False
-                    raise
-
-        if verbose:
-            print(f"  GP retrained: {final_epoch} epochs, MLL={-best_loss:.4f}")
-
-        return True
-
     def get_training_size(self) -> int:
         """Get number of training samples."""
         return len(self.y_train) if self.y_train is not None else 0
+
+    def add_observation(
+        self,
+        embedding: torch.Tensor,
+        error_rate: float,
+        fidelity: int = 1319,
+    ):
+        """Add a single observation to training data.
+
+        NOTE: Does NOT retrain - call train() after adding observations.
+
+        Error rate is Laplace-smoothed and negated internally for consistency
+        with training data and BoTorch compatibility.
+
+        Args:
+            embedding: Instruction embedding (768,) or (1, 768)
+            error_rate: Observed error rate (positive, will be smoothed and negated internally)
+            fidelity: Number of samples used for evaluation (for noise estimation and smoothing)
+
+        Raises:
+            ValueError: If error_rate is not in [0, 1] or fidelity < 1
+            RuntimeError: If vae_with_adapter is not set
+        """
+        # Validate inputs
+        if not 0.0 <= error_rate <= 1.0:
+            raise ValueError(
+                f"error_rate must be in [0, 1], got {error_rate}. "
+                f"This indicates a bug in the evaluation pipeline."
+            )
+        if fidelity < 1:
+            raise ValueError(
+                f"fidelity must be >= 1, got {fidelity}. "
+                f"Fidelity represents the number of samples used for evaluation."
+            )
+
+        if self.vae_with_adapter is None:
+            raise RuntimeError("vae_with_adapter must be set before adding observations.")
+
+        # Ensure correct shape
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+        embedding = embedding.to(self.device)
+
+        # Encode to 64D VAE latent
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 64)
+
+        # Apply Laplace smoothing for consistency with training data
+        # Formula: (errors + 1) / (n + 2) - penalizes "lucky guesses" on low-fidelity samples
+        # This matches the smoothing applied in training.py:load_from_hyperband_evaluations()
+        num_errors = error_rate * fidelity
+        smoothed_error = (num_errors + 1) / (fidelity + 2)
+
+        # Store original (smoothed) error rate for noise computation
+        new_error_original = torch.tensor([smoothed_error], dtype=torch.float32, device=self.device)
+        # Negate for GP training (BoTorch maximization)
+        new_y = torch.tensor([-smoothed_error], dtype=torch.float32, device=self.device)
+        new_fid = torch.tensor([fidelity], dtype=torch.float32, device=self.device)
+
+        # Append to existing data
+        if self.X_train is not None:
+            self.X_train = torch.cat([self.X_train, new_z], dim=0)
+            self.y_train = torch.cat([self.y_train, new_y], dim=0)
+            self._error_rates_original = torch.cat([self._error_rates_original, new_error_original], dim=0)
+            self.fidelity_train = torch.cat([self.fidelity_train, new_fid], dim=0)
+        else:
+            self.X_train = new_z
+            self.y_train = new_y
+            self._error_rates_original = new_error_original
+            self.fidelity_train = new_fid
+
+        # Update best: y_best is max(-error) = -min(error)
+        # New observation improves if -error_rate > y_best (i.e., error_rate < -y_best)
+        neg_error = -error_rate
+        if neg_error > (self.y_best or float('-inf')):
+            self.y_best = neg_error

@@ -4,7 +4,7 @@ Provides:
 - Vec2TextInverter: Embedding-to-text inverter (512_tokens model)
 - LIPOHyperbandInference: Complete inference with LogEI optimization
 
-Self-contained - no imports from other modules outside lipo/.
+Self-contained within lipo package. Uses external libs: vec2text, safetensors, huggingface_hub.
 """
 
 import torch
@@ -43,6 +43,8 @@ class IterationRecord:
     log_ei: Optional[float] = None
     gap: float = 0.0
     inversion_iters: int = 1
+    rejection_attempts: int = 0  # How many candidates were rejected before acceptance
+    low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
 
 
 @dataclass
@@ -282,6 +284,7 @@ class LIPOHyperbandInference:
             beam_width=config.vec2text_beam,
             device=str(self.device),
             model_type=config.vec2text_model,
+            max_length=getattr(config, 'vec2text_max_length', 128),
         )
 
         # History
@@ -289,13 +292,14 @@ class LIPOHyperbandInference:
         self.total_llm_calls: int = 0
         self.best_error: float = float("inf")
         self.best_instruction: Optional[str] = None
+        self._consecutive_retrain_failures: int = 0  # Track consecutive GP retrain failures
 
         # Initialize best from Hyperband results or GP
         if initial_best_instruction is not None and initial_best_error is not None:
             self.best_instruction = initial_best_instruction
             self.best_error = initial_best_error
-        elif gp.y_best is not None:
-            self.best_error = gp.y_best
+        elif gp.best_error_rate is not None:
+            self.best_error = gp.best_error_rate  # Use property that returns positive error rate
             # Note: instruction not available from GP alone
 
     def optimize_latent_botorch(
@@ -303,6 +307,7 @@ class LIPOHyperbandInference:
         num_restarts: int = 64,
         raw_samples: int = 1024,
         verbose: bool = True,
+        seed: Optional[int] = None,
     ) -> Tuple[torch.Tensor, float]:
         """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
@@ -318,6 +323,7 @@ class LIPOHyperbandInference:
             num_restarts: Number of L-BFGS-B restarts (default: 64)
             raw_samples: Raw samples for initialization seeding (default: 1024)
             verbose: Print progress
+            seed: Optional random seed for reproducibility
 
         Returns:
             (optimal_latent, log_ei) tuple where:
@@ -347,12 +353,14 @@ class LIPOHyperbandInference:
             device=self.device,
         )
 
-        # Optimize - best_f is best observed error rate (we minimize error)
+        # best_f is the best observed GP target value (-min_error).
+        # Since GP predicts -error_rate, qLogEI maximizes (finds lower error).
         best_f = self.gp.y_best
         z_opt, log_ei = acq_optimizer.optimize(
             best_f=best_f,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
+            seed=seed,
         )
 
         if verbose:
@@ -481,6 +489,9 @@ class LIPOHyperbandInference:
         L-BFGS-B for finding optimal latent points. Includes InvBO inversion
         loop to close the gap between decoder output and Vec2Text reconstruction.
 
+        Also enforces cosine similarity threshold between decoder output and
+        re-encoded text to reject misaligned candidates.
+
         Args:
             iteration: Iteration number
             num_restarts: Number of L-BFGS-B restarts for BoTorch optimization
@@ -497,70 +508,105 @@ class LIPOHyperbandInference:
         if verbose:
             print(f"\n--- Iteration {iteration} ---")
 
-        # Optimize latent using BoTorch qLogEI
-        z_opt, log_ei = self.optimize_latent_botorch(
-            num_restarts=num_restarts,
-            raw_samples=raw_samples,
-            verbose=verbose,
-        )
+        # Get thresholds from config
+        cosine_sim_threshold = getattr(self.config, 'cosine_sim_threshold', 0.90)
+        max_rejection_attempts = getattr(self.config, 'max_rejection_attempts', 5)
 
-        # Denormalize and decode to embedding (64D latent -> 768D embedding)
-        # z_opt is normalized [0,1], need to convert back to VAE latent space
-        x_range = self.gp.X_max - self.gp.X_min
-        z_unnorm = z_opt * x_range + self.gp.X_min
+        # Initialize rejection tracking (in case loop doesn't execute)
+        rejection_attempts = 0
+        low_quality_accepted = False
 
-        self.vae_with_adapter.eval()
-        with torch.no_grad():
-            embedding = self.vae_with_adapter.decode(z_unnorm)
+        # Main loop with rejection for low cosine similarity
+        for attempt in range(max_rejection_attempts):
+            # Optimize latent using BoTorch qLogEI
+            # Use different seed for each attempt to get different candidates
+            attempt_seed = iteration * max_rejection_attempts + attempt
+            z_opt, log_ei = self.optimize_latent_botorch(
+                num_restarts=num_restarts,
+                raw_samples=raw_samples,
+                verbose=verbose and (attempt == 0),  # Only verbose on first attempt
+                seed=attempt_seed,
+            )
 
-        # Invert to text
-        instruction = self.inverter.invert(embedding.clone())
+            # Denormalize and decode to embedding (64D latent -> 768D embedding)
+            # z_opt is normalized [0,1], need to convert back to VAE latent space
+            x_range = self.gp.X_max - self.gp.X_min
+            z_unnorm = z_opt * x_range + self.gp.X_min
 
-        if verbose:
-            print(f"  Generated:\n{instruction}")
+            self.vae_with_adapter.eval()
+            with torch.no_grad():
+                embedding = self.vae_with_adapter.decode(z_unnorm)
 
-        # Inversion loop if enabled - closes the decoder→Vec2Text→GTR gap
-        gap = 0.0
-        inv_iters = 1
-        if use_inversion:
-            for inv_iter in range(max_inversion_iters):
-                inv_result = self.inversion_step(
-                    instruction,
-                    n_steps=self.config.inversion_n_steps,
-                    lr=self.config.inversion_lr,
-                    convergence_threshold=self.config.inversion_convergence_threshold,
-                    verbose=False,
-                )
-                gap = inv_result.gap
+            # Invert to text
+            instruction = self.inverter.invert(embedding.clone())
 
-                if gap <= gap_threshold:
+            if verbose:
+                if attempt > 0:
+                    print(f"  [Attempt {attempt + 1}] Generated:\n{instruction}")
+                else:
+                    print(f"  Generated:\n{instruction}")
+
+            # Inversion loop if enabled - closes the decoder→Vec2Text→GTR gap
+            gap = 0.0
+            inv_iters = 1
+            if use_inversion:
+                for inv_iter in range(max_inversion_iters):
+                    inv_result = self.inversion_step(
+                        instruction,
+                        n_steps=self.config.inversion_n_steps,
+                        lr=self.config.inversion_lr,
+                        convergence_threshold=self.config.inversion_convergence_threshold,
+                        verbose=False,
+                    )
+                    gap = inv_result.gap
+
+                    if gap <= gap_threshold:
+                        if verbose:
+                            print(f"  Gap {gap:.4f} <= {gap_threshold}, accepting")
+                        break
+
                     if verbose:
-                        print(f"  Gap {gap:.4f} <= {gap_threshold}, accepting")
-                    break
+                        print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
 
-                if verbose:
-                    print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
+                    # Re-decode from inverted latent (z_inv is normalized, need denormalization)
+                    z_opt = inv_result.z_inv
+                    z_unnorm = z_opt * x_range + self.gp.X_min
+                    with torch.no_grad():
+                        embedding = self.vae_with_adapter.decode(z_unnorm)
+                    instruction = self.inverter.invert(embedding.clone())
+                    inv_iters += 1
 
-                # Re-decode from inverted latent (z_inv is normalized, need denormalization)
-                z_opt = inv_result.z_inv
-                z_unnorm = z_opt * x_range + self.gp.X_min
-                with torch.no_grad():
-                    embedding = self.vae_with_adapter.decode(z_unnorm)
-                instruction = self.inverter.invert(embedding.clone())
-                inv_iters += 1
+                    if verbose:
+                        print(f"  Re-generated:\n{instruction}")
 
-                if verbose:
-                    print(f"  Re-generated:\n{instruction}")
+            # Re-encode for GP prediction
+            # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
+            reencoded = self.gtr.encode_tensor(instruction)
+            cosine_sim = F.cosine_similarity(
+                embedding.unsqueeze(0), reencoded.unsqueeze(0)
+            ).item()
 
-        # Re-encode for GP prediction
-        # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
-        reencoded = self.gtr.encode_tensor(instruction)
-        cosine_sim = F.cosine_similarity(
-            embedding.unsqueeze(0), reencoded.unsqueeze(0)
-        ).item()
+            if verbose:
+                print(f"  Cosine similarity: {cosine_sim:.4f}")
 
-        if verbose:
-            print(f"  Cosine similarity: {cosine_sim:.4f}")
+            # Check cosine similarity threshold
+            if cosine_sim >= cosine_sim_threshold:
+                # Good alignment, proceed with this candidate
+                rejection_attempts = attempt
+                low_quality_accepted = False
+                break
+            else:
+                if attempt < max_rejection_attempts - 1:
+                    if verbose:
+                        print(f"  REJECTED: Cosine sim {cosine_sim:.4f} < {cosine_sim_threshold:.2f}, "
+                              f"retrying ({attempt + 1}/{max_rejection_attempts})")
+                else:
+                    # Always warn about low-quality acceptance - this affects optimization quality
+                    print(f"WARNING: Accepting low-quality candidate after {max_rejection_attempts} attempts")
+                    print(f"  Cosine similarity: {cosine_sim:.4f} < threshold {cosine_sim_threshold:.2f}")
+                    print(f"  This may indicate: Vec2Text inversion issues or threshold too strict")
+                    rejection_attempts = attempt
+                    low_quality_accepted = True
 
         # GP prediction on re-encoded embedding (matches training data distribution)
         pred_error, pred_std = self.gp.predict(reencoded)
@@ -587,18 +633,43 @@ class LIPOHyperbandInference:
             if verbose:
                 print(f"  NEW BEST!")
 
-        # Add to GP and retrain
-        retrain_success = self.gp.add_observation_and_retrain(
+        # Add observation and retrain GP from scratch
+        # Full retraining ensures normalization parameters and noise values are recomputed
+        # Determine fidelity for new observation
+        if actual_error is not None and self.validation_data is not None:
+            # Actual LLM evaluation - use full fidelity
+            fidelity = len(self.validation_data)
+        elif self.validation_data is not None:
+            # GP prediction only - use lower fidelity to reflect model uncertainty
+            fidelity = 100  # Conservative fidelity for model predictions
+        else:
+            fidelity = 100  # Conservative default when no validation data
+
+        self.gp.add_observation(
             reencoded,
             error_to_use,
+            fidelity=fidelity,
+        )
+        retrain_success = self.gp.train(
             epochs=self.config.gp_retrain_epochs,
             patience=self.config.gp_retrain_patience,
             verbose=verbose,
         )
         if not retrain_success:
-            # GP already logs the warning, just note we're continuing
-            if verbose:
-                print(f"  Continuing with previous GP model")
+            self._consecutive_retrain_failures += 1
+            print(f"ERROR: GP retraining failed at iteration {iteration}")
+            print(f"  Consecutive failures: {self._consecutive_retrain_failures}")
+            print(f"  Training samples: {self.gp.get_training_size()}")
+
+            if self._consecutive_retrain_failures >= 3:
+                raise RuntimeError(
+                    f"GP retraining failed {self._consecutive_retrain_failures} consecutive times. "
+                    f"This indicates a systematic problem with the training data. "
+                    f"Possible causes: duplicate observations, numerical overflow, or ill-conditioned kernel."
+                )
+            print(f"  WARNING: Continuing with previous model (attempt {self._consecutive_retrain_failures}/3)")
+        else:
+            self._consecutive_retrain_failures = 0
 
         record = IterationRecord(
             iteration=iteration,
@@ -612,6 +683,8 @@ class LIPOHyperbandInference:
             log_ei=log_ei,
             gap=gap,
             inversion_iters=inv_iters,
+            rejection_attempts=rejection_attempts,
+            low_quality_accepted=low_quality_accepted,
         )
 
         self.iteration_history.append(record)

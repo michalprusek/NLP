@@ -25,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from scipy.stats import spearmanr
 
+from lipo.hbbops_results import extract_from_hyperband, save_hbbops_results
+
 
 def setup_logging(output_dir: str, timestamp: str) -> Path:
     """Setup logging to both console and file.
@@ -328,6 +330,10 @@ def main():
         "--vec2text-beam", type=int, default=8,
         help="Beam width for Vec2Text generation (default: 8)"
     )
+    parser.add_argument(
+        "--vec2text-max-length", type=int, default=128,
+        help="Maximum output tokens for Vec2Text (default: 128)"
+    )
 
     # Evaluation
     parser.add_argument(
@@ -409,7 +415,7 @@ def main():
         print(f"APE instructions: {args.ape_instructions}")
     print(f"Hyperband: bmin={args.bmin}, eta={args.eta}")
     print(f"InvBO iterations: {args.iterations}")
-    print(f"Vec2Text model: {args.vec2text_model}")
+    print(f"Vec2Text model: {args.vec2text_model}, max_length: {args.vec2text_max_length}")
     print(f"Debug mode: {args.debug}")
     print("=" * 70)
 
@@ -454,6 +460,7 @@ def main():
         gap_threshold=args.gap_threshold,
         vec2text_beam=args.vec2text_beam,
         vec2text_model=args.vec2text_model,
+        vec2text_max_length=args.vec2text_max_length,
         # Device/Paths
         validation_path=args.validation_path,
         device=args.device,
@@ -491,16 +498,23 @@ def main():
         # Train GP on evaluated instructions (225)
         gp = trainer.train_gp_from_grid(verbose=True)
 
-        # Get best instruction from evaluations
-        best_idx = int(trainer.grid_error_rates.index(min(trainer.grid_error_rates)))
-        best_prompt = InstructionOnlyPrompt(
-            instruction=trainer.instructions[best_idx],
-            instruction_id=best_idx,
-        )
-        best_error = trainer.grid_error_rates[best_idx]
+        # Get best instruction from FULL FIDELITY evaluations only
+        # Low-fidelity evaluations have high variance and may be misleading
+        best_prompt, best_error = trainer.get_full_fidelity_best()
+
+        if best_prompt is None:
+            # Fallback: use best from all evaluations (with warning)
+            print("WARNING: No full-fidelity evaluations found!")
+            print("  Using best from all evaluations (may be unreliable)")
+            best_idx = int(trainer.grid_error_rates.index(min(trainer.grid_error_rates)))
+            best_prompt = InstructionOnlyPrompt(
+                instruction=trainer.instructions[best_idx],
+                instruction_id=best_idx,
+            )
+            best_error = trainer.grid_error_rates[best_idx]
 
         print(f"\nSkip HbBoPs loading complete!")
-        print(f"  Best prompt (from evaluations):\n{best_prompt.instruction}")
+        print(f"  Best prompt (from full-fidelity evaluations):\n{best_prompt.instruction}")
         print(f"  Best error: {best_error:.4f}")
 
     # =========================================================================
@@ -526,6 +540,18 @@ def main():
                 llm_evaluator=evaluator,
                 verbose=True,
             )
+
+            # Save HbBoPs evaluation results to separate file
+            if trainer.hyperband is not None:
+                hbbops_results = extract_from_hyperband(trainer.hyperband)
+                hbbops_output_path = f"lipo/data/hbbops_results_{timestamp}.json"
+                save_hbbops_results(
+                    results=hbbops_results,
+                    output_path=hbbops_output_path,
+                    source_log=str(log_path),
+                    max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
+                    instructions=trainer.instructions,
+                )
 
             # Validate ranking
             validation_result = _validate_hyperband_ranking(
@@ -566,12 +592,12 @@ def main():
 
             gp = trainer.train_gp_from_grid(verbose=True)
 
-            # Get best from grid
-            best_prompt, best_error = trainer.get_best_from_grid()
+            # Get best from grid (full-fidelity only by default)
+            best_prompt, best_error = trainer.get_best_from_grid(full_fidelity_only=True)
 
             print(f"\nGrid loading complete!")
-            print(f"  Best prompt (from grid):\n{best_prompt.instruction}")
-            print(f"  Best error (from grid): {best_error:.4f}")
+            print(f"  Best prompt (from full-fidelity grid evaluations):\n{best_prompt.instruction}")
+            print(f"  Best error (full-fidelity): {best_error:.4f}")
 
     # =========================================================================
     # STANDARD MODE: APE → VAE → Hyperband
@@ -605,6 +631,18 @@ def main():
             llm_evaluator=evaluator,
             verbose=True,
         )
+
+        # Save HbBoPs evaluation results to separate file
+        if trainer.hyperband is not None:
+            hbbops_results = extract_from_hyperband(trainer.hyperband)
+            hbbops_output_path = f"lipo/data/hbbops_results_{timestamp}.json"
+            save_hbbops_results(
+                results=hbbops_results,
+                output_path=hbbops_output_path,
+                source_log=str(log_path),
+                max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
+                instructions=trainer.instructions,
+            )
 
         print(f"\nHyperband complete!")
         print(f"  Best prompt:\n{best_prompt.instruction}")
@@ -707,7 +745,6 @@ def _save_results(
             "vae_epochs": args.vae_epochs,
             "vae_annealing": args.vae_annealing,
             "vae_latent_dim": trainer.config.latent_dim,
-            "vae_hidden_dim": trainer.config.vae_hidden_dim,
             "vae_lr": trainer.config.vae_lr,
             "vae_patience": trainer.config.vae_patience,
 

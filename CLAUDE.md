@@ -216,8 +216,12 @@ uv run python -m lipo.run --iterations 10
 ```
 
 **Datasets:**
-- Grid with evaluations: `/home/prusek/NLP/datasets/inversion/grid_100_qend.jsonl`
-- APE instructions with hyperband evaluations: `/home/prusek/NLP/lipo/data/ape_instructions.json` (1000 instructions, 225 evaluated)
+- APE instructions: `lipo/data/ape_instructions.json` (2000 instructions for VAE training)
+- HbBoPs results: `lipo/data/hbbops_results_{timestamp}.json` (evaluated prompts for GP training only)
+
+**Data separation:**
+- **VAE training**: Always uses APE instructions (2000) for diverse latent space coverage
+- **GP training**: Uses only HbBoPs-evaluated prompts with accuracy labels
 
 **Architecture:**
 - VAE: 768D GTR → 64D latent (frozen during GP training)
@@ -231,10 +235,10 @@ z (64D) → Adapter → z_gp (10D) → GP → qLogEI
 
 **Skip HbBoPs Mode:**
 When `--skip-hbbops` is enabled:
-1. Loads all instructions + hyperband_evaluations from JSON
-2. Trains VAE on all 1000+ instructions (diverse coverage)
-3. Trains GP on 225 evaluated instructions only
-4. Runs InvBO inference without additional LLM calls for training
+1. Loads HbBoPs evaluation results from `--hyperband-evals-path`
+2. Loads APE instructions from `lipo/data/ape_instructions.json` for VAE training
+3. Trains GP on evaluated instructions only (with accuracy labels)
+4. Runs InvBO inference without additional LLM calls
 
 ## Coding Standards
 
