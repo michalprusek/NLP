@@ -99,8 +99,8 @@ class InstructionVAE(nn.Module):
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
     Architecture:
-        Encoder: 768D → 64 → 32 → 2*latent_dim (mu + log_var)
-        Decoder: latent_dim → 32 → 64 → 256 → 768D (L2 normalized)
+        Encoder: 768D → 384 → 192 → 2*latent_dim (mu + log_var)
+        Decoder: latent_dim → 192 → 384 → 768D (L2 normalized)
 
     Loss:
         L = recon_loss + beta * KL(q(z|x) || N(0,1))
@@ -134,29 +134,45 @@ class InstructionVAE(nn.Module):
         # Using LayerNorm instead of BatchNorm for:
         # - Stability with batch_size=1
         # - Consistent behavior in train/eval modes
+        # Architecture: 768 → 384 → 192 → 2*latent_dim
+        # Layer before latent (192) is 3× larger than latent (64) for feature mixing
+        # GELU activation for smoother gradients (used in transformers)
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.LayerNorm(64),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.LayerNorm(32),
-            nn.Linear(32, latent_dim * 2),  # mu + log_var
+            nn.Linear(input_dim, 384),
+            nn.GELU(),
+            nn.LayerNorm(384),
+            nn.Linear(384, 192),
+            nn.GELU(),
+            nn.LayerNorm(192),
+            nn.Linear(192, latent_dim * 2),  # mu + log_var
         )
 
-        # Decoder: latent -> 768
+        # Decoder: latent -> 768 (symmetric architecture)
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 32),
-            nn.ReLU(),
-            nn.LayerNorm(32),
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.LayerNorm(64),
-            nn.Linear(64, 256),
-            nn.ReLU(),
-            nn.LayerNorm(256),
-            nn.Linear(256, input_dim),
+            nn.Linear(latent_dim, 192),
+            nn.GELU(),
+            nn.LayerNorm(192),
+            nn.Linear(192, 384),
+            nn.GELU(),
+            nn.LayerNorm(384),
+            nn.Linear(384, input_dim),
         )
+
+        # Initialize weights for stable training
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights for GELU activations.
+
+        Uses Xavier/Glorot uniform initialization which works well with GELU.
+        Prevents posterior collapse in early epochs by ensuring proper
+        gradient flow through the network.
+        """
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode input to latent distribution parameters.

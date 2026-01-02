@@ -227,9 +227,12 @@ class GTRInstructionEncoder:
 Variational autoencoder pro hladký latentní prostor:
 
 ```
-Encoder: 768D → 64 → LayerNorm → 32 → LayerNorm → 2×64 (mu + log_var)
-Decoder: 64 → 32 → LayerNorm → 64 → LayerNorm → 256 → LayerNorm → 768D (L2 normalized)
+Encoder: 768D → 384 → LayerNorm → 192 → LayerNorm → 2×64 (mu + log_var)
+Decoder: 64 → 192 → LayerNorm → 384 → LayerNorm → 768D (L2 normalized)
 ```
+
+**GELU aktivace:** Hladší gradienty než ReLU, používá se v transformerech.
+**Xavier inicializace:** Všechny Linear vrstvy používají `xavier_uniform_` pro stabilní trénink.
 
 **Loss funkce:**
 ```python

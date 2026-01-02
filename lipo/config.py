@@ -39,7 +39,6 @@ class Config:
     vae_patience: int = 500
     vae_lr: float = 0.0003
     vae_batch_size: int = 64
-    vae_hidden_dim: int = 256
     vae_grad_clip: float = 1.0
     vae_eta_min: float = 1e-4
 

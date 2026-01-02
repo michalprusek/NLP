@@ -1184,7 +1184,7 @@
                         </div>
                         <div class="fd-component vae-enc">
                             <span class="fd-comp-name">VAE Enc</span>
-                            <span class="fd-comp-dim">768→64→32→128</span>
+                            <span class="fd-comp-dim">768→384→192→128</span>
                             <span class="fd-comp-desc">μ + log σ²</span>
                         </div>
                         <div class="fd-arrow purple">
@@ -1201,7 +1201,7 @@
                         </div>
                         <div class="fd-component vae-dec">
                             <span class="fd-comp-name">VAE Dec</span>
-                            <span class="fd-comp-dim">64→256→768</span>
+                            <span class="fd-comp-dim">64→192→384→768</span>
                             <span class="fd-comp-desc">L2 norm</span>
                         </div>
                         <div class="fd-arrow">
@@ -1356,8 +1356,8 @@
                             <div class="diagram-box">Recon<div class="dim">768D</div></div>
                         </div>
                     </div>
-                    <div class="ascii-diagram">Enc: 768→64→32→2×64 (μ,σ²)
-Dec: 64→32→64→256→768</div>
+                    <div class="ascii-diagram">Enc: 768→384→192→2×64 (μ,σ²)
+Dec: 64→192→384→768</div>
                 </div>
                 <div class="col">
                     <h3>Loss Function</h3>
