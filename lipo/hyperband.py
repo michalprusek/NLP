@@ -1,4 +1,4 @@
-"""Instruction-only Hyperband for Inverse HbBoPs.
+"""Instruction-only Hyperband for LIPO.
 
 Adapted from hbbops_improved_2 with key changes:
 - No exemplars (instruction-only mode)
@@ -18,13 +18,13 @@ import numpy as np
 import random
 from scipy.stats import norm
 
-from inverse_hbbops.config import Config
-from inverse_hbbops.instruction import InstructionOnlyPrompt
-from inverse_hbbops.encoder import GTRInstructionEncoder, VAEWithAdapter
-from inverse_hbbops.gp import GPWithEI, InstructionDeepKernelGP
+from lipo.config import Config
+from lipo.instruction import InstructionOnlyPrompt
+from lipo.encoder import GTRInstructionEncoder, VAEWithAdapter
+from lipo.gp import GPWithEI, InstructionDeepKernelGP
 
 
-class InverseHbBoPs:
+class LIPOHyperband:
     """Hyperband-based Bayesian Optimization for instruction-only prompts.
 
     Key differences from standard HbBoPs:
@@ -118,6 +118,9 @@ class InverseHbBoPs:
         # LLM call counter
         self.total_llm_calls: int = 0
 
+        # GP training stats (updated each time train_gp is called)
+        self.gp_training_stats: Dict = {}
+
     def _get_device(self, device: str) -> torch.device:
         if device != "auto":
             return torch.device(device)
@@ -160,6 +163,9 @@ class InverseHbBoPs:
 
     def train_gp(self, fidelities: List[int], min_observations: int = 4) -> bool:
         """Train GP on design data from specified fidelity levels.
+
+        Uses same training parameters as inference GP (from config.for_hyperband_gp())
+        for consistency between HbBoPs exploration and final GP training.
 
         Args:
             fidelities: List of fidelity levels to train on (e.g., top 75%)
@@ -205,29 +211,34 @@ class InverseHbBoPs:
             noise_constraint=gpytorch.constraints.Interval(0.001, 0.1)
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, self.vae_with_adapter
+            X_norm, y_norm, self.likelihood, self.vae_with_adapter.adapter
         ).to(self.device)
+
+        # Use same training params as inference GP for consistency
+        gp_params = self.config.for_hyperband_gp()
 
         # Training
         self.gp_model.train()
         self.likelihood.train()
-        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=self.config.gp_lr)
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=gp_params["lr"])
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
 
-        best_loss, patience = float('inf'), 0
+        best_loss, patience_counter = float('inf'), 0
+        final_epoch = 0
         with gpytorch.settings.cholesky_jitter(1e-4):
-            for epoch in range(self.config.gp_epochs):
+            for epoch in range(gp_params["epochs"]):
                 try:
                     optimizer.zero_grad()
                     loss = -mll(self.gp_model(X_norm), y_norm)
                     loss.backward()
                     optimizer.step()
 
+                    final_epoch = epoch + 1
                     if loss.item() < best_loss:
-                        best_loss, patience = loss.item(), 0
+                        best_loss, patience_counter = loss.item(), 0
                     else:
-                        patience += 1
-                    if patience >= self.config.gp_patience:
+                        patience_counter += 1
+                    if patience_counter >= gp_params["patience"]:
                         break
                 except RuntimeError as e:
                     error_msg = str(e).lower()
@@ -238,6 +249,14 @@ class InverseHbBoPs:
                     if epoch == 0:
                         return False
                     break
+
+        # Store training stats for logging
+        self.gp_training_stats = {
+            "epochs_trained": final_epoch,
+            "final_loss": float(best_loss),
+            "early_stopped": patience_counter >= gp_params["patience"],
+            "num_samples": len(fidelity_data),
+        }
 
         return True
 
@@ -303,7 +322,7 @@ class InverseHbBoPs:
         """
         if verbose:
             print("\n" + "=" * 60)
-            print("Starting Inverse HbBoPs (Instruction-Only)")
+            print("Starting LIPO (Instruction-Only)")
             print("=" * 60)
 
         # Run brackets from smax down to 0
@@ -323,24 +342,32 @@ class InverseHbBoPs:
 
             P, V = [], []
 
+            # Minimum fidelity threshold = 75% of full fidelity (top 25% quality data)
+            min_fidelity = int(self.config.min_fidelity_pct * self.nvalid)
+
             for j in range(n):
-                # Train GP on top 75% fidelity levels
-                fidelities = Counter(f for _, _, _, f in self.design_data)
-                trainable = [f for f, c in fidelities.items() if c >= 4]
+                # Train GP only on high-fidelity data (>= min_fidelity_pct of full)
+                high_fidelity_levels = [
+                    f for f in set(f for _, _, _, f in self.design_data)
+                    if f >= min_fidelity
+                ]
+                # Need at least 4 observations at high fidelity
+                trainable = [
+                    f for f in high_fidelity_levels
+                    if sum(1 for _, _, _, ff in self.design_data if ff == f) >= 4
+                ]
 
                 if trainable:
-                    sorted_fidelities = sorted(trainable, reverse=True)
-                    top_75_count = max(1, int(len(sorted_fidelities) * self.config.top_fidelity_pct))
-                    top_75_fidelities = sorted_fidelities[:top_75_count]
-                    self.train_gp(top_75_fidelities)
+                    self.train_gp(trainable)
 
-                # Get vmin_b for acquisition
+                # Get vmin_b for acquisition (best error from high-fidelity data)
                 vmin_b = float('inf')
                 if trainable and self.gp_model:
-                    sorted_fidelities = sorted(trainable, reverse=True)
-                    top_75_count = max(1, int(len(sorted_fidelities) * self.config.top_fidelity_pct))
-                    top_75_fidelities = set(sorted_fidelities[:top_75_count])
-                    vmin_b = min(ve for _, _, ve, f in self.design_data if f in top_75_fidelities)
+                    high_fidelity_errors = [
+                        ve for _, _, ve, f in self.design_data if f >= min_fidelity
+                    ]
+                    if high_fidelity_errors:
+                        vmin_b = min(high_fidelity_errors)
 
                 # Propose and evaluate prompt
                 p_idx = self.get_prompt_proposal(P, vmin_b)
@@ -408,6 +435,9 @@ class InverseHbBoPs:
     def get_gp_with_ei(self) -> GPWithEI:
         """Convert trained GP to GPWithEI for InvBO inference.
 
+        Uses only high-fidelity observations (>= min_fidelity_pct of full fidelity)
+        for consistency with train_gp() during HbBoPs.
+
         Returns:
             GPWithEI instance ready for inference
         """
@@ -417,15 +447,27 @@ class InverseHbBoPs:
         gp_with_ei = GPWithEI(device=str(self.device), latent_dim=10)
         gp_with_ei.vae_with_adapter = self.vae_with_adapter
 
-        # Set training data from design data
-        # Use highest fidelity observations for each prompt
-        best_observations: Dict[int, Tuple[torch.Tensor, float]] = {}
+        # Filter to high-fidelity observations only (>= min_fidelity_pct of full)
+        min_fidelity = int(self.config.min_fidelity_pct * self.nvalid)
+        high_fidelity_levels = sorted(
+            set(f for _, _, _, f in self.design_data if f >= min_fidelity),
+            reverse=True
+        )
+
+        print(f"  GP training data: using fidelity >= {min_fidelity} (levels: {high_fidelity_levels})")
+
+        # Use highest fidelity observations for each prompt (from high-fidelity only)
+        best_observations: Dict[int, Tuple[torch.Tensor, float, int]] = {}
         for p_idx, emb, error, fidelity in self.design_data:
+            if fidelity < min_fidelity:
+                continue
             if p_idx not in best_observations or fidelity > best_observations[p_idx][2]:
                 best_observations[p_idx] = (emb, error, fidelity)
 
         embeddings = torch.stack([obs[0] for obs in best_observations.values()])
         errors = torch.tensor([obs[1] for obs in best_observations.values()], dtype=torch.float32)
+
+        print(f"  GP training data: {len(best_observations)} unique prompts")
 
         gp_with_ei.set_training_data(embeddings, errors)
         gp_with_ei.X_min = self.X_min

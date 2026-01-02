@@ -200,24 +200,24 @@ The file `datasets/inversion/diverse_instructions_1000.json` contains:
 VAE trains only on instructions with evaluations (accuracy + fidelity for contrastive loss).
 Note: Fidelity indicates how many validation samples were used. Lower fidelity = higher uncertainty.
 
-### Inverse HbBoPs (`inverse_hbbops/`)
+### LIPO - Latent Instruction Prompt Optimization (`lipo/`)
 
 **Instruction-only optimization with VAE latent space and adapter-based GP:**
 
 ```bash
 # Skip HbBoPs: Load pre-evaluated results and train GP only (DEFAULT - no LLM needed)
-uv run python -m inverse_hbbops.run --skip-hbbops
+uv run python -m lipo.run --skip-hbbops
 
 # Skip HbBoPs with custom evaluations file
-uv run python -m inverse_hbbops.run --skip-hbbops --hyperband-evals-path path/to/evals.json
+uv run python -m lipo.run --skip-hbbops --hyperband-evals-path path/to/evals.json
 
 # Full run with HbBoPs evaluation (requires LLM)
-uv run python -m inverse_hbbops.run --iterations 10
+uv run python -m lipo.run --iterations 10
 ```
 
 **Datasets:**
 - Grid with evaluations: `/home/prusek/NLP/datasets/inversion/grid_100_qend.jsonl`
-- APE instructions with hyperband evaluations: `/home/prusek/NLP/inverse_hbbops/data/ape_instructions.json` (1000 instructions, 225 evaluated)
+- APE instructions with hyperband evaluations: `/home/prusek/NLP/lipo/data/ape_instructions.json` (1000 instructions, 225 evaluated)
 
 **Architecture:**
 - VAE: 768D GTR → 64D latent (frozen during GP training)

@@ -1,10 +1,10 @@
-"""InvBO inference pipeline for Inverse HbBoPs.
+"""InvBO inference pipeline for LIPO.
 
 Provides:
 - Vec2TextInverter: Embedding-to-text inverter (512_tokens model)
-- InverseHbBoPsInference: Complete inference with LogEI optimization
+- LIPOHyperbandInference: Complete inference with LogEI optimization
 
-Self-contained - no imports from other modules outside inverse_hbbops/.
+Self-contained - no imports from other modules outside lipo/.
 """
 
 import torch
@@ -12,10 +12,10 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
 
-from inverse_hbbops.config import Config
-from inverse_hbbops.encoder import GTRInstructionEncoder, InstructionVAE
-from inverse_hbbops.gp import GPWithEI
-from inverse_hbbops.instruction import InstructionOnlyPrompt
+from lipo.config import Config
+from lipo.encoder import GTRInstructionEncoder, InstructionVAE
+from lipo.gp import GPWithEI
+from lipo.instruction import InstructionOnlyPrompt
 
 
 @dataclass
@@ -232,16 +232,17 @@ class Vec2TextInverter:
         return result.strip()
 
 
-class InverseHbBoPsInference:
-    """InvBO inference pipeline for Inverse HbBoPs.
+class LIPOHyperbandInference:
+    """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 10D latent space using LogEI acquisition
+        1. Optimize in 64D VAE latent space using LogEI acquisition
+           (GP uses adapter: 64D → 10D for kernel computation)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
 
-    Uses 512_tokens Vec2Text model which is more exploratory.
+    Uses 512_tokens Vec2Text model for longer instruction generation.
     """
 
     def __init__(
@@ -323,7 +324,7 @@ class InverseHbBoPsInference:
             - optimal_latent: Best VAE latent tensor, shape (64,)
             - log_ei: Log expected improvement value at optimal point
         """
-        from inverse_hbbops.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
+        from lipo.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
 
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")

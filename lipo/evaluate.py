@@ -1,12 +1,12 @@
-"""GSM8K evaluation for Inverse HbBoPs.
+"""GSM8K evaluation for LIPO.
 
 Provides LLM-based evaluation of instructions with call counting.
-Self-contained - no imports from other modules outside inverse_hbbops/.
+Self-contained - no imports from other modules outside lipo/.
 """
 
 import re
 from typing import List, Dict, Optional, Callable
-from inverse_hbbops.instruction import InstructionOnlyPrompt
+from lipo.instruction import InstructionOnlyPrompt
 
 
 def extract_answer(text: str) -> Optional[float]:

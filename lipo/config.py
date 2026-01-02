@@ -1,4 +1,4 @@
-"""Unified configuration for Inverse HbBoPs pipeline.
+"""Unified configuration for LIPO pipeline.
 
 Single Source of Truth (SSOT) for all parameters.
 CLI arguments in run.py override these defaults.
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    """Unified configuration for Inverse HbBoPs pipeline.
+    """Unified configuration for LIPO pipeline.
 
     Organized into logical sections:
     - APE Generation
@@ -27,7 +27,7 @@ class Config:
     ape_num_instructions: int = 1000
     ape_model: str = "Qwen/Qwen2.5-7B-Instruct"
     ape_backend: str = "vllm"
-    ape_cache_path: str = "inverse_hbbops/data/ape_instructions.json"
+    ape_cache_path: str = "lipo/data/ape_instructions.json"
     ape_batch_size: int = 10
     ape_max_tokens: int = 100
     ape_max_length: int = 500
@@ -52,7 +52,7 @@ class Config:
     bmin: int = 10  # Minimum fidelity (samples)
     eta: float = 2.0  # Downsampling rate
     random_interleaving_prob: float = 0.1
-    top_fidelity_pct: float = 0.75  # Train GP on top 75% fidelity levels
+    min_fidelity_pct: float = 0.75  # Train GP only on fidelity >= 75% of full (top 25%)
 
     # === GP Training ===
     gp_epochs: int = 10000

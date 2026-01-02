@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-"""CLI entry point for Inverse HbBoPs pipeline.
+"""CLI entry point for LIPO pipeline.
 
 Full pipeline: APE → VAE → Hyperband → InvBO Inference
 
 Usage:
     # Full run with 1000 instructions
-    uv run python -m inverse_hbbops.run --iterations 10 --ape-instructions 1000
+    uv run python -m lipo.run --iterations 10 --ape-instructions 1000
 
     # Debug with 10 instructions (fast)
-    uv run python -m inverse_hbbops.run --iterations 1 --ape-instructions 10 --debug
+    uv run python -m lipo.run --iterations 1 --ape-instructions 10 --debug
 
     # Skip APE (use cached instructions)
-    uv run python -m inverse_hbbops.run --skip-ape
+    uv run python -m lipo.run --skip-ape
 
     # Hyperband only (no inference)
-    uv run python -m inverse_hbbops.run --hyperband-only
+    uv run python -m lipo.run --hyperband-only
 """
 
 import argparse
@@ -105,7 +105,7 @@ def _validate_hyperband_ranking(trainer, grid_path: str, verbose: bool = True) -
     """Compare Hyperband ranking with grid ground truth.
 
     Args:
-        trainer: Trained InverseHbBoPsTrainer with Hyperband results
+        trainer: Trained LIPOHyperbandTrainer with Hyperband results
         grid_path: Path to original grid JSONL
         verbose: Print detailed results
 
@@ -194,7 +194,7 @@ def _validate_hyperband_ranking(trainer, grid_path: str, verbose: bool = True) -
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inverse HbBoPs: Instruction-only Hyperband + VAE + InvBO inference",
+        description="LIPO: Instruction-only Hyperband + VAE + InvBO inference",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -209,7 +209,7 @@ def main():
         help="Model for APE generation"
     )
     parser.add_argument(
-        "--ape-cache", type=str, default="inverse_hbbops/data/ape_instructions.json",
+        "--ape-cache", type=str, default="lipo/data/ape_instructions.json",
         help="Path to APE instructions cache"
     )
     parser.add_argument(
@@ -254,8 +254,8 @@ def main():
     )
     parser.add_argument(
         "--hyperband-evals-path", type=str,
-        default="inverse_hbbops/data/ape_instructions.json",
-        help="Path to JSON with hyperband_evaluations (default: inverse_hbbops/data/ape_instructions.json)"
+        default="lipo/data/ape_instructions.json",
+        help="Path to JSON with hyperband_evaluations (default: lipo/data/ape_instructions.json)"
     )
 
     # GP training
@@ -359,7 +359,7 @@ def main():
 
     # Output
     parser.add_argument(
-        "--output-dir", type=str, default="inverse_hbbops/results",
+        "--output-dir", type=str, default="lipo/results",
         help="Output directory for results"
     )
 
@@ -394,7 +394,7 @@ def main():
 
     mode = "skip_hbbops" if args.skip_hbbops else ("grid" if args.load_grid else "standard")
     print("=" * 70)
-    print("INVERSE HbBoPs PIPELINE")
+    print("LIPO PIPELINE")
     print("=" * 70)
     if args.skip_hbbops:
         print(f"Mode: SKIP HBBOPS (load pre-evaluated)")
@@ -420,11 +420,11 @@ def main():
         args.vae_annealing = 50
 
     # Import after arg parsing for faster --help
-    from inverse_hbbops.config import Config
-    from inverse_hbbops.training import InverseHbBoPsTrainer
-    from inverse_hbbops.inference import InverseHbBoPsInference
-    from inverse_hbbops.evaluate import GSM8KEvaluator
-    from inverse_hbbops.instruction import InstructionOnlyPrompt
+    from lipo.config import Config
+    from lipo.training import LIPOHyperbandTrainer
+    from lipo.inference import LIPOHyperbandInference
+    from lipo.evaluate import GSM8KEvaluator
+    from lipo.instruction import InstructionOnlyPrompt
 
     # =========================================================================
     # Build Config from CLI args (SSOT)
@@ -463,7 +463,7 @@ def main():
     # Create Trainer
     # =========================================================================
 
-    trainer = InverseHbBoPsTrainer(config)
+    trainer = LIPOHyperbandTrainer(config)
 
     # Create evaluator (might be needed for Hyperband validation)
     evaluator = GSM8KEvaluator(
@@ -626,7 +626,7 @@ def main():
     print("Starting InvBO Inference")
     print("=" * 60)
 
-    inference = InverseHbBoPsInference(
+    inference = LIPOHyperbandInference(
         gp=gp,
         vae=trainer.vae,
         config=config,

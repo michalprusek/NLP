@@ -1,7 +1,7 @@
-"""Instruction-only prompt dataclass for Inverse HbBoPs.
+"""Instruction-only prompt dataclass for LIPO.
 
 Unlike standard HbBoPs which uses (instruction, exemplar) pairs,
-Inverse HbBoPs operates on instructions only.
+LIPO operates on instructions only.
 """
 
 from dataclasses import dataclass
