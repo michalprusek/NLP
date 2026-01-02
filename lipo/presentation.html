@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIPO - Latent Instruction Prompt Optimization</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #05080f;
+            --bg-card: #0c1018;
+            --bg-elevated: #141b26;
+            --accent-cyan: #00e5c7;
+            --accent-cyan-dim: #00e5c720;
+            --accent-purple: #a78bfa;
+            --accent-pink: #f472b6;
+            --accent-orange: #fb923c;
+            --accent-green: #4ade80;
+            --text-primary: #f0f4f8;
+            --text-secondary: #94a3b8;
+            --text-dim: #475569;
+            --border-subtle: #1e293b;
+            --glow-cyan: 0 0 40px rgba(0, 229, 199, 0.25);
+            --glow-purple: 0 0 40px rgba(167, 139, 250, 0.2);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        /* Scanline overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.02) 2px,
+                rgba(0, 0, 0, 0.02) 4px
+            );
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        /* Presentation container */
+        .presentation {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Slides - viewport-constrained */
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 60px 80px;
+            opacity: 0;
+            transform: translateX(80px);
+            transition: all 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .slide.active {
+            opacity: 1;
+            transform: translateX(0);
+            pointer-events: all;
+        }
+
+        .slide.prev {
+            transform: translateX(-80px);
+        }
+
+        /* Slide content wrapper for scaling */
+        .slide-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            max-height: 100%;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        /* Typography - compact */
+        .slide-title {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-cyan) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .slide-subtitle {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            font-weight: 300;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+        }
+
+        h2 {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: clamp(2rem, 4vw, 2.5rem);
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--accent-cyan);
+            margin-bottom: 0.8rem;
+            letter-spacing: 0.05em;
+        }
+
+        p {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            max-width: 700px;
+            text-align: center;
+            line-height: 1.6;
+        }
+
+        /* Hero slide */
+        .hero {
+            text-align: center;
+        }
+
+        .hero .slide-title {
+            font-size: clamp(3rem, 7vw, 5rem);
+            margin-bottom: 0.3rem;
+        }
+
+        .hero-tagline {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.5rem;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--accent-cyan);
+            margin-top: 1.5rem;
+            opacity: 0.9;
+        }
+
+        .hero-meta {
+            margin-top: 3rem;
+            display: flex;
+            gap: 2rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .hero-meta span {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .hero-meta .dot {
+            width: 5px;
+            height: 5px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* Code blocks - compact */
+        .code-block {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            padding: 1rem 1.5rem;
+            font-size: 0.8rem;
+            line-height: 1.6;
+            max-width: 100%;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .code-block::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+        }
+
+        .code-block .comment { color: var(--text-dim); }
+        .code-block .keyword { color: var(--accent-purple); }
+        .code-block .function { color: var(--accent-cyan); }
+        .code-block .number { color: var(--accent-orange); }
+        .code-block .string { color: var(--accent-pink); }
+
+        /* Architecture diagram - horizontal compact */
+        .architecture {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .arch-phase {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .arch-phase:hover {
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .arch-phase-num {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            opacity: 0.5;
+        }
+
+        .arch-phase-content h4 {
+            font-size: 1rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 0.2rem;
+        }
+
+        .arch-phase-content span {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+        }
+
+        .arch-arrow-h {
+            color: var(--accent-cyan);
+            font-size: 1.2rem;
+            opacity: 0.6;
+        }
+
+        /* Diagram boxes - compact */
+        .diagram-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .diagram-row {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .diagram-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 0.6rem 1rem;
+            text-align: center;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+        }
+
+        .diagram-box.highlight {
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .diagram-box.purple {
+            border-color: var(--accent-purple);
+            box-shadow: var(--glow-purple);
+        }
+
+        .diagram-box .dim {
+            font-size: 0.75rem;
+            color: var(--accent-cyan);
+            margin-top: 0.2rem;
+        }
+
+        .diagram-arrow {
+            color: var(--text-dim);
+            font-size: 1.2rem;
+        }
+
+        /* Stats grid - compact */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            max-width: 700px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 1.2rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--accent-cyan);
+        }
+
+        .stat-value {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            margin-bottom: 0.3rem;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        /* Feature list - compact */
+        .feature-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            max-width: 650px;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1.2rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            padding: 1rem 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .feature-item:hover {
+            border-color: var(--accent-purple);
+            transform: translateX(5px);
+        }
+
+        .feature-icon {
+            font-size: 1.2rem;
+            width: 35px;
+            text-align: center;
+            flex-shrink: 0;
+            color: var(--accent-cyan);
+        }
+
+        .feature-content h4 {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 0.2rem;
+        }
+
+        .feature-content p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-align: left;
+            line-height: 1.5;
+        }
+
+        /* Two column layout - compact */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2.5rem;
+            width: 100%;
+            max-width: 950px;
+        }
+
+        .col {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        /* Formula block */
+        .formula {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.5rem;
+            font-style: italic;
+            color: var(--text-primary);
+            text-align: center;
+            padding: 1rem;
+            background: var(--bg-card);
+            border-radius: 10px;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .formula sub, .formula sup {
+            font-size: 0.7em;
+        }
+
+        /* Progress bar */
+        .progress-container {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            z-index: 100;
+        }
+
+        .progress-bar {
+            width: 180px;
+            height: 2px;
+            background: var(--border-subtle);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+            transition: width 0.4s ease;
+        }
+
+        .slide-counter {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            font-weight: 300;
+            min-width: 45px;
+        }
+
+        /* Navigation hints */
+        .nav-hint {
+            position: fixed;
+            bottom: 25px;
+            right: 40px;
+            display: flex;
+            gap: 0.4rem;
+            z-index: 100;
+        }
+
+        .nav-key {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            font-size: 1rem;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .nav-key:hover, .nav-key.active {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        /* Placeholder slide */
+        .placeholder-box {
+            width: 100%;
+            max-width: 700px;
+            height: 250px;
+            border: 2px dashed var(--border-subtle);
+            border-radius: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.8rem;
+            color: var(--text-dim);
+        }
+
+        .placeholder-box .icon {
+            font-size: 2.5rem;
+            opacity: 0.5;
+        }
+
+        /* ASCII art - compact */
+        .ascii-diagram {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            line-height: 1.35;
+            color: var(--accent-cyan);
+            background: var(--bg-card);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border: 1px solid var(--border-subtle);
+            white-space: pre;
+            text-align: left;
+        }
+
+        /* Summary grid */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+            max-width: 800px;
+        }
+
+        .summary-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            padding: 1.2rem;
+        }
+
+        .summary-item h4 {
+            color: var(--accent-cyan);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.4rem;
+        }
+
+        .summary-item p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-align: left;
+            line-height: 1.5;
+        }
+
+        /* Decorative elements */
+        .corner-decoration {
+            position: fixed;
+            width: 100px;
+            height: 100px;
+            pointer-events: none;
+            z-index: 50;
+        }
+
+        .corner-decoration.top-left {
+            top: 20px;
+            left: 20px;
+            border-top: 1px solid var(--border-subtle);
+            border-left: 1px solid var(--border-subtle);
+        }
+
+        .corner-decoration.bottom-right {
+            bottom: 20px;
+            right: 20px;
+            border-bottom: 1px solid var(--border-subtle);
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        .accent-glow {
+            position: fixed;
+            width: 500px;
+            height: 500px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--accent-cyan-dim) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: -1;
+            opacity: 0.4;
+        }
+
+        .accent-glow.top {
+            top: -250px;
+            right: -150px;
+        }
+
+        .accent-glow.bottom {
+            bottom: -250px;
+            left: -150px;
+            background: radial-gradient(circle, rgba(167, 139, 250, 0.08) 0%, transparent 70%);
+        }
+
+        /* ========================================
+           INVERSION LOOP VISUAL DIAGRAM
+           ======================================== */
+        .inversion-diagram {
+            width: 100%;
+            max-width: 850px;
+            position: relative;
+        }
+
+        .inversion-flow {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        /* Main pipeline row */
+        .inv-pipeline {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: linear-gradient(90deg, var(--bg-card) 0%, var(--bg-elevated) 50%, var(--bg-card) 100%);
+            padding: 1.2rem 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-subtle);
+            position: relative;
+        }
+
+        .inv-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.8rem 1rem;
+            border-radius: 8px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-subtle);
+            min-width: 90px;
+            transition: all 0.3s ease;
+        }
+
+        .inv-node.latent {
+            border-color: var(--accent-purple);
+            box-shadow: 0 0 20px rgba(167, 139, 250, 0.15);
+        }
+
+        .inv-node.embedding {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 20px rgba(0, 229, 199, 0.15);
+        }
+
+        .inv-node.text {
+            border-color: var(--accent-green);
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.15);
+        }
+
+        .inv-node-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .inv-node-dim {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+        }
+
+        .inv-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.15rem;
+            color: var(--text-dim);
+            font-size: 0.65rem;
+        }
+
+        .inv-arrow-icon {
+            font-size: 1rem;
+            color: var(--accent-cyan);
+            opacity: 0.7;
+        }
+
+        /* Feedback loop */
+        .inv-feedback {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.5rem;
+            background: var(--bg-card);
+            border: 1px dashed var(--accent-orange);
+            border-radius: 10px;
+            position: relative;
+        }
+
+        .inv-feedback::before {
+            content: '↻ Inversion Loop';
+            position: absolute;
+            top: -10px;
+            left: 20px;
+            background: var(--bg-deep);
+            padding: 0 0.5rem;
+            font-size: 0.7rem;
+            color: var(--accent-orange);
+            font-weight: 500;
+        }
+
+        .inv-step {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .inv-step-num {
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-orange);
+            color: var(--bg-deep);
+            border-radius: 50%;
+            font-size: 0.7rem;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .inv-condition {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.6rem 1rem;
+            background: var(--bg-elevated);
+            border-radius: 6px;
+            border: 1px solid var(--border-subtle);
+            font-size: 0.75rem;
+        }
+
+        .inv-condition-icon {
+            color: var(--accent-pink);
+        }
+
+        .inv-condition code {
+            color: var(--accent-cyan);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Stats row for inversion */
+        .inv-stats {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .inv-stat {
+            display: flex;
+            align-items: baseline;
+            gap: 0.4rem;
+        }
+
+        .inv-stat-value {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+
+        .inv-stat-label {
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+        }
+
+        /* Animation delays */
+        .slide.active .arch-phase { animation: slideIn 0.4s both; }
+        .slide.active .arch-phase:nth-child(1) { animation-delay: 0.05s; }
+        .slide.active .arch-phase:nth-child(2) { animation-delay: 0.1s; }
+        .slide.active .arch-phase:nth-child(3) { animation-delay: 0.15s; }
+        .slide.active .arch-phase:nth-child(4) { animation-delay: 0.2s; }
+        .slide.active .arch-phase:nth-child(5) { animation-delay: 0.25s; }
+        .slide.active .arch-phase:nth-child(6) { animation-delay: 0.3s; }
+        .slide.active .arch-phase:nth-child(7) { animation-delay: 0.35s; }
+
+        .slide.active .feature-item:nth-child(1) { animation: slideIn 0.4s 0.1s both; }
+        .slide.active .feature-item:nth-child(2) { animation: slideIn 0.4s 0.15s both; }
+        .slide.active .feature-item:nth-child(3) { animation: slideIn 0.4s 0.2s both; }
+
+        .slide.active .stat-card:nth-child(1) { animation: fadeUp 0.4s 0.1s both; }
+        .slide.active .stat-card:nth-child(2) { animation: fadeUp 0.4s 0.15s both; }
+        .slide.active .stat-card:nth-child(3) { animation: fadeUp 0.4s 0.2s both; }
+
+        .slide.active .inv-pipeline { animation: fadeUp 0.5s 0.1s both; }
+        .slide.active .inv-feedback { animation: fadeUp 0.5s 0.25s both; }
+        .slide.active .inv-stats { animation: fadeUp 0.5s 0.4s both; }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="corner-decoration top-left"></div>
+    <div class="corner-decoration bottom-right"></div>
+    <div class="accent-glow top"></div>
+    <div class="accent-glow bottom"></div>
+
+    <div class="presentation">
+        <!-- Slide 1: Title -->
+        <div class="slide hero active" data-slide="1">
+            <p class="slide-subtitle">Latent Instruction Prompt Optimization</p>
+            <h1 class="slide-title">LIPO</h1>
+            <p class="hero-tagline">"Optimizing prompts in smooth latent space"</p>
+            <div class="hero-meta">
+                <span><span class="dot"></span> VAE Latent Space</span>
+                <span><span class="dot"></span> Hyperband Multi-Fidelity</span>
+                <span><span class="dot"></span> Vec2Text Inversion</span>
+            </div>
+        </div>
+
+        <!-- Slide 2: Problem -->
+        <div class="slide" data-slide="2">
+            <h2>The Problem</h2>
+            <p style="margin-bottom: 2rem;">
+                Manual prompt engineering is slow, inconsistent, and doesn't scale.<br>
+                We need automated discovery of optimal instructions.
+            </p>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">1000+</div>
+                    <div class="stat-label">Candidate prompts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">768D</div>
+                    <div class="stat-label">Embedding space</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">∞</div>
+                    <div class="stat-label">Search space</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 3: Architecture -->
+        <div class="slide" data-slide="3">
+            <h2>Pipeline Architecture</h2>
+            <div class="architecture">
+                <div class="arch-phase">
+                    <span class="arch-phase-num">01</span>
+                    <div class="arch-phase-content">
+                        <h4>APE Generation</h4>
+                        <span>1000 diverse instructions</span>
+                    </div>
+                </div>
+                <span class="arch-arrow-h">→</span>
+                <div class="arch-phase">
+                    <span class="arch-phase-num">02</span>
+                    <div class="arch-phase-content">
+                        <h4>VAE Training</h4>
+                        <span>768D → 64D latent</span>
+                    </div>
+                </div>
+                <span class="arch-arrow-h">→</span>
+                <div class="arch-phase">
+                    <span class="arch-phase-num">03</span>
+                    <div class="arch-phase-content">
+                        <h4>Hyperband</h4>
+                        <span>Multi-fidelity eval</span>
+                    </div>
+                </div>
+                <span class="arch-arrow-h">→</span>
+                <div class="arch-phase">
+                    <span class="arch-phase-num">04</span>
+                    <div class="arch-phase-content">
+                        <h4>InvBO</h4>
+                        <span>Latent optimization</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 4: VAE -->
+        <div class="slide" data-slide="4">
+            <h2>Variational Autoencoder</h2>
+            <div class="two-col">
+                <div class="col">
+                    <h3>Architecture</h3>
+                    <div class="diagram-container">
+                        <div class="diagram-row">
+                            <div class="diagram-box">GTR<div class="dim">768D</div></div>
+                            <span class="diagram-arrow">→</span>
+                            <div class="diagram-box highlight">Latent<div class="dim">64D</div></div>
+                            <span class="diagram-arrow">→</span>
+                            <div class="diagram-box">Recon<div class="dim">768D</div></div>
+                        </div>
+                    </div>
+                    <div class="ascii-diagram">Enc: 768→64→32→2×64 (μ,σ²)
+Dec: 64→32→64→256→768</div>
+                </div>
+                <div class="col">
+                    <h3>Loss Function</h3>
+                    <div class="formula">ℒ = ℒ<sub>recon</sub> + β·KL</div>
+                    <div class="code-block">
+<span class="comment"># Cosine reconstruction</span>
+<span class="function">recon</span> = <span class="number">1</span> - <span class="function">cos_sim</span>(x, x̂)
+
+<span class="comment"># KL to N(0,1)</span>
+<span class="function">kl</span> = -<span class="number">0.5</span>*<span class="function">sum</span>(<span class="number">1</span>+logσ²-μ²-σ²)
+
+<span class="comment"># Annealing: β = 0 → 0.003</span>
+β = <span class="number">0.003</span> * epoch/<span class="number">500</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 5: Hyperband -->
+        <div class="slide" data-slide="5">
+            <h2>Hyperband Multi-Fidelity</h2>
+            <div class="two-col">
+                <div class="col">
+                    <h3>Successive Halving</h3>
+                    <div class="ascii-diagram">Bracket s=7:
+┌──────────────────────────┐
+│ n=128 @ b=10 samples     │
+│    ↓ keep top 64         │
+│ n=64  @ b=20 samples     │
+│    ↓ keep top 32         │
+│ ...                      │
+│ n=1   @ b=1319 (full)    │
+└──────────────────────────┘</div>
+                </div>
+                <div class="col">
+                    <h3>Parameters</h3>
+                    <div class="stats-grid" style="grid-template-columns: 1fr 1fr; max-width: 300px;">
+                        <div class="stat-card">
+                            <div class="stat-value">10</div>
+                            <div class="stat-label">b<sub>min</sub></div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">2.0</div>
+                            <div class="stat-label">η</div>
+                        </div>
+                    </div>
+                    <p style="margin-top: 1rem; text-align: left; font-size: 0.85rem;">
+                        GP trained on high-fidelity only:<br>
+                        <span style="color: var(--accent-cyan);">≥ 75% of full</span> (top 25%)
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 6: GP -->
+        <div class="slide" data-slide="6">
+            <h2>Deep Kernel GP</h2>
+            <div class="diagram-container" style="margin-bottom: 1.5rem;">
+                <div class="diagram-row">
+                    <div class="diagram-box">VAE<div class="dim">64D</div></div>
+                    <span class="diagram-arrow">→</span>
+                    <div class="diagram-box purple">Adapter<div class="dim">64→10</div></div>
+                    <span class="diagram-arrow">→</span>
+                    <div class="diagram-box highlight">GP<div class="dim">10D</div></div>
+                    <span class="diagram-arrow">→</span>
+                    <div class="diagram-box">Matérn<div class="dim">5/2</div></div>
+                </div>
+            </div>
+            <div class="code-block" style="max-width: 700px;">
+<span class="keyword">class</span> <span class="function">InstructionDeepKernelGP</span>(ExactGP):
+    mean = <span class="function">ZeroMean</span>()
+    covar = <span class="function">ScaleKernel</span>(<span class="function">MaternKernel</span>(nu=<span class="number">2.5</span>, ard=<span class="number">10</span>))
+
+    <span class="keyword">def</span> <span class="function">forward</span>(x):  <span class="comment"># x: (batch, 64)</span>
+        z = <span class="function">adapter</span>(x)  <span class="comment"># → (batch, 10)</span>
+        <span class="keyword">return</span> MultivariateNormal(mean(z), covar(z))
+            </div>
+        </div>
+
+        <!-- Slide 7: InvBO -->
+        <div class="slide" data-slide="7">
+            <h2>InvBO Inference</h2>
+            <div class="two-col">
+                <div class="col">
+                    <h3>BoTorch qLogEI</h3>
+                    <div class="code-block">
+<span class="comment"># Multi-start L-BFGS-B</span>
+z_opt = <span class="function">optimize_acqf</span>(
+    acq=<span class="function">qLogEI</span>(model, best_f),
+    bounds=bounds,  <span class="comment"># (2,64)</span>
+    restarts=<span class="number">64</span>,
+    raw_samples=<span class="number">1024</span>,
+)
+
+<span class="comment"># Decode and invert</span>
+emb = vae.<span class="function">decode</span>(z_opt)
+txt = vec2text.<span class="function">invert</span>(emb)
+                    </div>
+                </div>
+                <div class="col">
+                    <h3>LogEI Stability</h3>
+                    <div class="formula">LogEI = log h(z) + log σ</div>
+                    <p style="text-align: left; font-size: 0.8rem; margin-top: 0.8rem;">
+                        Standard EI underflows near optimum.<br><br>
+                        <span style="color: var(--accent-cyan);">Three branches:</span><br>
+                        • z > -1: Direct<br>
+                        • -1/√ε < z ≤ -1: erfcx<br>
+                        • z ≤ -1/√ε: Asymptotic
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 8: Inversion Loop - VISUAL DIAGRAM -->
+        <div class="slide" data-slide="8">
+            <h2>Inversion Loop</h2>
+            <p style="margin-bottom: 1.5rem; font-size: 0.9rem;">
+                Closing the gap between decoder output and Vec2Text reconstruction
+            </p>
+
+            <div class="inversion-diagram">
+                <div class="inversion-flow">
+                    <!-- Main forward pipeline -->
+                    <div class="inv-pipeline">
+                        <div class="inv-node latent">
+                            <span class="inv-node-label">z_opt</span>
+                            <span class="inv-node-dim">64D latent</span>
+                        </div>
+                        <div class="inv-arrow">
+                            <span class="inv-arrow-icon">→</span>
+                            <span>decode</span>
+                        </div>
+                        <div class="inv-node embedding">
+                            <span class="inv-node-label">embedding</span>
+                            <span class="inv-node-dim">768D</span>
+                        </div>
+                        <div class="inv-arrow">
+                            <span class="inv-arrow-icon">→</span>
+                            <span>Vec2Text</span>
+                        </div>
+                        <div class="inv-node text">
+                            <span class="inv-node-label">text</span>
+                            <span class="inv-node-dim">instruction</span>
+                        </div>
+                        <div class="inv-arrow">
+                            <span class="inv-arrow-icon">→</span>
+                            <span>GTR</span>
+                        </div>
+                        <div class="inv-node embedding">
+                            <span class="inv-node-label">target</span>
+                            <span class="inv-node-dim">768D</span>
+                        </div>
+                    </div>
+
+                    <!-- Feedback loop -->
+                    <div class="inv-feedback">
+                        <div class="inv-step">
+                            <span class="inv-step-num">1</span>
+                            <span>Find z<sub>inv</sub>: min ‖dec(z) - target‖</span>
+                        </div>
+                        <div class="inv-step">
+                            <span class="inv-step-num">2</span>
+                            <span>Compute gap = 1 - cos_sim</span>
+                        </div>
+                        <div class="inv-condition">
+                            <span class="inv-condition-icon">⟳</span>
+                            <span>if <code>gap > 0.1</code>: re-decode & repeat</span>
+                        </div>
+                    </div>
+
+                    <!-- Stats -->
+                    <div class="inv-stats">
+                        <div class="inv-stat">
+                            <span class="inv-stat-value">100</span>
+                            <span class="inv-stat-label">Adam steps</span>
+                        </div>
+                        <div class="inv-stat">
+                            <span class="inv-stat-value">0.1</span>
+                            <span class="inv-stat-label">Gap threshold</span>
+                        </div>
+                        <div class="inv-stat">
+                            <span class="inv-stat-value">3</span>
+                            <span class="inv-stat-label">Max iterations</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 9: Design Decisions -->
+        <div class="slide" data-slide="9">
+            <h2>Key Design Decisions</h2>
+            <div class="feature-list">
+                <div class="feature-item">
+                    <div class="feature-icon">64D</div>
+                    <div class="feature-content">
+                        <h4>Why 64D VAE Latent?</h4>
+                        <p>Smooth optimization surface vs 768D. KL annealing prevents collapse. Cosine loss is rotation-invariant.</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">10D</div>
+                    <div class="feature-content">
+                        <h4>Why Adapter 64D → 10D?</h4>
+                        <p>Efficient GP modeling, faster BoTorch. Trainable adapter learns task features. VAE stays frozen.</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <div class="feature-icon">∿</div>
+                    <div class="feature-content">
+                        <h4>Why LogEI?</h4>
+                        <p>Standard EI underflows for tiny improvements. Three-branch computation ensures stability near optimum.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Slide 10: Results Placeholder -->
+        <div class="slide" data-slide="10">
+            <h2>Results</h2>
+            <div class="placeholder-box">
+                <div class="icon">📊</div>
+                <p>Results will be added here</p>
+                <p style="font-size: 0.8rem; color: var(--text-dim);">Error rates, comparisons, generated instructions</p>
+            </div>
+        </div>
+
+        <!-- Slide 11: Summary -->
+        <div class="slide" data-slide="11">
+            <h2>Summary</h2>
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <h4>VAE Latent Space</h4>
+                    <p>768D → 64D smooth manifold with KL regularization</p>
+                </div>
+                <div class="summary-item">
+                    <h4>Multi-Fidelity Hyperband</h4>
+                    <p>Successive halving, GP on high-fidelity only</p>
+                </div>
+                <div class="summary-item">
+                    <h4>Deep Kernel GP</h4>
+                    <p>Adapter (64D→10D) + Matérn 5/2 kernel</p>
+                </div>
+                <div class="summary-item">
+                    <h4>InvBO + Vec2Text</h4>
+                    <p>qLogEI optimization, inversion loop closes gap</p>
+                </div>
+            </div>
+            <p style="margin-top: 2rem; color: var(--accent-cyan); font-style: italic; font-size: 0.95rem;">
+                Automated prompt optimization in continuous latent space
+            </p>
+        </div>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-container">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="slide-counter" id="slideCounter">1 / 11</div>
+    </div>
+
+    <!-- Navigation hints -->
+    <div class="nav-hint">
+        <div class="nav-key" id="keyLeft">←</div>
+        <div class="nav-key" id="keyRight">→</div>
+    </div>
+
+    <script>
+        const slides = document.querySelectorAll('.slide');
+        const progressFill = document.getElementById('progressFill');
+        const slideCounter = document.getElementById('slideCounter');
+        const keyLeft = document.getElementById('keyLeft');
+        const keyRight = document.getElementById('keyRight');
+
+        let currentSlide = 0;
+        const totalSlides = slides.length;
+
+        function updateSlide() {
+            slides.forEach((slide, index) => {
+                slide.classList.remove('active', 'prev');
+                if (index === currentSlide) {
+                    slide.classList.add('active');
+                } else if (index < currentSlide) {
+                    slide.classList.add('prev');
+                }
+            });
+            const progress = ((currentSlide + 1) / totalSlides) * 100;
+            progressFill.style.width = `${progress}%`;
+            slideCounter.textContent = `${currentSlide + 1} / ${totalSlides}`;
+        }
+
+        function nextSlide() {
+            if (currentSlide < totalSlides - 1) {
+                currentSlide++;
+                updateSlide();
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 0) {
+                currentSlide--;
+                updateSlide();
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                nextSlide();
+                keyRight.classList.add('active');
+                setTimeout(() => keyRight.classList.remove('active'), 150);
+            } else if (e.key === 'ArrowLeft') {
+                prevSlide();
+                keyLeft.classList.add('active');
+                setTimeout(() => keyLeft.classList.remove('active'), 150);
+            }
+        });
+
+        keyLeft.addEventListener('click', prevSlide);
+        keyRight.addEventListener('click', nextSlide);
+
+        let touchStartX = 0;
+        document.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; });
+        document.addEventListener('touchend', (e) => {
+            const diff = touchStartX - e.changedTouches[0].screenX;
+            if (diff > 50) nextSlide();
+            else if (diff < -50) prevSlide();
+        });
+
+        updateSlide();
+    </script>
+</body>
+</html>

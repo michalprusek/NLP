@@ -129,7 +129,7 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
     Uses ARD Matern 5/2 kernel on 10D latent features from adapter.
     Inherits from GPyTorchModel for BoTorch compatibility (enables EI, etc.).
 
-    Architecture (synced with inverse_hbbops):
+    Architecture (synced with lipo):
         64D VAE latent -> Adapter (trainable) -> 10D
                                                   |
                                   Matern 5/2 kernel (ARD)
@@ -200,7 +200,7 @@ class GPWithEI:
     Manages GP training, prediction, and EI computation for
     instruction optimization.
 
-    Architecture (synced with inverse_hbbops):
+    Architecture (synced with lipo):
         Training: embeddings (768D) → frozen VAE encoder → z (64D) → adapter+GP training
         Inference: z (64D) → adapter → z_gp (10D) → GP → qLogEI
     """
@@ -224,7 +224,7 @@ class GPWithEI:
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
-        # Training data - stored as 64D VAE latents (synced with inverse_hbbops)
+        # Training data - stored as 64D VAE latents (synced with lipo)
         self.X_train: Optional[torch.Tensor] = None  # (N, 64) VAE latents
         self.y_train: Optional[torch.Tensor] = None  # (N,)
 

@@ -4,7 +4,7 @@ This module provides BoTorch-based acquisition function optimization
 for the InvBO decoder pipeline. Uses qLogExpectedImprovement which is
 numerically stable even when improvement values are extremely small.
 
-Pipeline (synced with inverse_hbbops):
+Pipeline (synced with lipo):
     z (64D VAE latent) -> Adapter -> z_gp (10D) -> GP -> qLogEI
 
 After optimization: z_opt (64D) -> VAE decoder -> embedding (768D) -> Vec2Text

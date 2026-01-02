@@ -1,4 +1,4 @@
-"""Training pipeline for Inverse HbBoPs.
+"""Training pipeline for LIPO.
 
 Combines:
 1. APE instruction generation (or loading from cache)
@@ -6,7 +6,7 @@ Combines:
 3. Hyperband with successive halving
 4. GP training ready for InvBO inference
 
-Self-contained - no imports from other modules outside inverse_hbbops/.
+Self-contained - no imports from other modules outside lipo/.
 """
 
 import json
@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable, Any
 from dataclasses import dataclass
 
-from inverse_hbbops.config import Config
-from inverse_hbbops.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
-from inverse_hbbops.gp import GPWithEI
-from inverse_hbbops.hyperband import InverseHbBoPs
-from inverse_hbbops.instruction import InstructionOnlyPrompt
+from lipo.config import Config
+from lipo.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
+from lipo.gp import GPWithEI
+from lipo.hyperband import LIPOHyperband
+from lipo.instruction import InstructionOnlyPrompt
 
 
 class APEGenerator:
@@ -217,8 +217,8 @@ Your instruction:"""
         return instructions
 
 
-class InverseHbBoPsTrainer:
-    """Complete training pipeline for Inverse HbBoPs.
+class LIPOHyperbandTrainer:
+    """Complete training pipeline for LIPO.
 
     Pipeline:
     1. Generate/load instructions via APE
@@ -243,7 +243,7 @@ class InverseHbBoPsTrainer:
         self.vae: Optional[InstructionVAE] = None
         self.vae_with_adapter: Optional[VAEWithAdapter] = None
         self.gp: Optional[GPWithEI] = None
-        self.hyperband: Optional[InverseHbBoPs] = None
+        self.hyperband: Optional[LIPOHyperband] = None
 
         # Data
         self.instructions: List[str] = []
@@ -467,7 +467,7 @@ class InverseHbBoPsTrainer:
             print("Running Hyperband")
             print("=" * 60)
 
-        self.hyperband = InverseHbBoPs(
+        self.hyperband = LIPOHyperband(
             instructions=self.instructions,
             validation_data=self.validation_data,
             llm_evaluator=llm_evaluator,

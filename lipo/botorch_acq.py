@@ -1,14 +1,14 @@
 """BoTorch qLogExpectedImprovement for latent space optimization.
 
 This module provides BoTorch-based acquisition function optimization
-for the Inverse HbBoPs pipeline. Uses qLogExpectedImprovement which is
+for the LIPO pipeline. Uses qLogExpectedImprovement which is
 numerically stable even when improvement values are extremely small.
 
 Pipeline: z (64D VAE latent) -> Adapter -> z_gp (10D) -> GP -> qLogEI
 
 After optimization: z_opt (64D) -> VAE decoder -> embedding (768D) -> Vec2Text
 
-Adapted from generation/invbo_decoder/botorch_acq.py for inverse_hbbops.
+Adapted from generation/invbo_decoder/botorch_acq.py for lipo.
 """
 
 import logging
