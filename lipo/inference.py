@@ -236,12 +236,13 @@ class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 10D latent space using LogEI acquisition
+        1. Optimize in 64D VAE latent space using LogEI acquisition
+           (GP uses adapter: 64D → 10D for kernel computation)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
 
-    Uses 512_tokens Vec2Text model which is more exploratory.
+    Uses 512_tokens Vec2Text model for longer instruction generation.
     """
 
     def __init__(

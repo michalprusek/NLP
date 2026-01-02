@@ -394,7 +394,7 @@ def main():
 
     mode = "skip_hbbops" if args.skip_hbbops else ("grid" if args.load_grid else "standard")
     print("=" * 70)
-    print("INVERSE HbBoPs PIPELINE")
+    print("LIPO PIPELINE")
     print("=" * 70)
     if args.skip_hbbops:
         print(f"Mode: SKIP HBBOPS (load pre-evaluated)")

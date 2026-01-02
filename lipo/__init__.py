@@ -2,7 +2,7 @@
 
 Pipeline:
 1. APE generation: Create diverse instructions
-2. VAE training: Learn smooth latent space (768D → 10D → 768D)
+2. VAE training: Learn smooth latent space (768D → 64D → 768D)
 3. Hyperband: Successive halving with GP-guided selection
 4. InvBO inference: LogEI optimization + 512-token Vec2Text inversion
 

@@ -1,4 +1,4 @@
-"""Instruction encoder for inverse HbBoPs.
+"""Instruction encoder for LIPO.
 
 Provides:
 - GTRInstructionEncoder: GTR-T5-Base encoder wrapper (Vec2Text compatible)
