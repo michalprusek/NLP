@@ -247,6 +247,105 @@ class Vec2TextInverter:
         return result.strip()
 
 
+def validate_roundtrip_quality(
+    vae: InstructionVAE,
+    gtr: GTRInstructionEncoder,
+    inverter: Vec2TextInverter,
+    instructions: List[str],
+    n_samples: int = 20,
+    verbose: bool = True,
+) -> dict:
+    """Validate round-trip quality of VAE + Vec2Text pipeline.
+
+    Tests how well the full pipeline can reconstruct known instructions:
+        instruction → GTR → VAE(encode→decode) → Vec2Text → GTR → cosine_sim
+
+    Poor round-trip quality indicates GP may optimize in "empty space" -
+    regions that don't correspond to valid instructions.
+
+    Args:
+        vae: Trained InstructionVAE
+        gtr: GTR encoder
+        inverter: Vec2Text inverter
+        instructions: List of instructions to test
+        n_samples: Number of random samples to test
+        verbose: Print progress and results
+
+    Returns:
+        Dict with metrics:
+        - mean_sim: Mean cosine similarity
+        - std_sim: Std of similarities
+        - min_sim: Worst reconstruction
+        - poor_count: Number with sim < 0.90
+        - samples: List of (original, reconstructed, sim) tuples
+    """
+    import random
+    import numpy as np
+
+    # Sample instructions
+    n = min(n_samples, len(instructions))
+    samples = random.sample(instructions, n)
+
+    vae.eval()
+    sims = []
+    sample_results = []
+
+    for i, instruction in enumerate(samples):
+        # Full pipeline
+        emb_original = gtr.encode_tensor(instruction)
+        with torch.no_grad():
+            mu, _ = vae.encode(emb_original)
+            decoded = vae.decode(mu)
+
+        reconstructed = inverter.invert(decoded)
+        emb_recon = gtr.encode_tensor(reconstructed)
+
+        sim = F.cosine_similarity(
+            emb_original.unsqueeze(0),
+            emb_recon.unsqueeze(0)
+        ).item()
+        sims.append(sim)
+        sample_results.append((instruction, reconstructed, sim))
+
+        if verbose and (i + 1) % 5 == 0:
+            print(f"  Validated {i + 1}/{n} samples...")
+
+    sims_arr = np.array(sims)
+    results = {
+        "mean_sim": float(np.mean(sims_arr)),
+        "std_sim": float(np.std(sims_arr)),
+        "min_sim": float(np.min(sims_arr)),
+        "max_sim": float(np.max(sims_arr)),
+        "poor_count": int(np.sum(sims_arr < 0.90)),
+        "acceptable_count": int(np.sum(sims_arr >= 0.90)),
+        "n_samples": n,
+        "samples": sample_results,
+    }
+
+    if verbose:
+        quality = "GOOD" if results["mean_sim"] >= 0.90 else "POOR"
+        print(f"""
+============================================================
+ROUND-TRIP DIAGNOSTIC
+============================================================
+Tested: {n} instructions
+Mean similarity: {results['mean_sim']:.4f}
+Min: {results['min_sim']:.4f}, Max: {results['max_sim']:.4f}
+Below 0.90 (poor): {results['poor_count']}
+Below 0.95 (acceptable): {n - results['acceptable_count'] + results['poor_count']}
+Interpretation: {quality} - {"good reconstruction" if quality == "GOOD" else "significant meaning loss in reconstruction"}
+  {"" if quality == "GOOD" else "This may explain lack of optimization improvement."}
+""")
+        # Show worst example
+        worst_idx = np.argmin(sims_arr)
+        orig, recon, wsim = sample_results[worst_idx]
+        print(f"Worst reconstruction (sim={wsim:.4f}):")
+        print(f"  Original: {orig[:80]}...")
+        print(f"  Reconstructed: {recon[:100]}...")
+
+    return results
+
+
 class ZSInvertRefiner:
     """ZSInvert-style iterative refinement for Vec2Text output.
 
@@ -308,6 +407,18 @@ class ZSInvertRefiner:
     ) -> Tuple[str, torch.Tensor, dict]:
         """Iteratively refine text using gradient-based latent optimization.
 
+        The goal is to find text where GTR(text) ≈ original_decoder_output.
+        We use a FIXED target (the original decoder output) to measure progress
+        consistently across iterations.
+
+        Algorithm:
+            1. Compute fixed target = decode(initial_z) - this is what we're trying to match
+            2. Each iteration:
+               a. Optimize z to minimize ||decode(z) - GTR(current_best_text)||
+               b. Decode optimized z and invert via Vec2Text
+               c. Measure sim = cosine(GTR(new_text), fixed_target)
+               d. Keep new_text if it improves similarity to fixed target
+
         Args:
             initial_text: Vec2Text output to refine
             initial_z: Normalized latent [0,1]^d from optimization
@@ -321,7 +432,6 @@ class ZSInvertRefiner:
             - metrics: Dict with iterations, initial_sim, final_sim, improvement
         """
         best_text = initial_text
-        best_sim = 0.0
         z = initial_z.clone().to(self.device)
         x_range = (X_max - X_min).to(self.device)
         X_min_dev = X_min.to(self.device)
@@ -338,24 +448,30 @@ class ZSInvertRefiner:
         self.vae.eval()
 
         try:
+            # Compute FIXED target = original decoder output
+            # This is what we're trying to match with GTR(text)
+            with torch.no_grad():
+                z_unnorm = initial_z.to(self.device) * x_range + X_min_dev
+                fixed_target = self.vae.decode(z_unnorm)
+
+            # Compute initial similarity: cosine(GTR(initial_text), fixed_target)
+            initial_gtr = self.gtr.encode_tensor(initial_text)
+            initial_sim = F.cosine_similarity(
+                initial_gtr.unsqueeze(0),
+                fixed_target.unsqueeze(0)
+            ).item()
+            metrics["initial_sim"] = initial_sim
+            best_sim = initial_sim
+
+            if verbose:
+                print(f"    ZSInvert: fixed target from decode(z), initial sim = {initial_sim:.4f}")
+
             for iteration in range(self.n_iterations):
-                # 1. Encode current best text
-                target_emb = self.gtr.encode_tensor(best_text)
+                # 1. Get current best text embedding as optimization target
+                # (we optimize z so decode(z) → GTR(best_text))
+                current_target = self.gtr.encode_tensor(best_text)
 
-                # 2. Compute current similarity
-                with torch.no_grad():
-                    z_unnorm = z * x_range + X_min_dev
-                    current_emb = self.vae.decode(z_unnorm)
-                    current_sim = F.cosine_similarity(
-                        current_emb.unsqueeze(0),
-                        target_emb.unsqueeze(0)
-                    ).item()
-
-                if iteration == 0:
-                    metrics["initial_sim"] = current_sim
-                    best_sim = current_sim
-
-                # 3. Gradient-based refinement of z
+                # 2. Gradient-based refinement of z toward current_target
                 z_opt = z.clone().requires_grad_(True)
                 optimizer = torch.optim.Adam([z_opt], lr=self.lr)
 
@@ -365,7 +481,7 @@ class ZSInvertRefiner:
                     decoded = self.vae.decode(z_unnorm)
                     loss = 1 - F.cosine_similarity(
                         decoded.unsqueeze(0),
-                        target_emb.unsqueeze(0)
+                        current_target.unsqueeze(0)
                     )
                     loss.backward()
                     optimizer.step()
@@ -374,7 +490,7 @@ class ZSInvertRefiner:
                     with torch.no_grad():
                         z_opt.data.clamp_(0, 1)
 
-                # 4. Decode refined latent and invert to text
+                # 3. Decode refined latent and invert to text
                 z = z_opt.detach()
                 with torch.no_grad():
                     z_unnorm = z * x_range + X_min_dev
@@ -382,15 +498,17 @@ class ZSInvertRefiner:
 
                 new_text = self.inverter.invert(new_emb.clone())
 
-                # 5. Evaluate improvement (GTR similarity between new_emb and GTR(new_text))
-                new_target = self.gtr.encode_tensor(new_text)
+                # 4. Evaluate improvement against FIXED target
+                # Measure: cosine(GTR(new_text), fixed_target)
+                # This is consistent - we always compare to the same goal
+                new_gtr = self.gtr.encode_tensor(new_text)
                 new_sim = F.cosine_similarity(
-                    new_emb.unsqueeze(0),
-                    new_target.unsqueeze(0)
+                    new_gtr.unsqueeze(0),
+                    fixed_target.unsqueeze(0)
                 ).item()
 
                 if verbose:
-                    print(f"    ZSInvert iter {iteration + 1}: sim {current_sim:.4f} → {new_sim:.4f}")
+                    print(f"    ZSInvert iter {iteration + 1}: sim {best_sim:.4f} → {new_sim:.4f}")
 
                 if new_sim > best_sim + self.threshold:
                     best_sim = new_sim
@@ -573,28 +691,59 @@ class LIPOHyperbandInference:
             - optimal_latent: Best VAE latent tensor, shape (latent_dim,)
             - log_ei: Log expected improvement value at optimal point
         """
-        from lipo.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
+        from lipo.botorch_acq import (
+            LatentSpaceAcquisition,
+            get_latent_bounds,
+            get_anchor_constrained_bounds,
+        )
 
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
 
-        # Get latent bounds (use provided bounds or compute global bounds)
+        # Get latent bounds (use provided bounds or compute)
         if bounds is None:
-            bounds = get_latent_bounds(
-                encoder=self.gp.vae_with_adapter,
-                X_train=self.gp.X_train,
-                X_min=self.gp.X_min,
-                X_max=self.gp.X_max,
-                margin=self.config.latent_margin,
-            )
+            use_anchor_bounds = getattr(self.config, 'anchor_bounds_enabled', False)
 
-        # Create acquisition optimizer
+            if use_anchor_bounds:
+                # Anchor-constrained bounds: tighter region around best points
+                bounds = get_anchor_constrained_bounds(
+                    X_train=self.gp.X_train,
+                    y_train=self.gp.y_train,
+                    X_min=self.gp.X_min,
+                    X_max=self.gp.X_max,
+                    top_k=getattr(self.config, 'anchor_top_k', 15),
+                    margin=getattr(self.config, 'anchor_margin', 0.4),
+                )
+            else:
+                # Standard global bounds with margin
+                bounds = get_latent_bounds(
+                    encoder=self.gp.vae_with_adapter,
+                    X_train=self.gp.X_train,
+                    X_min=self.gp.X_min,
+                    X_max=self.gp.X_max,
+                    margin=self.config.latent_margin,
+                )
+
+        # Prepare normalized training data for distance penalty
+        use_distance_penalty = getattr(self.config, 'distance_penalty_enabled', True)
+        if use_distance_penalty:
+            # Normalize training data to match optimization space
+            denom = self.gp.X_max - self.gp.X_min
+            denom[denom == 0] = 1.0
+            X_train_norm = (self.gp.X_train - self.gp.X_min) / denom
+        else:
+            X_train_norm = None
+
+        # Create acquisition optimizer with distance penalty
         # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
         # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
             device=self.device,
+            X_train=X_train_norm,
+            distance_weight=getattr(self.config, 'distance_weight', 2.0),
+            distance_threshold=getattr(self.config, 'distance_threshold', 0.3),
         )
 
         # best_f is the best observed GP target value (-min_error).

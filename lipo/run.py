@@ -58,11 +58,19 @@ def setup_logging(output_dir: str, timestamp: str) -> Path:
     console_handler.setFormatter(console_format)
     root_logger.addHandler(console_handler)
 
-    # File handler
+    # File handler with auto-flush (prevents log loss on crash)
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_format = logging.Formatter('%(asctime)s | %(message)s', datefmt='%H:%M:%S')
     file_handler.setFormatter(file_format)
+
+    # Wrap emit to flush after every log entry
+    _original_emit = file_handler.emit
+    def _flushing_emit(record):
+        _original_emit(record)
+        file_handler.flush()
+    file_handler.emit = _flushing_emit
+
     root_logger.addHandler(file_handler)
 
     return log_file
@@ -72,10 +80,14 @@ class TeeOutput:
     """Tee stdout/stderr to both console and file logger.
 
     Filters out progress bars and other noisy output from file logging.
+    Handles both \n and \r line endings (tqdm uses \r for progress bars).
     """
 
     # Patterns to skip when logging to file (progress bars, etc.)
-    SKIP_PATTERNS = ("Batches:", "|", "it/s]", "Fetching", "%|")
+    SKIP_PATTERNS = ("Batches:", "|", "it/s]", "Fetching", "%|", "100%", "  0%")
+
+    # Maximum buffer size before forced flush (prevents memory issues)
+    MAX_BUFFER_SIZE = 10000
 
     def __init__(self, original, logger, level=logging.INFO):
         self.original = original
@@ -89,12 +101,36 @@ class TeeOutput:
 
     def write(self, text):
         self.original.write(text)
+        self.original.flush()  # Always flush to console immediately
+
         # Buffer lines and log complete lines
         self.buffer += text
-        while '\n' in self.buffer:
-            line, self.buffer = self.buffer.split('\n', 1)
+
+        # Handle both \n and \r as line endings
+        # tqdm uses \r for progress bar updates
+        while '\n' in self.buffer or '\r' in self.buffer:
+            # Find first line ending (either \n or \r)
+            n_pos = self.buffer.find('\n')
+            r_pos = self.buffer.find('\r')
+
+            if n_pos == -1:
+                split_pos = r_pos
+            elif r_pos == -1:
+                split_pos = n_pos
+            else:
+                split_pos = min(n_pos, r_pos)
+
+            line = self.buffer[:split_pos]
+            self.buffer = self.buffer[split_pos + 1:]
+
             if line.strip() and not self._should_skip(line):
                 self.logger.log(self.level, line)
+
+        # Force flush if buffer gets too large (prevents memory issues)
+        if len(self.buffer) > self.MAX_BUFFER_SIZE:
+            if self.buffer.strip() and not self._should_skip(self.buffer):
+                self.logger.log(self.level, self.buffer.strip())
+            self.buffer = ""
 
     def flush(self):
         self.original.flush()
@@ -229,11 +265,11 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.003,
-        help="VAE KL regularization weight (low for text VAE)"
+        "--vae-beta", type=float, default=0.001,
+        help="VAE KL regularization weight (low for 32D to preserve details)"
     )
     parser.add_argument(
-        "--vae-epochs", type=int, default=15000,
+        "--vae-epochs", type=int, default=20000,
         help="VAE training epochs"
     )
     parser.add_argument(
@@ -241,7 +277,7 @@ def main():
         help="VAE KL annealing epochs"
     )
     parser.add_argument(
-        "--vae-gamma", type=float, default=5.0,
+        "--vae-gamma", type=float, default=10.0,
         help="VAE cycle consistency weight (ensures z ≈ encode(decode(z)))"
     )
 
@@ -331,8 +367,8 @@ def main():
         help="Maximum inversion iterations per step (default: 3)"
     )
     parser.add_argument(
-        "--gap-threshold", type=float, default=0.1,
-        help="Gap threshold for re-inversion (cosine distance) (default: 0.1)"
+        "--gap-threshold", type=float, default=0.08,
+        help="Gap threshold for re-inversion (cosine distance) (default: 0.08)"
     )
     parser.add_argument(
         "--vec2text-beam", type=int, default=8,

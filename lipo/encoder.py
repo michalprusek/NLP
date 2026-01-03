@@ -90,11 +90,11 @@ class InstructionVAE(nn.Module):
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
     Architecture:
-        Encoder: 768D → 384 → 192 → 2*64 (mu + log_var)
-        Decoder: 64D → 192 → 384 → 768D (L2 normalized)
+        Encoder: 768D → 384 → 192 → 2*32 (mu + log_var)
+        Decoder: 32D → 192 → 384 → 768D (L2 normalized)
 
     Loss:
-        L = recon_loss + beta * KL(q(z|x) || N(0,1))
+        L = recon_loss + beta * KL(q(z|x) || N(0,1)) + gamma * cycle_loss
 
     The KL regularization ensures:
         - Smooth latent space (gradual transitions)
@@ -106,16 +106,16 @@ class InstructionVAE(nn.Module):
     def __init__(
         self,
         input_dim: int = 768,
-        latent_dim: int = 64,
-        beta: float = 0.1,
-        gamma: float = 0.0,
+        latent_dim: int = 32,
+        beta: float = 0.001,
+        gamma: float = 10.0,
     ):
         """Initialize VAE.
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Latent space dimension (64 by default, matches config.latent_dim)
-            beta: KL regularization weight (higher = more regularized)
+            latent_dim: Latent space dimension (32 by default, matches config.latent_dim)
+            beta: KL regularization weight (low for 32D to preserve details)
             gamma: Cycle consistency weight (ensures z ≈ encode(decode(z)))
         """
         super().__init__()
@@ -361,17 +361,17 @@ class VAEWithAdapter(nn.Module):
     """Wrapper combining frozen VAE encoder with trainable adapter.
 
     Architecture for optimization:
-        z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+        z (32D) → Adapter → z_gp (10D) → GP → qLogEI
 
     The adapter compresses VAE latent for efficient GP modeling while
-    optimization happens in the full 64D space with gradients flowing
+    optimization happens in the full 32D space with gradients flowing
     through the adapter.
 
     For decoding after optimization:
-        z (64D) → VAE decoder → embedding (768D)
+        z (32D) → VAE decoder → embedding (768D)
     """
 
-    def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 32, gp_latent_dim: int = 10):
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -382,14 +382,14 @@ class VAEWithAdapter(nn.Module):
         self.vae_latent_dim = vae_latent_dim
         self.gp_latent_dim = gp_latent_dim
 
-        # Trainable adapter: compresses VAE latents (64D) to GP latents (10D)
+        # Trainable adapter: compresses VAE latents (32D) to GP latents (10D)
         # Intermediate dimension scales with input: ~half of vae_latent_dim
         intermediate_dim = max(vae_latent_dim // 2, gp_latent_dim * 2)
         self.adapter = nn.Sequential(
-            nn.Linear(vae_latent_dim, intermediate_dim),  # 64 → 32
+            nn.Linear(vae_latent_dim, intermediate_dim),  # 32 → 16
             nn.ReLU(),
             nn.LayerNorm(intermediate_dim),
-            nn.Linear(intermediate_dim, gp_latent_dim),  # 32 → 10
+            nn.Linear(intermediate_dim, gp_latent_dim),  # 16 → 10
         )
 
     def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
@@ -413,7 +413,7 @@ class VAEWithAdapter(nn.Module):
         """Apply adapter to VAE latent.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            z: VAE latent tensor of shape (..., 32)
 
         Returns:
             GP latent tensor of shape (..., 10)
@@ -424,7 +424,7 @@ class VAEWithAdapter(nn.Module):
         """Decode VAE latent to 768D embedding.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            z: VAE latent tensor of shape (..., 32)
 
         Returns:
             Embedding tensor of shape (..., 768)
