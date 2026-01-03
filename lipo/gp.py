@@ -21,6 +21,7 @@ from botorch.models.transforms.outcome import Standardize
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional, Dict, Any, Union
+from sklearn.model_selection import KFold
 
 
 # =============================================================================
@@ -876,3 +877,232 @@ class GPWithEI:
         neg_error = -error_rate
         if neg_error > (self.y_best or float('-inf')):
             self.y_best = neg_error
+
+    def validate_cross_validation(
+        self,
+        n_splits: int = 5,
+        cv_epochs: int = 500,
+        cv_lr: float = 0.01,
+        cv_patience: int = 30,
+        full_fidelity_only: bool = False,
+        verbose: bool = True,
+    ) -> Dict[str, float]:
+        """K-Fold Cross-Validation on training data.
+
+        This provides an objective measure of GP generalization without
+        evaluating on training data. For each fold:
+        1. Train GP on (k-1) folds
+        2. Predict on held-out fold (which GP has never seen)
+        3. Compute MAE and correlation
+
+        This is computationally expensive (n_splits × training), but gives
+        the only unbiased estimate of generalization quality.
+
+        Args:
+            n_splits: Number of CV folds (default 5)
+            cv_epochs: Training epochs per fold (reduced for speed)
+            cv_lr: Learning rate for fold training
+            cv_patience: Early stopping patience per fold
+            full_fidelity_only: If True, use only full-fidelity samples (default False = use all)
+            verbose: Print progress
+
+        Returns:
+            Dict with 'cv_mae', 'cv_rmse', 'cv_corr' averaged across folds
+        """
+        if self.X_train is None or self.y_train is None:
+            if verbose:
+                print("Skipping CV: No training data")
+            return {}
+
+        if self.vae_with_adapter is None:
+            if verbose:
+                print("Skipping CV: VAE with adapter not set")
+            return {}
+
+        # Select samples based on fidelity filter
+        if full_fidelity_only:
+            max_fid = self.fidelity_train.max().item()
+            mask = self.fidelity_train >= max_fid * 0.99
+            filter_desc = "full-fidelity"
+        else:
+            mask = torch.ones(len(self.X_train), dtype=torch.bool, device=self.device)
+            filter_desc = "all"
+
+        n_samples = mask.sum().item()
+        if n_samples < n_splits * 2:
+            if verbose:
+                print(f"Skipping CV: Not enough samples ({n_samples} < {n_splits * 2})")
+            return {}
+
+        # Extract data for CV
+        X_full = self.X_train[mask]  # (N, 64) VAE latents
+        y_full = self._error_rates_original[mask]  # (N,) positive error rates
+        fid_full = self.fidelity_train[mask]  # (N,) fidelities
+
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+        mae_scores = []
+        rmse_scores = []
+        correlations = []
+
+        if verbose:
+            print(f"\nRunning {n_splits}-Fold Cross-Validation on {len(X_full)} {filter_desc} samples...")
+
+        # Save original model state to restore after CV
+        original_gp_state = self.gp_model.state_dict() if self.gp_model is not None else None
+        original_likelihood_state = self.likelihood.state_dict() if self.likelihood is not None else None
+        original_X_min = self.X_min.clone() if self.X_min is not None else None
+        original_X_max = self.X_max.clone() if self.X_max is not None else None
+        original_y_mean = self.y_mean.clone() if self.y_mean is not None else None
+        original_y_std = self.y_std.clone() if self.y_std is not None else None
+
+        adapter = self.vae_with_adapter.adapter
+
+        for fold, (train_idx, val_idx) in enumerate(kf.split(X_full)):
+            # Split data for this fold
+            X_fold_train = X_full[train_idx]
+            X_fold_val = X_full[val_idx]
+            y_fold_train = y_full[train_idx]  # Positive error rates
+            y_fold_val = y_full[val_idx]  # Positive error rates
+            fid_fold_train = fid_full[train_idx]
+
+            # === NORMALIZATION FOR THIS FOLD ===
+            # Unit cube normalization based on TRAINING fold only
+            X_min_fold = X_fold_train.min(dim=0)[0]
+            X_max_fold = X_fold_train.max(dim=0)[0]
+            denom = X_max_fold - X_min_fold
+            denom[denom == 0] = 1.0
+
+            X_train_norm = (X_fold_train - X_min_fold) / denom
+
+            # Negate error rates for GP (BoTorch maximization)
+            y_train_neg = -y_fold_train
+
+            # Z-score standardization based on TRAINING fold
+            y_mean_fold = y_train_neg.mean()
+            y_std_fold = y_train_neg.std()
+            if y_std_fold < 1e-6:
+                y_std_fold = torch.tensor(1e-6, device=self.device)
+            y_train_norm = (y_train_neg - y_mean_fold) / y_std_fold
+
+            # === COMPUTE HETEROSCEDASTIC NOISE ===
+            raw_noise = self._compute_observation_noise(y_fold_train, fid_fold_train)
+            noise_standardized = raw_noise / (y_std_fold ** 2 + 1e-8)
+            noise_standardized = torch.clamp(noise_standardized, max=1.0)
+
+            # === CREATE AND TRAIN NEW GP FOR THIS FOLD ===
+            fold_likelihood = FixedNoiseGaussianLikelihood(
+                noise=noise_standardized,
+                learn_additional_noise=True,
+            ).to(self.device)
+
+            fold_gp = InstructionDeepKernelGP(
+                X_train_norm, y_train_norm, fold_likelihood, adapter
+            ).to(self.device)
+
+            fold_gp.train()
+            fold_likelihood.train()
+
+            optimizer = torch.optim.AdamW(fold_gp.parameters(), lr=cv_lr)
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(fold_likelihood, fold_gp)
+
+            best_loss = float("inf")
+            patience_counter = 0
+
+            with gpytorch.settings.cholesky_jitter(1e-4):
+                for epoch in range(cv_epochs):
+                    try:
+                        optimizer.zero_grad()
+                        output = fold_gp(X_train_norm)
+                        loss = -mll(output, y_train_norm)
+                        loss.backward()
+                        optimizer.step()
+
+                        if loss.item() < best_loss:
+                            best_loss = loss.item()
+                            patience_counter = 0
+                        else:
+                            patience_counter += 1
+
+                        if patience_counter >= cv_patience:
+                            break
+
+                    except RuntimeError as e:
+                        if "cholesky" in str(e).lower() or "singular" in str(e).lower():
+                            if verbose:
+                                print(f"  Fold {fold + 1}: Training failed (numerical)")
+                            break
+                        raise
+
+            # === VALIDATION ON HELD-OUT FOLD ===
+            fold_gp.eval()
+            fold_likelihood.eval()
+
+            with torch.no_grad():
+                # Normalize validation input using TRAINING fold statistics
+                X_val_norm = (X_fold_val - X_min_fold) / denom
+
+                # Predict
+                pred_dist = fold_likelihood(fold_gp(X_val_norm))
+                pred_mean_norm = pred_dist.mean
+
+                # Denormalize: reverse z-score and negation
+                pred_neg = pred_mean_norm * y_std_fold + y_mean_fold
+                pred_pos = -pred_neg  # Back to positive error rate
+
+                # === COMPUTE METRICS ===
+                mae = (pred_pos - y_fold_val).abs().mean().item()
+                rmse = ((pred_pos - y_fold_val) ** 2).mean().sqrt().item()
+
+                if len(pred_pos) > 1:
+                    pred_np = pred_pos.cpu().numpy()
+                    y_np = y_fold_val.cpu().numpy()
+                    corr = np.corrcoef(pred_np, y_np)[0, 1]
+                    if np.isnan(corr):
+                        corr = 0.0
+                else:
+                    corr = 0.0
+
+                mae_scores.append(mae)
+                rmse_scores.append(rmse)
+                correlations.append(corr)
+
+                if verbose:
+                    print(f"  Fold {fold + 1}/{n_splits}: MAE={mae:.4f}, RMSE={rmse:.4f}, Corr={corr:.4f}")
+
+        # === RESTORE ORIGINAL MODEL STATE ===
+        if original_gp_state is not None and self.gp_model is not None:
+            self.gp_model.load_state_dict(original_gp_state)
+        if original_likelihood_state is not None and self.likelihood is not None:
+            self.likelihood.load_state_dict(original_likelihood_state)
+        if original_X_min is not None:
+            self.X_min = original_X_min
+        if original_X_max is not None:
+            self.X_max = original_X_max
+        if original_y_mean is not None:
+            self.y_mean = original_y_mean
+        if original_y_std is not None:
+            self.y_std = original_y_std
+
+        # === AGGREGATE RESULTS ===
+        avg_mae = np.mean(mae_scores)
+        avg_rmse = np.mean(rmse_scores)
+        avg_corr = np.mean(correlations) if correlations else 0.0
+        std_mae = np.std(mae_scores)
+        std_corr = np.std(correlations) if correlations else 0.0
+
+        if verbose:
+            print(f"\nCross-Validation Results ({n_splits}-fold):")
+            print(f"  MAE:  {avg_mae:.4f} ± {std_mae:.4f}")
+            print(f"  RMSE: {avg_rmse:.4f}")
+            print(f"  Corr: {avg_corr:.4f} ± {std_corr:.4f}")
+
+        return {
+            "cv_mae": avg_mae,
+            "cv_mae_std": std_mae,
+            "cv_rmse": avg_rmse,
+            "cv_corr": avg_corr,
+            "cv_corr_std": std_corr,
+            "cv_n_samples": len(X_full),
+            "cv_n_folds": n_splits,
+        }

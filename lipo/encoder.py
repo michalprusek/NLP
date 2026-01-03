@@ -117,6 +117,7 @@ class InstructionVAE(nn.Module):
         input_dim: int = 768,
         latent_dim: int = 64,
         beta: float = 0.1,
+        gamma: float = 0.0,
     ):
         """Initialize VAE.
 
@@ -124,11 +125,13 @@ class InstructionVAE(nn.Module):
             input_dim: Input embedding dimension (768 for GTR)
             latent_dim: Latent space dimension (64 for GP compatibility)
             beta: KL regularization weight (higher = more regularized)
+            gamma: Cycle consistency weight (ensures z ≈ encode(decode(z)))
         """
         super().__init__()
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.beta = beta
+        self.gamma = gamma
 
         # Encoder: 768 -> mu, log_var
         # Using LayerNorm instead of BatchNorm for:
@@ -253,24 +256,34 @@ class InstructionVAE(nn.Module):
         x_recon: torch.Tensor,
         mu: torch.Tensor,
         log_var: torch.Tensor,
+        z: Optional[torch.Tensor] = None,
         beta: Optional[float] = None,
+        gamma: Optional[float] = None,
     ) -> Tuple[torch.Tensor, dict]:
-        """Compute VAE loss.
+        """Compute VAE loss with optional cycle consistency.
 
-        Loss = recon_loss + beta * KL_loss
+        Loss = recon_loss + beta * KL_loss + gamma * cycle_loss
+
+        Cycle consistency ensures that z ≈ encode_mu(decode(z)), preventing
+        the latent space from having "holes" where decoded embeddings map
+        back to different latent regions.
 
         Args:
             x: Original embeddings (batch, 768)
             x_recon: Reconstructed embeddings (batch, 768)
             mu: Latent means
             log_var: Latent log variances
+            z: Sampled latent (required if gamma > 0)
             beta: Optional override for KL weight
+            gamma: Optional override for cycle consistency weight
 
         Returns:
             (total_loss, loss_dict) tuple
         """
         if beta is None:
             beta = self.beta
+        if gamma is None:
+            gamma = self.gamma
 
         # Reconstruction loss (cosine)
         cosine_sim = F.cosine_similarity(x, x_recon, dim=-1)
@@ -280,14 +293,29 @@ class InstructionVAE(nn.Module):
         # KL = -0.5 * sum(1 + log_var - mu^2 - var)
         kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1).mean()
 
+        # Cycle consistency loss: z ≈ encode_mu(decode(z))
+        # This prevents "holes" in latent space where different z's decode to similar x
+        # but encode back to completely different z's
+        cycle_loss = torch.tensor(0.0, device=x.device)
+        cycle_cosine = 0.0
+        if gamma > 0 and z is not None:
+            # Re-encode the reconstructed embedding
+            z_recon = self.encode_mu(x_recon)
+            # Use cosine similarity for consistency with other losses
+            z_cosine = F.cosine_similarity(z, z_recon, dim=-1)
+            cycle_loss = (1 - z_cosine).mean()
+            cycle_cosine = z_cosine.mean().item()
+
         # Total loss
-        total_loss = recon_loss + beta * kl_loss
+        total_loss = recon_loss + beta * kl_loss + gamma * cycle_loss
 
         loss_dict = {
             "total": total_loss.item(),
             "recon": recon_loss.item(),
             "kl": kl_loss.item(),
+            "cycle": cycle_loss.item() if gamma > 0 else 0.0,
             "cosine_mean": cosine_sim.mean().item(),
+            "cycle_cosine": cycle_cosine,
         }
 
         return total_loss, loss_dict
