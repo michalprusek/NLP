@@ -18,7 +18,7 @@ import numpy as np
 import random
 from scipy.stats import norm
 
-from lipo.config import Config
+from lipo.config import Config, get_device
 from lipo.instruction import InstructionOnlyPrompt
 from lipo.encoder import GTRInstructionEncoder, VAEWithAdapter
 from lipo.gp import GPWithEI, InstructionDeepKernelGP
@@ -56,7 +56,7 @@ class LIPOHyperband:
             device: Device to use
         """
         self.config = config
-        self.device = self._get_device(device)
+        self.device = torch.device(get_device(device))
 
         # Store instructions as prompts
         self.prompts = [
@@ -120,15 +120,6 @@ class LIPOHyperband:
 
         # GP training stats (updated each time train_gp is called)
         self.gp_training_stats: Dict = {}
-
-    def _get_device(self, device: str) -> torch.device:
-        if device != "auto":
-            return torch.device(device)
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
 
     def evaluate_prompt(self, prompt: InstructionOnlyPrompt, fidelity: int) -> float:
         """Evaluate prompt on 'fidelity' validation instances with caching."""
@@ -282,9 +273,11 @@ class LIPOHyperband:
 
         try:
             with torch.no_grad(), gpytorch.settings.fast_pred_var(), gpytorch.settings.cholesky_jitter(1e-4):
-                pred = self.likelihood(self.gp_model(X_norm))
-                mean = pred.mean.item() * self.y_std.item() + self.y_mean.item()
-                std = pred.stddev.item() * self.y_std.item()
+                # Get posterior from GP model directly, NOT through likelihood
+                # FixedNoiseGaussianLikelihood stores noise for training points only
+                posterior = self.gp_model(X_norm)
+                mean = posterior.mean.item() * self.y_std.item() + self.y_mean.item()
+                std = posterior.stddev.item() * self.y_std.item()
         except RuntimeError as e:
             error_msg = str(e).lower()
             if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:

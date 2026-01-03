@@ -1312,12 +1312,20 @@ class LIPOHyperbandTrainer:
         self.gp.set_training_data(embeddings, error_rates, fidelities)
 
         # Train GP
-        self.gp.train(
+        train_success = self.gp.train(
             epochs=self.config.gp_epochs,
             lr=self.config.gp_lr,
             patience=self.config.gp_patience,
             verbose=verbose,
         )
+
+        if not train_success:
+            raise RuntimeError(
+                "GP training failed due to numerical instability. "
+                "This typically indicates: duplicate/near-duplicate inputs, "
+                "near-constant outputs, or ill-conditioned kernel. "
+                "Try reducing the number of training samples or checking for duplicates."
+            )
 
         # Store GP training stats
         self.gp_stats = self.gp.training_stats.copy()
@@ -1329,21 +1337,6 @@ class LIPOHyperbandTrainer:
 
         if verbose:
             print(f"  GP trained, best error: {self.gp.best_error_rate:.4f}")
-
-        # Run cross-validation to assess generalization quality
-        if verbose:
-            cv_results = self.gp.validate_cross_validation(
-                n_splits=5,
-                cv_epochs=500,
-                cv_lr=self.config.gp_lr,
-                cv_patience=30,
-                full_fidelity_only=False,  # Use all 267 samples, not just 14 full-fidelity
-                verbose=True,
-            )
-            if cv_results:
-                self.gp_stats["cv_mae"] = cv_results.get("cv_mae")
-                self.gp_stats["cv_corr"] = cv_results.get("cv_corr")
-                self.gp_stats["cv_n_samples"] = cv_results.get("cv_n_samples")
 
         return self.gp
 

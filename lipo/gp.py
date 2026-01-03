@@ -18,10 +18,10 @@ from gpytorch.constraints import Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
+from botorch.models.transforms.input import Warp
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional, Dict, Any, Union
-from sklearn.model_selection import KFold
 
 
 # =============================================================================
@@ -128,17 +128,26 @@ def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
     """Gaussian Process with deep kernel for instruction optimization.
 
-    Uses trainable adapter (64D → 10D) + ARD Matern 5/2 kernel.
+    Uses optional Kumaraswamy warping + trainable adapter (D → 10D) + ARD Matern 5/2 kernel.
     Inherits from GPyTorchModel for BoTorch compatibility (enables EI, etc.).
 
     Architecture:
-        64D VAE latent -> Adapter (trainable) -> 10D
-                                                  |
-                                  Matern 5/2 kernel (ARD)
-                                                  |
-                                  GP(mean=0, K(latent))
+        VAE latent (D, normalized to [0,1]) -> Kumaraswamy Warp -> Adapter (D → 10D) -> Matern 5/2 kernel (ARD)
+                                                                                                      |
+                                                                                            GP(mean=0, K(latent))
 
-    Training: Adapter and GP kernel are trained jointly on 64D VAE latents.
+    Kumaraswamy Input Warping:
+        Transforms inputs in [0,1] non-linearly using learned concentration parameters (a, b).
+        Helps GP handle non-uniform data distributions by concentrating density where data is.
+        Applied BEFORE adapter because inputs must be in [0,1] for Kumaraswamy CDF.
+        Formula: F(x; a,b) = 1 - (1-x^a)^b
+
+    ARD (Automatic Relevance Determination):
+        Per-dimension lengthscales allow the kernel to learn which dimensions
+        are most relevant for prediction. Irrelevant dimensions get large
+        lengthscales (effectively ignored).
+
+    Training: Warping, adapter, and GP kernel are trained jointly on VAE latents.
     VAE encoder is frozen and applied before GP training.
     """
 
@@ -150,18 +159,36 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         train_y: torch.Tensor,
         likelihood: Union[GaussianLikelihood, FixedNoiseGaussianLikelihood],
         adapter: nn.Module,
+        use_input_warping: bool = True,
     ):
         """Initialize GP.
 
         Args:
-            train_x: Training VAE latents (N, 64)
+            train_x: Training VAE latents (N, D) where D is VAE latent dimension
             train_y: Training targets (N,) - negated error rates (for BoTorch maximization)
             likelihood: Gaussian or FixedNoiseGaussian likelihood
-            adapter: Trainable adapter MLP (64D → 10D)
+            adapter: Trainable adapter MLP (D → 10D)
+            use_input_warping: Whether to apply Kumaraswamy input warping before adapter
         """
         # Ensure train_y is 1D for ExactGP
         train_y = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
         super().__init__(train_x, train_y, likelihood)
+
+        self.adapter = adapter
+
+        # Kumaraswamy input warping on VAE latents (BEFORE adapter)
+        # Learns concentration parameters (a, b) per dimension to handle non-uniform data
+        # Applied before adapter because:
+        # 1. X_norm is already in [0,1] (unit cube normalized) - required by Kumaraswamy
+        # 2. Warping helps GP model non-uniform input distributions
+        # Note: Only set attribute if warping is enabled to avoid BoTorch GPyTorchModel issues
+        self._use_input_warping = use_input_warping
+        self._input_dim = train_x.shape[-1]  # Get actual VAE latent dimension
+        if use_input_warping:
+            self.input_transform = Warp(
+                d=self._input_dim,  # Dynamic: matches actual VAE latent dimension
+                indices=list(range(self._input_dim)),  # Warp all dims
+            )
 
         self.mean_module = gpytorch.means.ZeroMean()
         self.covar_module = gpytorch.kernels.ScaleKernel(
@@ -172,18 +199,28 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
             ),
             outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
         )
-        self.adapter = adapter
 
     def forward(self, x: torch.Tensor) -> MultivariateNormal:
         """Forward pass through GP.
 
+        Pipeline: x (D) -> warping (if enabled) -> adapter (10D) -> kernel
+
         Args:
-            x: VAE latent (batch, 64) or (batch, n, 64)
+            x: VAE latent (batch, D) or (batch, n, D), already unit cube normalized to [0,1]
 
         Returns:
             MultivariateNormal distribution over function values
         """
-        # Apply adapter: 64D → 10D
+        # Apply Kumaraswamy input warping BEFORE adapter
+        # x is already in [0,1] from unit cube normalization, which is required for warping
+        if self._use_input_warping:
+            # Clamp to (eps, 1-eps) to avoid numerical issues at boundaries
+            # Kumaraswamy CDF has numerical issues at exactly 0 or 1
+            eps = 1e-6
+            x = x.clamp(min=eps, max=1 - eps)
+            x = self.input_transform(x)
+
+        # Apply adapter: D → 10D
         latent = self.adapter(x)
 
         # Handle 3D for BoTorch posterior
@@ -203,8 +240,10 @@ class GPWithEI:
     instruction optimization.
 
     Architecture:
-        Training: embeddings (768D) → frozen VAE encoder → z (64D) → adapter+GP training
-        Inference: z (64D) → adapter → z_gp (10D) → GP → qLogEI
+        Training: embeddings (768D) → frozen VAE encoder → z (D) → normalize [0,1] → warping+adapter+GP training
+        Inference: z_norm (D, [0,1]) → Kumaraswamy Warp → adapter (10D) → ARD Matern kernel → GP → qLogEI
+
+    Where D is the VAE latent dimension (configurable, default 16).
     """
 
     def __init__(
@@ -226,8 +265,8 @@ class GPWithEI:
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
-        # Training data - stored as 64D VAE latents
-        self.X_train: Optional[torch.Tensor] = None  # (N, 64) VAE latents
+        # Training data - stored as 16D VAE latents
+        self.X_train: Optional[torch.Tensor] = None  # (N, 16) VAE latents
         self.y_train: Optional[torch.Tensor] = None  # (N,) negated error rates (internal)
         self.fidelity_train: Optional[torch.Tensor] = None  # (N,) sample counts for each observation
         self._error_rates_original: Optional[torch.Tensor] = None  # (N,) positive error rates for noise computation
@@ -252,7 +291,7 @@ class GPWithEI:
     ):
         """Set training data for GP.
 
-        Transforms embeddings to 64D VAE latents using frozen VAE encoder.
+        Transforms embeddings to 16D VAE latents using frozen VAE encoder.
 
         IMPORTANT: We negate error_rates for BoTorch compatibility.
         BoTorch's qLogExpectedImprovement MAXIMIZES by default:
@@ -281,20 +320,20 @@ class GPWithEI:
                 f"Ensure you're passing GTR embeddings, not VAE latents."
             )
 
-        # Transform to 64D VAE latents using frozen encoder
+        # Transform to 16D VAE latents using frozen encoder
         self.vae_with_adapter.eval()
         with torch.no_grad():
             vae_latents = self.vae_with_adapter.encode_vae(embeddings)
 
         # Validate VAE output dimension
-        expected_vae_dim = 64
+        expected_vae_dim = self.vae_with_adapter.vae_latent_dim
         if vae_latents.shape[-1] != expected_vae_dim:
             raise RuntimeError(
                 f"VAE encoder output dimension mismatch: expected {expected_vae_dim}, "
                 f"got {vae_latents.shape[-1]}. Check VAE configuration."
             )
 
-        self.X_train = vae_latents  # (N, 64)
+        self.X_train = vae_latents  # (N, 16)
 
         # Store original error rates for noise computation (needs positive values)
         self._error_rates_original = error_rates.to(self.device)
@@ -352,10 +391,11 @@ class GPWithEI:
         lr: float = 0.01,
         patience: int = 10,
         verbose: bool = True,
+        use_input_warping: bool = True,
     ) -> bool:
-        """Train GP on stored 64D VAE latents.
+        """Train GP on stored 16D VAE latents.
 
-        Trains adapter (64D→10D) and GP kernel jointly.
+        Trains adapter (16D→10D), Kumaraswamy warping, and GP kernel jointly.
         VAE encoder is frozen.
 
         Uses FixedNoiseGaussianLikelihood with heteroscedastic noise based on
@@ -366,6 +406,7 @@ class GPWithEI:
             lr: Learning rate
             patience: Early stopping patience
             verbose: Print progress
+            use_input_warping: Whether to apply Kumaraswamy input warping on 10D adapter output
 
         Returns:
             True if training succeeded
@@ -373,10 +414,10 @@ class GPWithEI:
         if self.X_train is None or self.y_train is None:
             raise RuntimeError("No training data. Call set_training_data() first.")
 
-        X = self.X_train  # Already 64D VAE latents
+        X = self.X_train  # Already 16D VAE latents
         y = self.y_train
 
-        # Unit cube normalization for 64D latents
+        # Unit cube normalization for 16D latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -407,22 +448,31 @@ class GPWithEI:
         # Noise in standardized space: scale by y_std^2
         raw_noise = self._compute_observation_noise(self._error_rates_original, self.fidelity_train)
         # Transform noise to standardized space (divide by y_std^2)
-        # Clamp to prevent extreme values when y_std is near zero
-        noise_standardized = raw_noise / (self.y_std ** 2 + 1e-8)
-        noise_standardized = torch.clamp(noise_standardized, max=1.0)
+        # Use .item() to avoid tensor shape issues, add robust fallback
+        y_std_val = self.y_std.item() if self.y_std.numel() == 1 else self.y_std.squeeze().item()
+        y_std_sq = max(y_std_val ** 2, 1e-6)  # Ensure positive
+        noise_standardized = raw_noise / y_std_sq
+        # Clamp both min and max to prevent numerical issues:
+        # - min: very small noise causes GP numerical instability
+        # - max: very large noise makes observations uninformative
+        noise_standardized = torch.clamp(noise_standardized, min=1e-4, max=1.0)
+        # Ensure noise tensor is contiguous and correct shape
+        noise_standardized = noise_standardized.view(-1).contiguous()
 
         if verbose:
             print(f"  Observation noise: min={raw_noise.min():.6f}, max={raw_noise.max():.6f}")
             print(f"  Fidelity range: {self.fidelity_train.min().item():.0f} - {self.fidelity_train.max().item():.0f}")
 
         # FixedNoiseGaussianLikelihood with heteroscedastic noise
-        # learn_additional_noise=True allows GP to learn residual noise beyond Bernoulli variance
+        # NOTE: learn_additional_noise=False to avoid CUDA errors with second_noise_covar
+        # The Bernoulli variance from fidelity is sufficient observation noise
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=noise_standardized,
-            learn_additional_noise=True,
+            learn_additional_noise=False,
         ).to(self.device)
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, adapter
+            X_norm, y_norm, self.likelihood, adapter,
+            use_input_warping=use_input_warping,
         ).to(self.device)
 
         # Register outcome transform for BoTorch compatibility
@@ -498,66 +548,7 @@ class GPWithEI:
         if verbose:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
 
-        # Validation: compute MAE on full-fidelity samples
-        if verbose and self.fidelity_train is not None:
-            self._validate_on_full_fidelity()
-
         return True
-
-    def _validate_on_full_fidelity(self):
-        """Validate GP predictions on full-fidelity samples only.
-
-        Computes MAE between GP predictions and actual error rates for
-        samples with fidelity == max_fidelity (most reliable observations).
-
-        Note: Internally uses negated values but reports in positive error rate space.
-        """
-        if self.X_train is None or self.y_train is None:
-            return
-
-        max_fid = self.fidelity_train.max().item()
-        full_fid_mask = self.fidelity_train >= max_fid * 0.99  # Allow small tolerance
-
-        if full_fid_mask.sum() < 3:
-            print(f"  WARNING: Only {full_fid_mask.sum().item()} full-fidelity samples (need >= 3 for validation)")
-            print(f"    Max fidelity: {max_fid:.0f}, threshold: {max_fid * 0.99:.0f}")
-            print(f"    Consider using more full-fidelity evaluations for reliable GP quality assessment")
-            return
-
-        # Get full-fidelity samples
-        X_val = self.X_train[full_fid_mask]
-        # y_train is negated (-error_rate), use original for comparison
-        y_val_original = self._error_rates_original[full_fid_mask]
-
-        # Normalize X for prediction
-        denom = self.X_max - self.X_min
-        denom[denom == 0] = 1.0
-        X_val_norm = (X_val - self.X_min) / denom
-
-        # Get predictions
-        self.gp_model.eval()
-        self.likelihood.eval()
-
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            pred = self.likelihood(self.gp_model(X_val_norm))
-            pred_mean_norm = pred.mean
-
-        # Denormalize predictions (GP predicts -error_rate)
-        pred_neg_error = pred_mean_norm * self.y_std + self.y_mean
-        # Negate to get positive error rate
-        pred_mean = -pred_neg_error
-
-        # Compute MAE against original (positive) error rates
-        mae = (pred_mean - y_val_original).abs().mean().item()
-        rmse = ((pred_mean - y_val_original) ** 2).mean().sqrt().item()
-
-        # Also compute correlation
-        pred_np = pred_mean.cpu().numpy()
-        y_np = y_val_original.cpu().numpy()
-        correlation = float(np.corrcoef(pred_np, y_np)[0, 1]) if len(pred_np) > 1 else 0.0
-
-        print(f"  GP Validation (n={full_fid_mask.sum().item()} full-fidelity):")
-        print(f"    MAE: {mae:.4f}, RMSE: {rmse:.4f}, Corr: {correlation:.4f}")
 
     def predict(
         self,
@@ -582,10 +573,10 @@ class GPWithEI:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
-        # Encode 768D embedding to 64D VAE latent if needed
+        # Encode 768D embedding to 16D VAE latent if needed
         with torch.no_grad():
             if embedding.shape[-1] == 768:
-                # Encode through VAE to get 64D latent
+                # Encode through VAE to get 16D latent
                 z_vae = self.vae_with_adapter.encode_vae(embedding)
             else:
                 z_vae = embedding
@@ -601,9 +592,13 @@ class GPWithEI:
 
         try:
             with torch.no_grad(), gpytorch.settings.fast_pred_var():
-                pred = self.likelihood(self.gp_model(X_norm))
-                mean_norm = pred.mean.item()
-                std_norm = pred.stddev.item()
+                # Get posterior from GP model directly, NOT through likelihood
+                # FixedNoiseGaussianLikelihood stores noise for training points only;
+                # passing test points through it without explicit noise causes warnings
+                # and incorrect uncertainty estimates
+                posterior = self.gp_model(X_norm)
+                mean_norm = posterior.mean.item()
+                std_norm = posterior.stddev.item()
         except RuntimeError as e:
             error_msg = str(e).lower()
             if "cholesky" in error_msg or "singular" in error_msg or "positive definite" in error_msg:
@@ -621,6 +616,10 @@ class GPWithEI:
         # CRITICAL: Negate back to positive error rate
         # GP predicts -error_rate, so we return -predicted = error_rate
         mean = -neg_error
+
+        # Clamp to valid error rate range [0, 1]
+        # GP extrapolation can produce values outside this range
+        mean = max(0.0, min(1.0, mean))
 
         return mean, std
 
@@ -766,7 +765,7 @@ class GPWithEI:
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
         """Get 10D latent for embedding using trained adapter.
 
-        Pipeline: embedding (768D) → VAE encoder → z (64D) → normalize → adapter → z_gp (10D)
+        Pipeline: embedding (768D) → VAE encoder → z (16D) → normalize → adapter → z_gp (10D)
 
         Args:
             embedding: Instruction embedding (768,)
@@ -781,17 +780,17 @@ class GPWithEI:
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
 
-        # First encode to 64D VAE latent
+        # First encode to 16D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
             z_vae = self.vae_with_adapter.encode_vae(embedding)
 
-        # Normalize 64D latent
+        # Normalize 16D latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         z_norm = (z_vae - self.X_min) / denom
 
-        # Apply adapter: 64D → 10D
+        # Apply adapter: 16D → 10D
         with torch.no_grad():
             latent = self.vae_with_adapter.adapter(z_norm)
 
@@ -843,10 +842,10 @@ class GPWithEI:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
-        # Encode to 64D VAE latent
+        # Encode to 16D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 64)
+            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 16)
 
         # Apply Laplace smoothing for consistency with training data
         # Formula: (errors + 1) / (n + 2) - penalizes "lucky guesses" on low-fidelity samples
@@ -877,247 +876,3 @@ class GPWithEI:
         neg_error = -error_rate
         if neg_error > (self.y_best or float('-inf')):
             self.y_best = neg_error
-
-    def validate_cross_validation(
-        self,
-        n_splits: int = 5,
-        cv_epochs: int = 500,
-        cv_lr: float = 0.01,
-        cv_patience: int = 30,
-        full_fidelity_only: bool = False,
-        verbose: bool = True,
-    ) -> Dict[str, float]:
-        """K-Fold Cross-Validation on training data.
-
-        This provides an objective measure of GP generalization without
-        evaluating on training data. For each fold:
-        1. Train GP on (k-1) folds
-        2. Predict on held-out fold (which GP has never seen)
-        3. Compute MAE and correlation
-
-        This is computationally expensive (n_splits × training), but gives
-        the only unbiased estimate of generalization quality.
-
-        Args:
-            n_splits: Number of CV folds (default 5)
-            cv_epochs: Training epochs per fold (reduced for speed)
-            cv_lr: Learning rate for fold training
-            cv_patience: Early stopping patience per fold
-            full_fidelity_only: If True, use only full-fidelity samples (default False = use all)
-            verbose: Print progress
-
-        Returns:
-            Dict with 'cv_mae', 'cv_rmse', 'cv_corr' averaged across folds
-        """
-        if self.X_train is None or self.y_train is None:
-            if verbose:
-                print("Skipping CV: No training data")
-            return {}
-
-        if self.vae_with_adapter is None:
-            if verbose:
-                print("Skipping CV: VAE with adapter not set")
-            return {}
-
-        # Select samples based on fidelity filter
-        if full_fidelity_only:
-            max_fid = self.fidelity_train.max().item()
-            mask = self.fidelity_train >= max_fid * 0.99
-            filter_desc = "full-fidelity"
-        else:
-            mask = torch.ones(len(self.X_train), dtype=torch.bool, device=self.device)
-            filter_desc = "all"
-
-        n_samples = mask.sum().item()
-        if n_samples < n_splits * 2:
-            if verbose:
-                print(f"Skipping CV: Not enough samples ({n_samples} < {n_splits * 2})")
-            return {}
-
-        # Extract data for CV
-        X_full = self.X_train[mask]  # (N, 64) VAE latents
-        y_full = self._error_rates_original[mask]  # (N,) positive error rates
-        fid_full = self.fidelity_train[mask]  # (N,) fidelities
-
-        kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-
-        mae_scores = []
-        rmse_scores = []
-        correlations = []
-
-        if verbose:
-            print(f"\nRunning {n_splits}-Fold Cross-Validation on {len(X_full)} {filter_desc} samples...")
-
-        # Save original model state to restore after CV
-        original_gp_state = self.gp_model.state_dict() if self.gp_model is not None else None
-        original_likelihood_state = self.likelihood.state_dict() if self.likelihood is not None else None
-        original_X_min = self.X_min.clone() if self.X_min is not None else None
-        original_X_max = self.X_max.clone() if self.X_max is not None else None
-        original_y_mean = self.y_mean.clone() if self.y_mean is not None else None
-        original_y_std = self.y_std.clone() if self.y_std is not None else None
-
-        # Save original adapter state to clone for each fold
-        # This prevents later folds from starting with weights optimized for earlier folds
-        import copy
-        original_adapter_state = self.vae_with_adapter.adapter.state_dict()
-
-        # Track skipped folds for reporting
-        skipped_folds = []
-
-        for fold, (train_idx, val_idx) in enumerate(kf.split(X_full)):
-            # Clone adapter for this fold to avoid bias
-            adapter = copy.deepcopy(self.vae_with_adapter.adapter)
-            adapter.load_state_dict(original_adapter_state)
-            adapter = adapter.to(self.device)
-            # Split data for this fold
-            X_fold_train = X_full[train_idx]
-            X_fold_val = X_full[val_idx]
-            y_fold_train = y_full[train_idx]  # Positive error rates
-            y_fold_val = y_full[val_idx]  # Positive error rates
-            fid_fold_train = fid_full[train_idx]
-
-            # === NORMALIZATION FOR THIS FOLD ===
-            # Unit cube normalization based on TRAINING fold only
-            X_min_fold = X_fold_train.min(dim=0)[0]
-            X_max_fold = X_fold_train.max(dim=0)[0]
-            denom = X_max_fold - X_min_fold
-            denom[denom == 0] = 1.0
-
-            X_train_norm = (X_fold_train - X_min_fold) / denom
-
-            # Negate error rates for GP (BoTorch maximization)
-            y_train_neg = -y_fold_train
-
-            # Z-score standardization based on TRAINING fold
-            y_mean_fold = y_train_neg.mean()
-            y_std_fold = y_train_neg.std()
-            if y_std_fold < 1e-6:
-                y_std_fold = torch.tensor(1e-6, device=self.device)
-            y_train_norm = (y_train_neg - y_mean_fold) / y_std_fold
-
-            # === COMPUTE HETEROSCEDASTIC NOISE ===
-            raw_noise = self._compute_observation_noise(y_fold_train, fid_fold_train)
-            noise_standardized = raw_noise / (y_std_fold ** 2 + 1e-8)
-            noise_standardized = torch.clamp(noise_standardized, max=1.0)
-
-            # === CREATE AND TRAIN NEW GP FOR THIS FOLD ===
-            fold_likelihood = FixedNoiseGaussianLikelihood(
-                noise=noise_standardized,
-                learn_additional_noise=True,
-            ).to(self.device)
-
-            fold_gp = InstructionDeepKernelGP(
-                X_train_norm, y_train_norm, fold_likelihood, adapter
-            ).to(self.device)
-
-            fold_gp.train()
-            fold_likelihood.train()
-
-            optimizer = torch.optim.AdamW(fold_gp.parameters(), lr=cv_lr)
-            mll = gpytorch.mlls.ExactMarginalLogLikelihood(fold_likelihood, fold_gp)
-
-            best_loss = float("inf")
-            patience_counter = 0
-
-            with gpytorch.settings.cholesky_jitter(1e-4):
-                for epoch in range(cv_epochs):
-                    try:
-                        optimizer.zero_grad()
-                        output = fold_gp(X_train_norm)
-                        loss = -mll(output, y_train_norm)
-                        loss.backward()
-                        optimizer.step()
-
-                        if loss.item() < best_loss:
-                            best_loss = loss.item()
-                            patience_counter = 0
-                        else:
-                            patience_counter += 1
-
-                        if patience_counter >= cv_patience:
-                            break
-
-                    except RuntimeError as e:
-                        if "cholesky" in str(e).lower() or "singular" in str(e).lower():
-                            if verbose:
-                                print(f"  Fold {fold + 1}: Training failed (numerical)")
-                            skipped_folds.append(fold + 1)
-                            break
-                        raise
-
-            # === VALIDATION ON HELD-OUT FOLD ===
-            fold_gp.eval()
-            fold_likelihood.eval()
-
-            with torch.no_grad():
-                # Normalize validation input using TRAINING fold statistics
-                X_val_norm = (X_fold_val - X_min_fold) / denom
-
-                # Predict
-                pred_dist = fold_likelihood(fold_gp(X_val_norm))
-                pred_mean_norm = pred_dist.mean
-
-                # Denormalize: reverse z-score and negation
-                pred_neg = pred_mean_norm * y_std_fold + y_mean_fold
-                pred_pos = -pred_neg  # Back to positive error rate
-
-                # === COMPUTE METRICS ===
-                mae = (pred_pos - y_fold_val).abs().mean().item()
-                rmse = ((pred_pos - y_fold_val) ** 2).mean().sqrt().item()
-
-                if len(pred_pos) > 1:
-                    pred_np = pred_pos.cpu().numpy()
-                    y_np = y_fold_val.cpu().numpy()
-                    corr = np.corrcoef(pred_np, y_np)[0, 1]
-                    if np.isnan(corr):
-                        corr = 0.0
-                else:
-                    corr = 0.0
-
-                mae_scores.append(mae)
-                rmse_scores.append(rmse)
-                correlations.append(corr)
-
-                if verbose:
-                    print(f"  Fold {fold + 1}/{n_splits}: MAE={mae:.4f}, RMSE={rmse:.4f}, Corr={corr:.4f}")
-
-        # === RESTORE ORIGINAL MODEL STATE ===
-        if original_gp_state is not None and self.gp_model is not None:
-            self.gp_model.load_state_dict(original_gp_state)
-        if original_likelihood_state is not None and self.likelihood is not None:
-            self.likelihood.load_state_dict(original_likelihood_state)
-        if original_X_min is not None:
-            self.X_min = original_X_min
-        if original_X_max is not None:
-            self.X_max = original_X_max
-        if original_y_mean is not None:
-            self.y_mean = original_y_mean
-        if original_y_std is not None:
-            self.y_std = original_y_std
-
-        # === AGGREGATE RESULTS ===
-        avg_mae = np.mean(mae_scores) if mae_scores else 0.0
-        avg_rmse = np.mean(rmse_scores) if rmse_scores else 0.0
-        avg_corr = np.mean(correlations) if correlations else 0.0
-        std_mae = np.std(mae_scores) if mae_scores else 0.0
-        std_corr = np.std(correlations) if correlations else 0.0
-
-        if verbose:
-            print(f"\nCross-Validation Results ({n_splits}-fold):")
-            print(f"  MAE:  {avg_mae:.4f} ± {std_mae:.4f}")
-            print(f"  RMSE: {avg_rmse:.4f}")
-            print(f"  Corr: {avg_corr:.4f} ± {std_corr:.4f}")
-            if skipped_folds:
-                print(f"  WARNING: {len(skipped_folds)} folds skipped due to numerical issues: {skipped_folds}")
-                print(f"    CV metrics may be optimistic - consider more training data")
-
-        return {
-            "cv_mae": avg_mae,
-            "cv_mae_std": std_mae,
-            "cv_rmse": avg_rmse,
-            "cv_corr": avg_corr,
-            "cv_corr_std": std_corr,
-            "cv_n_samples": len(X_full),
-            "cv_n_folds": n_splits,
-            "cv_skipped_folds": len(skipped_folds),
-        }

@@ -4,9 +4,9 @@ This module provides BoTorch-based acquisition function optimization
 for the LIPO pipeline. Uses qLogExpectedImprovement which is
 numerically stable even when improvement values are extremely small.
 
-Pipeline: z (64D VAE latent) -> Adapter -> z_gp (10D) -> GP -> qLogEI
+Pipeline: z (16D VAE latent) -> Adapter -> z_gp (10D) -> Kumaraswamy Warp -> GP -> qLogEI
 
-After optimization: z_opt (64D) -> VAE decoder -> embedding (768D) -> Vec2Text
+After optimization: z_opt (16D) -> VAE decoder -> embedding (768D) -> Vec2Text
 
 Adapted from generation/invbo_decoder/botorch_acq.py for lipo.
 """
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 class CompositeLogEI(AcquisitionFunction):
-    """qLogEI that operates on 64D VAE latent space.
+    """qLogEI that operates on 16D VAE latent space.
 
-    The GP model expects 64D VAE latent input and applies adapter internally:
-        z (64D) -> GP (with adapter) -> z_gp (10D) -> kernel -> qLogEI
+    The GP model expects 16D VAE latent input and applies adapter internally:
+        z (16D) -> GP (with adapter) -> z_gp (10D) -> Kumaraswamy Warp -> kernel -> qLogEI
 
-    This enables gradient-based optimization in 64D VAE latent space
-    with gradients flowing through the adapter.
+    This enables gradient-based optimization in 16D VAE latent space
+    with gradients flowing through the adapter and warping.
     """
 
     def __init__(
@@ -44,7 +44,7 @@ class CompositeLogEI(AcquisitionFunction):
         """Initialize composite acquisition function.
 
         Args:
-            model: GP model that accepts 64D VAE latents and applies adapter internally
+            model: GP model that accepts 16D VAE latents and applies adapter internally
             best_f: Best observed negated error rate (max of -error_rates for BoTorch maximization)
             sampler: Optional MC sampler for qLogEI
         """
@@ -61,22 +61,22 @@ class CompositeLogEI(AcquisitionFunction):
         """Evaluate acquisition on VAE latent points.
 
         Args:
-            X: VAE latent points with shape (batch, q, d) where d=64
-               For single-point acquisition, shape is (batch, 1, 64)
+            X: VAE latent points with shape (batch, q, d) where d=latent_dim
+               For single-point acquisition, shape is (batch, 1, latent_dim)
 
         Returns:
             Acquisition values with shape (batch,)
         """
-        # Pass directly to qLogEI - GP applies adapter internally
+        # Pass directly to qLogEI - GP applies adapter and warping internally
         return self._base_acq(X)
 
 
 class LatentSpaceAcquisition:
-    """Optimizes qLogEI in VAE latent space (64D).
+    """Optimizes qLogEI in VAE latent space (16D).
 
     Uses BoTorch's optimize_acqf with multi-start L-BFGS-B optimization.
     This provides proper gradient flow through:
-        z (64D) -> GP (with trainable adapter) -> z_gp (10D) -> kernel -> LogEI
+        z (16D) -> GP (with trainable adapter) -> z_gp (10D) -> Kumaraswamy Warp -> kernel -> LogEI
 
     Key advantages over scipy L-BFGS-B:
     1. Gradient-based refinement with proper autograd
@@ -93,8 +93,8 @@ class LatentSpaceAcquisition:
         """Initialize latent space acquisition optimizer.
 
         Args:
-            gp_model: Trained GP model that accepts 64D VAE latents
-            bounds: VAE latent space bounds, shape (2, 64)
+            gp_model: Trained GP model that accepts 16D VAE latents
+            bounds: VAE latent space bounds, shape (2, latent_dim)
                     bounds[0] = lower bounds, bounds[1] = upper bounds
             device: Torch device
         """
@@ -110,7 +110,7 @@ class LatentSpaceAcquisition:
         options: Optional[dict] = None,
         seed: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Find optimal VAE latent z (64D) maximizing qLogEI.
+        """Find optimal VAE latent z (16D) maximizing qLogEI.
 
         Uses BoTorch's optimize_acqf with:
         1. raw_samples random starting points
@@ -126,7 +126,7 @@ class LatentSpaceAcquisition:
 
         Returns:
             (candidate, acq_value) tuple where:
-            - candidate: Optimal VAE latent tensor, shape (1, 64)
+            - candidate: Optimal VAE latent tensor, shape (1, latent_dim)
             - acq_value: LogEI value at optimal point
         """
         if options is None:
@@ -178,23 +178,23 @@ def get_latent_bounds(
     X_max: torch.Tensor,
     margin: float = 0.2,
 ) -> torch.Tensor:
-    """Compute bounds for 64D VAE latent space from training data.
+    """Compute bounds for 16D VAE latent space from training data.
 
-    X_train is already stored as 64D VAE latents. We just need to
+    X_train is already stored as 16D VAE latents. We just need to
     normalize and compute bounds with margin for exploration.
 
     Args:
         encoder: VAEWithAdapter (unused, kept for API compatibility)
-        X_train: Training VAE latents (N, 64)
-        X_min: Min values for normalization (64D)
-        X_max: Max values for normalization (64D)
+        X_train: Training VAE latents (N, latent_dim)
+        X_min: Min values for normalization (latent_dim,)
+        X_max: Max values for normalization (latent_dim,)
         margin: Fraction to expand bounds (0.2 = 20% each side)
 
     Returns:
-        Bounds tensor, shape (2, 64) for 64D VAE latent space
+        Bounds tensor, shape (2, latent_dim) for VAE latent space
     """
     with torch.no_grad():
-        # Normalize training data (already 64D VAE latents)
+        # Normalize training data (already 16D VAE latents)
         denom = X_max - X_min
         denom[denom == 0] = 1.0
         latents_norm = (X_train - X_min) / denom

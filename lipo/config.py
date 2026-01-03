@@ -4,7 +4,27 @@ Single Source of Truth (SSOT) for all parameters.
 CLI arguments in run.py override these defaults.
 """
 
+import torch
 from dataclasses import dataclass
+
+
+def get_device(device: str = "auto") -> str:
+    """Determine device to use for computation.
+
+    Centralized device detection to avoid duplication across modules.
+
+    Args:
+        device: Device specification:
+            - "auto": Use CUDA if available, else CPU
+            - "cuda": Force CUDA (will fail if unavailable)
+            - "cpu": Force CPU
+
+    Returns:
+        Device string ("cuda" or "cpu")
+    """
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return device
 
 
 @dataclass
@@ -33,9 +53,9 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.003  # KL regularization weight (scaled for latent_dim=64)
+    vae_beta: float = 0.015  # KL regularization weight (5x stronger for latent_dim=16)
     vae_gamma: float = 1.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
-    vae_epochs: int = 10000
+    vae_epochs: int = 15000
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
     vae_lr: float = 0.0006
@@ -45,7 +65,7 @@ class Config:
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 64  # VAE latent dimension
+    latent_dim: int = 16  # VAE latent dimension (compressed for denser representation)
     gp_latent_dim: int = 10  # Adapter output dimension for GP
 
     # === Hyperband ===
@@ -72,6 +92,18 @@ class Config:
     vec2text_beam: int = 8  # Beam width for Vec2Text generation
     vec2text_model: str = "512_tokens"  # "32_tokens" or "512_tokens"
     vec2text_max_length: int = 128  # Maximum output tokens for Vec2Text
+
+    # === TuRBO (Trust Region) ===
+    turbo_enabled: bool = True  # Enable trust region optimization
+    turbo_L_init: float = 0.8  # Initial side length (fraction of unit cube)
+    turbo_L_max: float = 1.6  # Maximum side length
+    turbo_L_min: float = 0.0078  # Minimum side length (0.5^7, triggers restart)
+    turbo_tau_succ: int = 3  # Consecutive successes to double L
+    turbo_tau_fail: int = 40  # Consecutive failures to halve L
+
+    # === PAS (Potential-Aware Anchor Selection) ===
+    pas_enabled: bool = True  # Enable potential-aware anchor selection
+    pas_n_candidates: int = 100  # Candidates per anchor for Thompson Sampling
 
     # === Inversion Optimization ===
     inversion_n_steps: int = 100  # Adam optimization steps

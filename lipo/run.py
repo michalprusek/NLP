@@ -229,12 +229,12 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.003,
-        help="VAE KL regularization weight (scaled for latent_dim=64)"
+        "--vae-beta", type=float, default=0.015,
+        help="VAE KL regularization weight (5x stronger for latent_dim=16)"
     )
     parser.add_argument(
-        "--vae-epochs", type=int, default=10000,
-        help="VAE training epochs"
+        "--vae-epochs", type=int, default=15000,
+        help="VAE training epochs (more for 16D compression)"
     )
     parser.add_argument(
         "--vae-annealing", type=int, default=500,
@@ -847,6 +847,9 @@ def _save_results(
                     "log_ei": r.log_ei,
                     "gap": r.gap,
                     "inversion_iters": r.inversion_iters,
+                    "rejection_attempts": r.rejection_attempts,
+                    "low_quality_accepted": r.low_quality_accepted,
+                    "gp_samples": r.gp_samples,
                     # Optimization Gap Test metrics
                     "z_opt_z_real_cosine": r.z_opt_z_real_cosine,
                     "z_opt_z_real_euclidean": r.z_opt_z_real_euclidean,
