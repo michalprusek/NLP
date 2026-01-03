@@ -234,7 +234,7 @@ def main():
     )
     parser.add_argument(
         "--vae-epochs", type=int, default=15000,
-        help="VAE training epochs (more for 16D compression)"
+        help="VAE training epochs"
     )
     parser.add_argument(
         "--vae-annealing", type=int, default=500,

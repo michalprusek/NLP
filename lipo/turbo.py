@@ -60,7 +60,7 @@ class TrustRegionManager:
         """Initialize trust region manager.
 
         Args:
-            dim: Dimensionality of latent space (16 for VAE latent, matches config.latent_dim)
+            dim: Dimensionality of latent space (64 for VAE latent, matches config.latent_dim)
             device: Torch device
             L_init: Initial side length (fraction of unit cube)
             L_max: Maximum side length
@@ -166,6 +166,14 @@ class TrustRegionManager:
             per_dim_half_L = (L / 2) / ls_clamped
         else:
             # Uniform scaling (standard TuRBO)
+            if lengthscales is not None:
+                import warnings
+                warnings.warn(
+                    f"ARD lengthscales dimension ({lengthscales.shape[0]}) does not match "
+                    f"bounds dimension ({dim}). Using uniform trust region scaling. "
+                    f"This is expected when GP operates in adapter space (10D) "
+                    f"but bounds are in VAE latent space ({dim}D)."
+                )
             per_dim_half_L = torch.full((dim,), L / 2, device=global_bounds.device)
 
         # Compute bounds
@@ -450,7 +458,7 @@ def create_turbo_manager(config, device: torch.device) -> TrustRegionManager:
         Configured TrustRegionManager
     """
     return TrustRegionManager(
-        dim=config.latent_dim,  # 16D VAE latent (config.latent_dim)
+        dim=config.latent_dim,  # 64D VAE latent (config.latent_dim)
         device=device,
         L_init=config.turbo_L_init,
         L_max=config.turbo_L_max,

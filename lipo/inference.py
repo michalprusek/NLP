@@ -52,7 +52,7 @@ class IterationRecord:
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
     # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
-    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (16D)
+    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (64D)
     z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
     z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
     predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
@@ -326,6 +326,7 @@ class ZSInvertRefiner:
         x_range = (X_max - X_min).to(self.device)
         X_min_dev = X_min.to(self.device)
         patience_counter = 0
+        iteration = 0
 
         metrics = {
             "iterations": 0,
@@ -336,72 +337,83 @@ class ZSInvertRefiner:
 
         self.vae.eval()
 
-        for iteration in range(self.n_iterations):
-            # 1. Encode current best text
-            target_emb = self.gtr.encode_tensor(best_text)
+        try:
+            for iteration in range(self.n_iterations):
+                # 1. Encode current best text
+                target_emb = self.gtr.encode_tensor(best_text)
 
-            # 2. Compute current similarity
-            with torch.no_grad():
-                z_unnorm = z * x_range + X_min_dev
-                current_emb = self.vae.decode(z_unnorm)
-                current_sim = F.cosine_similarity(
-                    current_emb.unsqueeze(0),
-                    target_emb.unsqueeze(0)
+                # 2. Compute current similarity
+                with torch.no_grad():
+                    z_unnorm = z * x_range + X_min_dev
+                    current_emb = self.vae.decode(z_unnorm)
+                    current_sim = F.cosine_similarity(
+                        current_emb.unsqueeze(0),
+                        target_emb.unsqueeze(0)
+                    ).item()
+
+                if iteration == 0:
+                    metrics["initial_sim"] = current_sim
+                    best_sim = current_sim
+
+                # 3. Gradient-based refinement of z
+                z_opt = z.clone().requires_grad_(True)
+                optimizer = torch.optim.Adam([z_opt], lr=self.lr)
+
+                for step in range(self.n_steps):
+                    optimizer.zero_grad()
+                    z_unnorm = z_opt * x_range + X_min_dev
+                    decoded = self.vae.decode(z_unnorm)
+                    loss = 1 - F.cosine_similarity(
+                        decoded.unsqueeze(0),
+                        target_emb.unsqueeze(0)
+                    )
+                    loss.backward()
+                    optimizer.step()
+
+                    # Clamp to valid normalized range [0, 1]
+                    with torch.no_grad():
+                        z_opt.data.clamp_(0, 1)
+
+                # 4. Decode refined latent and invert to text
+                z = z_opt.detach()
+                with torch.no_grad():
+                    z_unnorm = z * x_range + X_min_dev
+                    new_emb = self.vae.decode(z_unnorm)
+
+                new_text = self.inverter.invert(new_emb.clone())
+
+                # 5. Evaluate improvement (GTR similarity between new_emb and GTR(new_text))
+                new_target = self.gtr.encode_tensor(new_text)
+                new_sim = F.cosine_similarity(
+                    new_emb.unsqueeze(0),
+                    new_target.unsqueeze(0)
                 ).item()
 
-            if iteration == 0:
-                metrics["initial_sim"] = current_sim
-                best_sim = current_sim
+                if verbose:
+                    print(f"    ZSInvert iter {iteration + 1}: sim {current_sim:.4f} → {new_sim:.4f}")
 
-            # 3. Gradient-based refinement of z
-            z_opt = z.clone().requires_grad_(True)
-            optimizer = torch.optim.Adam([z_opt], lr=self.lr)
+                if new_sim > best_sim + self.threshold:
+                    best_sim = new_sim
+                    best_text = new_text
+                    metrics["iterations"] = iteration + 1
+                    patience_counter = 0  # Reset patience on improvement
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.patience:
+                        # Patience exhausted, stop
+                        if verbose:
+                            print(f"    ZSInvert: patience exhausted ({self.patience}), stopping")
+                        break
 
-            for step in range(self.n_steps):
-                optimizer.zero_grad()
-                z_unnorm = z_opt * x_range + X_min_dev
-                decoded = self.vae.decode(z_unnorm)
-                loss = 1 - F.cosine_similarity(
-                    decoded.unsqueeze(0),
-                    target_emb.unsqueeze(0)
-                )
-                loss.backward()
-                optimizer.step()
-
-                # Clamp to valid normalized range [0, 1]
-                with torch.no_grad():
-                    z_opt.data.clamp_(0, 1)
-
-            # 4. Decode refined latent and invert to text
-            z = z_opt.detach()
-            with torch.no_grad():
-                z_unnorm = z * x_range + X_min_dev
-                new_emb = self.vae.decode(z_unnorm)
-
-            new_text = self.inverter.invert(new_emb.clone())
-
-            # 5. Evaluate improvement (GTR similarity between new_emb and GTR(new_text))
-            new_target = self.gtr.encode_tensor(new_text)
-            new_sim = F.cosine_similarity(
-                new_emb.unsqueeze(0),
-                new_target.unsqueeze(0)
-            ).item()
-
-            if verbose:
-                print(f"    ZSInvert iter {iteration + 1}: sim {current_sim:.4f} → {new_sim:.4f}")
-
-            if new_sim > best_sim + self.threshold:
-                best_sim = new_sim
-                best_text = new_text
-                metrics["iterations"] = iteration + 1
-                patience_counter = 0  # Reset patience on improvement
-            else:
-                patience_counter += 1
-                if patience_counter >= self.patience:
-                    # Patience exhausted, stop
-                    if verbose:
-                        print(f"    ZSInvert: patience exhausted ({self.patience}), stopping")
-                    break
+        except Exception as e:
+            # Log error and return best result so far
+            import warnings
+            warnings.warn(
+                f"ZSInvert refinement failed at iteration {iteration}: {e}. "
+                f"Returning best result found before failure."
+            )
+            metrics["error"] = str(e)
+            metrics["iterations"] = iteration
 
         metrics["final_sim"] = best_sim
         metrics["improvement"] = best_sim - metrics["initial_sim"]
@@ -448,7 +460,7 @@ class LIPOHyperbandInference:
         self.gp = gp
         self.vae = vae
         self.config = config
-        # VAEWithAdapter for decoding (16D -> 768D)
+        # VAEWithAdapter for decoding (64D -> 768D)
         self.vae_with_adapter = gp.vae_with_adapter
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.evaluator = evaluator
@@ -493,7 +505,7 @@ class LIPOHyperbandInference:
             self.anchor_selector = None
 
         # Initialize ZSInvert refiner (runs after Vec2Text for iterative refinement)
-        self.use_zsinvert = getattr(config, 'zsinvert_enabled', False)
+        self.use_zsinvert = getattr(config, 'zsinvert_enabled', True)
         if self.use_zsinvert:
             self.zsinvert_refiner = ZSInvertRefiner(
                 vae_with_adapter=self.vae_with_adapter,
@@ -542,10 +554,10 @@ class LIPOHyperbandInference:
         """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
         Uses multi-start L-BFGS-B with proper gradient flow through:
-            z (16D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
+            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
 
         This is the recommended optimization method as it:
-        1. Optimizes in 16D VAE latent space
+        1. Optimizes in 64D VAE latent space
         2. Uses adapter to compress to 10D for efficient GP
         3. Gradients flow through adapter for latent optimization
 
@@ -577,8 +589,8 @@ class LIPOHyperbandInference:
             )
 
         # Create acquisition optimizer
-        # Optimization path: z (16D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
-        # After optimization: z_opt (16D) → VAE decoder → embedding (768D)
+        # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
+        # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
@@ -635,7 +647,7 @@ class LIPOHyperbandInference:
         encoder.eval()
 
         with torch.no_grad():
-            # Encode 768D embedding to 16D VAE latent (unnormalized)
+            # Encode 768D embedding to 64D VAE latent (unnormalized)
             z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
 
             # Normalize to GP input space
@@ -847,7 +859,7 @@ GP Status:
                 anchor_idx = best_idx
 
             # Get ARD lengthscales from GP kernel for LOL-BO style scaling
-            # Note: lengthscales are in 10D adapter space, bounds are in 32D VAE space
+            # Note: lengthscales are in 10D adapter space, bounds are in 64D VAE space
             # get_ard_bounds() handles dimension mismatch by falling back to uniform scaling
             lengthscales = None
             try:
@@ -855,8 +867,12 @@ GP Status:
                     base_kernel = self.gp.gp_model.covar_module.base_kernel
                     if hasattr(base_kernel, 'lengthscale'):
                         lengthscales = base_kernel.lengthscale.detach().squeeze()
-            except Exception:
-                pass  # Fall back to uniform scaling
+            except Exception as e:
+                import warnings
+                warnings.warn(
+                    f"Could not extract ARD lengthscales from GP kernel: {e}. "
+                    f"Falling back to uniform trust region scaling."
+                )
 
             # Get ARD-aware trust region bounds (LOL-BO style)
             bounds = self.trust_region.get_ard_bounds(global_bounds, lengthscales)
@@ -1001,7 +1017,7 @@ GP Status:
             denom[denom == 0] = 1.0
             z_real_norm = (z_real - self.gp.X_min) / denom
 
-            # Gap metrics in VAE latent space (16D)
+            # Gap metrics in VAE latent space (64D)
             z_opt_z_real_cosine = F.cosine_similarity(
                 z_opt_original.unsqueeze(0), z_real_norm.unsqueeze(0)
             ).item()

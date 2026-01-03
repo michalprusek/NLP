@@ -1234,7 +1234,7 @@ total_loss = recon_loss + beta(epoch) * kl_loss + gamma * cycle_loss
 
 # KL Annealing
 beta(epoch) = vae_beta * (epoch / annealing_epochs)  # epoch < annealing
-            = vae_beta                                 # jinak (0.0001 pro 64D)
+            = vae_beta                                 # jinak (0.003 pro 64D)
 ```
 
 **Optimizer:** AdamW, lr=0.0006
