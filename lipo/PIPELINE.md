@@ -151,7 +151,7 @@ Veškeré parametry jsou centralizované v `Config` dataclass:
 | `vae_epochs` | 10000 | Max počet epoch |
 | `vae_annealing_epochs` | 500 | Počet epoch pro KL annealing |
 | `vae_patience` | 500 | Early stopping patience |
-| `vae_lr` | 0.0003 | Learning rate |
+| `vae_lr` | 0.0006 | Learning rate |
 | `vae_batch_size` | 64 | Batch size |
 | `vae_grad_clip` | 1.0 | Gradient clipping |
 | `vae_eta_min` | 1e-4 | Min LR pro cosine scheduler |

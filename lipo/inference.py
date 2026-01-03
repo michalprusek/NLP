@@ -165,10 +165,11 @@ class Vec2TextInverter:
         print("Loading Vec2Text (512_tokens InversionModel)...")
 
         # Clear CUDA cache before loading - Vec2Text loads its own GTR model internally
+        # Note: gc.collect() must come before empty_cache() to free Python objects first
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
             import gc
             gc.collect()
+            torch.cuda.empty_cache()
 
         model_dir = snapshot_download("vec2text/gtr-512-noise-0.00001")
         config = InversionConfig.from_pretrained(model_dir)
@@ -304,6 +305,7 @@ class LIPOHyperbandInference:
         self.best_error: float = float("inf")
         self.best_instruction: Optional[str] = None
         self._consecutive_retrain_failures: int = 0  # Track consecutive GP retrain failures
+        self._total_retrain_failures: int = 0  # Track total GP retrain failures (never resets)
 
         # Initialize best from Hyperband results or GP
         if initial_best_instruction is not None and initial_best_error is not None:
@@ -500,8 +502,12 @@ class LIPOHyperbandInference:
         L-BFGS-B for finding optimal latent points. Includes InvBO inversion
         loop to close the gap between decoder output and Vec2Text reconstruction.
 
-        Also enforces cosine similarity threshold between decoder output and
-        re-encoded text to reject misaligned candidates.
+        Candidate Rejection:
+            Enforces cosine similarity threshold between decoder(z) and GTR(text)
+            to reject misaligned candidates that Vec2Text failed to reconstruct properly.
+            - Candidates with cosine_sim < config.cosine_sim_threshold (default 0.90) are rejected
+            - Up to config.max_rejection_attempts (default 5) attempts with different seeds
+            - If all attempts fail, accepts the best candidate with a WARNING
 
         Args:
             iteration: Iteration number
@@ -514,7 +520,7 @@ class LIPOHyperbandInference:
             verbose: Print progress
 
         Returns:
-            IterationRecord with results
+            IterationRecord with results including rejection_attempts and low_quality_accepted
         """
         if verbose:
             print(f"\n--- Iteration {iteration} ---")
@@ -704,8 +710,10 @@ class LIPOHyperbandInference:
         )
         if not retrain_success:
             self._consecutive_retrain_failures += 1
+            self._total_retrain_failures += 1
             print(f"ERROR: GP retraining failed at iteration {iteration}")
             print(f"  Consecutive failures: {self._consecutive_retrain_failures}")
+            print(f"  Total failures: {self._total_retrain_failures}")
             print(f"  Training samples: {self.gp.get_training_size()}")
 
             if self._consecutive_retrain_failures >= 3:
@@ -714,6 +722,8 @@ class LIPOHyperbandInference:
                     f"This indicates a systematic problem with the training data. "
                     f"Possible causes: duplicate observations, numerical overflow, or ill-conditioned kernel."
                 )
+            if self._total_retrain_failures >= 5:
+                print(f"  WARNING: {self._total_retrain_failures} total GP retrain failures - results may be unreliable")
             print(f"  WARNING: Continuing with previous model (attempt {self._consecutive_retrain_failures}/3)")
         else:
             self._consecutive_retrain_failures = 0

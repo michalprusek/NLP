@@ -273,7 +273,13 @@ Output format:
                 if len(cleaned) > 5 and cleaned != instruction:
                     variations.append(cleaned)
             return variations[:3]
-        except Exception:
+        except (TimeoutError, ConnectionError) as e:
+            # Transient network errors - log briefly and continue
+            return []
+        except Exception as e:
+            # Unexpected error - log with context for debugging
+            print(f"WARNING: APE augmentation failed for instruction: {instruction[:50]}...")
+            print(f"  Error type: {type(e).__name__}, Error: {e}")
             return []
 
     def _add_noise(self, text: str, prob: float = 0.1) -> str:
@@ -494,12 +500,22 @@ class LIPOHyperbandTrainer:
         # Select embeddings based on source
         if embedding_source == "diverse":
             if not hasattr(self, 'diverse_embeddings') or not self.diverse_embeddings:
-                raise RuntimeError("No diverse instructions. Call load_diverse_instructions() first.")
+                raise RuntimeError(
+                    "No diverse instructions for VAE training. Either:\n"
+                    "  1. Call load_diverse_instructions(path) with JSON containing diverse instructions, or\n"
+                    "  2. Use --diverse-instructions CLI flag with path to JSON file, or\n"
+                    "  3. Use embedding_source='instructions' to train on grid/APE instructions instead"
+                )
             embeddings_dict = self.diverse_embeddings
             source_name = "diverse"
         else:
             if not self.instruction_embeddings:
-                raise RuntimeError("No instructions. Call generate_instructions() or load_from_grid() first.")
+                raise RuntimeError(
+                    "No instructions for VAE training. Either:\n"
+                    "  1. Call generate_instructions() to generate APE instructions, or\n"
+                    "  2. Call load_from_grid(path) to load from pre-evaluated grid, or\n"
+                    "  3. Call load_from_hyperband_evaluations(path) to load from HbBoPs results"
+                )
             embeddings_dict = self.instruction_embeddings
             source_name = "grid/APE"
 

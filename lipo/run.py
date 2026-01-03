@@ -569,7 +569,7 @@ def main():
                 save_hbbops_results(
                     results=hbbops_results,
                     output_path=hbbops_output_path,
-                    source_log=str(log_path),
+                    source_log=str(log_file),
                     max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
                     instructions=trainer.instructions,
                 )
@@ -662,7 +662,7 @@ def main():
             save_hbbops_results(
                 results=hbbops_results,
                 output_path=hbbops_output_path,
-                source_log=str(log_path),
+                source_log=str(log_file),
                 max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
                 instructions=trainer.instructions,
             )

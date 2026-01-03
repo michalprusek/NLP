@@ -956,9 +956,19 @@ class GPWithEI:
         original_y_mean = self.y_mean.clone() if self.y_mean is not None else None
         original_y_std = self.y_std.clone() if self.y_std is not None else None
 
-        adapter = self.vae_with_adapter.adapter
+        # Save original adapter state to clone for each fold
+        # This prevents later folds from starting with weights optimized for earlier folds
+        import copy
+        original_adapter_state = self.vae_with_adapter.adapter.state_dict()
+
+        # Track skipped folds for reporting
+        skipped_folds = []
 
         for fold, (train_idx, val_idx) in enumerate(kf.split(X_full)):
+            # Clone adapter for this fold to avoid bias
+            adapter = copy.deepcopy(self.vae_with_adapter.adapter)
+            adapter.load_state_dict(original_adapter_state)
+            adapter = adapter.to(self.device)
             # Split data for this fold
             X_fold_train = X_full[train_idx]
             X_fold_val = X_full[val_idx]
@@ -1031,6 +1041,7 @@ class GPWithEI:
                         if "cholesky" in str(e).lower() or "singular" in str(e).lower():
                             if verbose:
                                 print(f"  Fold {fold + 1}: Training failed (numerical)")
+                            skipped_folds.append(fold + 1)
                             break
                         raise
 
@@ -1085,10 +1096,10 @@ class GPWithEI:
             self.y_std = original_y_std
 
         # === AGGREGATE RESULTS ===
-        avg_mae = np.mean(mae_scores)
-        avg_rmse = np.mean(rmse_scores)
+        avg_mae = np.mean(mae_scores) if mae_scores else 0.0
+        avg_rmse = np.mean(rmse_scores) if rmse_scores else 0.0
         avg_corr = np.mean(correlations) if correlations else 0.0
-        std_mae = np.std(mae_scores)
+        std_mae = np.std(mae_scores) if mae_scores else 0.0
         std_corr = np.std(correlations) if correlations else 0.0
 
         if verbose:
@@ -1096,6 +1107,9 @@ class GPWithEI:
             print(f"  MAE:  {avg_mae:.4f} ± {std_mae:.4f}")
             print(f"  RMSE: {avg_rmse:.4f}")
             print(f"  Corr: {avg_corr:.4f} ± {std_corr:.4f}")
+            if skipped_folds:
+                print(f"  WARNING: {len(skipped_folds)} folds skipped due to numerical issues: {skipped_folds}")
+                print(f"    CV metrics may be optimistic - consider more training data")
 
         return {
             "cv_mae": avg_mae,
@@ -1105,4 +1119,5 @@ class GPWithEI:
             "cv_corr_std": std_corr,
             "cv_n_samples": len(X_full),
             "cv_n_folds": n_splits,
+            "cv_skipped_folds": len(skipped_folds),
         }
