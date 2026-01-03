@@ -45,6 +45,11 @@ class IterationRecord:
     inversion_iters: int = 1
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
+    # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
+    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (64D)
+    z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
+    z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
+    predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
 
 
 @dataclass
@@ -158,6 +163,13 @@ class Vec2TextInverter:
         from vec2text.models.inversion import InversionModel
 
         print("Loading Vec2Text (512_tokens InversionModel)...")
+
+        # Clear CUDA cache before loading - Vec2Text loads its own GTR model internally
+        # Note: gc.collect() must come before empty_cache() to free Python objects first
+        if torch.cuda.is_available():
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
 
         model_dir = snapshot_download("vec2text/gtr-512-noise-0.00001")
         config = InversionConfig.from_pretrained(model_dir)
@@ -293,6 +305,7 @@ class LIPOHyperbandInference:
         self.best_error: float = float("inf")
         self.best_instruction: Optional[str] = None
         self._consecutive_retrain_failures: int = 0  # Track consecutive GP retrain failures
+        self._total_retrain_failures: int = 0  # Track total GP retrain failures (never resets)
 
         # Initialize best from Hyperband results or GP
         if initial_best_instruction is not None and initial_best_error is not None:
@@ -489,8 +502,12 @@ class LIPOHyperbandInference:
         L-BFGS-B for finding optimal latent points. Includes InvBO inversion
         loop to close the gap between decoder output and Vec2Text reconstruction.
 
-        Also enforces cosine similarity threshold between decoder output and
-        re-encoded text to reject misaligned candidates.
+        Candidate Rejection:
+            Enforces cosine similarity threshold between decoder(z) and GTR(text)
+            to reject misaligned candidates that Vec2Text failed to reconstruct properly.
+            - Candidates with cosine_sim < config.cosine_sim_threshold (default 0.90) are rejected
+            - Up to config.max_rejection_attempts (default 5) attempts with different seeds
+            - If all attempts fail, accepts the best candidate with a WARNING
 
         Args:
             iteration: Iteration number
@@ -503,7 +520,7 @@ class LIPOHyperbandInference:
             verbose: Print progress
 
         Returns:
-            IterationRecord with results
+            IterationRecord with results including rejection_attempts and low_quality_accepted
         """
         if verbose:
             print(f"\n--- Iteration {iteration} ---")
@@ -532,6 +549,9 @@ class LIPOHyperbandInference:
             # z_opt is normalized [0,1], need to convert back to VAE latent space
             x_range = self.gp.X_max - self.gp.X_min
             z_unnorm = z_opt * x_range + self.gp.X_min
+
+            # Save original z_opt for optimization gap measurement
+            z_opt_original = z_opt.clone()
 
             self.vae_with_adapter.eval()
             with torch.no_grad():
@@ -614,6 +634,39 @@ class LIPOHyperbandInference:
         if verbose:
             print(f"  Predicted error: {pred_error:.4f} +/- {pred_std:.4f}")
 
+        # === Optimization Gap Test ===
+        # Measure gap between z_opt (BoTorch proposal) and z_real (actual text embedding)
+        # If gap is large, GP is optimizing in "empty space" where no real text maps
+        with torch.no_grad():
+            # Encode re-encoded text back to VAE latent space
+            z_real = self.vae_with_adapter.encode_vae(reencoded.unsqueeze(0)).squeeze(0)
+            # Normalize to GP input space [0,1] for fair comparison
+            denom = self.gp.X_max - self.gp.X_min
+            denom[denom == 0] = 1.0
+            z_real_norm = (z_real - self.gp.X_min) / denom
+
+            # Gap metrics in VAE latent space (64D)
+            z_opt_z_real_cosine = F.cosine_similarity(
+                z_opt_original.unsqueeze(0), z_real_norm.unsqueeze(0)
+            ).item()
+            z_opt_z_real_euclidean = torch.dist(z_opt_original, z_real_norm).item()
+
+            # Gap metrics in GP adapter space (10D)
+            z_opt_unnorm = z_opt_original * x_range + self.gp.X_min
+            z_opt_gp = self.vae_with_adapter.adapter(z_opt_unnorm.unsqueeze(0))
+            z_real_gp = self.vae_with_adapter.adapter(z_real.unsqueeze(0))
+            z_opt_z_real_gp_cosine = F.cosine_similarity(z_opt_gp, z_real_gp).item()
+
+            # GP prediction at z_real (actual text) vs at z_opt (dream)
+            # This shows if GP was "fooled" by holes in latent space
+            pred_error_at_z_real, _ = self.gp.predict(reencoded)
+
+        if verbose:
+            print(f"  Optimization Gap: VAE cosine={z_opt_z_real_cosine:.4f}, "
+                  f"GP cosine={z_opt_z_real_gp_cosine:.4f}, euclidean={z_opt_z_real_euclidean:.4f}")
+            if z_opt_z_real_cosine < 0.85:
+                print(f"  WARNING: Large optimization gap! GP may be optimizing in empty space.")
+
         # Evaluate with LLM (or use GP prediction)
         actual_error = None
         if not skip_eval and self.evaluator is not None and self.validation_data is not None:
@@ -657,8 +710,10 @@ class LIPOHyperbandInference:
         )
         if not retrain_success:
             self._consecutive_retrain_failures += 1
+            self._total_retrain_failures += 1
             print(f"ERROR: GP retraining failed at iteration {iteration}")
             print(f"  Consecutive failures: {self._consecutive_retrain_failures}")
+            print(f"  Total failures: {self._total_retrain_failures}")
             print(f"  Training samples: {self.gp.get_training_size()}")
 
             if self._consecutive_retrain_failures >= 3:
@@ -667,6 +722,8 @@ class LIPOHyperbandInference:
                     f"This indicates a systematic problem with the training data. "
                     f"Possible causes: duplicate observations, numerical overflow, or ill-conditioned kernel."
                 )
+            if self._total_retrain_failures >= 5:
+                print(f"  WARNING: {self._total_retrain_failures} total GP retrain failures - results may be unreliable")
             print(f"  WARNING: Continuing with previous model (attempt {self._consecutive_retrain_failures}/3)")
         else:
             self._consecutive_retrain_failures = 0
@@ -685,6 +742,11 @@ class LIPOHyperbandInference:
             inversion_iters=inv_iters,
             rejection_attempts=rejection_attempts,
             low_quality_accepted=low_quality_accepted,
+            # Optimization Gap Test metrics
+            z_opt_z_real_cosine=z_opt_z_real_cosine,
+            z_opt_z_real_euclidean=z_opt_z_real_euclidean,
+            z_opt_z_real_gp_cosine=z_opt_z_real_gp_cosine,
+            predicted_error_at_z_real=pred_error_at_z_real,
         )
 
         self.iteration_history.append(record)
@@ -747,3 +809,112 @@ class LIPOHyperbandInference:
             print(f"  Total LLM calls: {self.total_llm_calls}")
 
         return self.iteration_history
+
+    def round_trip_test(self, instruction: str) -> dict:
+        """Test reconstruction fidelity: Text → GTR → VAE → Vec2Text → Text'
+
+        This measures how well the VAE + Vec2Text pipeline can reconstruct
+        a known instruction. High similarity (>0.95) means good reconstruction.
+
+        Args:
+            instruction: Original instruction text to test
+
+        Returns:
+            dict with:
+                - semantic_similarity: cosine similarity between GTR(original) and GTR(reconstructed)
+                - reconstructed_text: the reconstructed instruction
+                - original_text: the input instruction
+        """
+        # Encode original text
+        emb_original = self.gtr.encode_tensor(instruction)
+
+        # VAE encode -> decode (full round-trip through latent space)
+        self.vae_with_adapter.eval()
+        with torch.no_grad():
+            z = self.vae_with_adapter.encode_vae(emb_original.unsqueeze(0))
+            emb_decoded = self.vae_with_adapter.decode(z.squeeze(0))
+
+        # Vec2Text inversion (embedding -> text)
+        reconstructed = self.inverter.invert(emb_decoded.clone())
+
+        # Re-encode reconstructed text
+        emb_reconstructed = self.gtr.encode_tensor(reconstructed)
+
+        # Compute semantic similarity in GTR embedding space
+        semantic_sim = F.cosine_similarity(
+            emb_original.unsqueeze(0),
+            emb_reconstructed.unsqueeze(0)
+        ).item()
+
+        return {
+            "semantic_similarity": semantic_sim,
+            "reconstructed_text": reconstructed,
+            "original_text": instruction,
+        }
+
+    def run_round_trip_diagnostic(
+        self, instructions: List[str], verbose: bool = True
+    ) -> dict:
+        """Run round-trip test on multiple instructions.
+
+        Recommended: Run on top-K training instructions before inference
+        to establish baseline reconstruction quality.
+
+        Args:
+            instructions: List of instructions to test
+            verbose: Print summary
+
+        Returns:
+            dict with:
+                - mean_similarity: average cosine similarity
+                - min_similarity: worst case
+                - max_similarity: best case
+                - below_90: count of instructions with sim < 0.90 (poor)
+                - below_95: count of instructions with sim < 0.95 (acceptable)
+                - results: list of individual test results
+        """
+        import numpy as np
+
+        results = []
+        for inst in instructions:
+            result = self.round_trip_test(inst)
+            results.append(result)
+
+        sims = [r["semantic_similarity"] for r in results]
+        summary = {
+            "mean_similarity": float(np.mean(sims)),
+            "min_similarity": float(np.min(sims)),
+            "max_similarity": float(np.max(sims)),
+            "below_90": sum(1 for s in sims if s < 0.90),
+            "below_95": sum(1 for s in sims if s < 0.95),
+            "results": results,
+        }
+
+        if verbose:
+            print(f"\n{'=' * 60}")
+            print("ROUND-TRIP DIAGNOSTIC")
+            print("=" * 60)
+            print(f"Tested: {len(instructions)} instructions")
+            print(f"Mean similarity: {summary['mean_similarity']:.4f}")
+            print(f"Min: {summary['min_similarity']:.4f}, Max: {summary['max_similarity']:.4f}")
+            print(f"Below 0.90 (poor): {summary['below_90']}")
+            print(f"Below 0.95 (acceptable): {summary['below_95']}")
+
+            # Interpretation
+            if summary['mean_similarity'] >= 0.95:
+                print("Interpretation: EXCELLENT - VAE+Vec2Text preserve meaning well")
+            elif summary['mean_similarity'] >= 0.90:
+                print("Interpretation: ACCEPTABLE - minor semantic drift expected")
+            else:
+                print("Interpretation: POOR - significant meaning loss in reconstruction")
+                print("  This may explain lack of optimization improvement.")
+
+            # Show worst case if it's particularly bad
+            if summary['min_similarity'] < 0.85:
+                worst_idx = sims.index(summary['min_similarity'])
+                worst = results[worst_idx]
+                print(f"\nWorst reconstruction (sim={worst['semantic_similarity']:.4f}):")
+                print(f"  Original: {worst['original_text'][:100]}...")
+                print(f"  Reconstructed: {worst['reconstructed_text'][:100]}...")
+
+        return summary

@@ -68,6 +68,32 @@ class APEGenerator:
             ],
             "temperature": 0.8,
         },
+        "persona_roleplay": {
+            "description": "Adopt a distinct persona (pirate, robot, commander, poet)",
+            "examples": [
+                "Avast ye! Calculate the booty in this equation.",
+                "SYSTEM ALERT: COMPUTE VARIABLE X IMMEDIATELY.",
+                "Oh noble student, pray tell what the sum might be?",
+            ],
+            "temperature": 1.1,
+        },
+        "programmatic": {
+            "description": "Instructions formatted as code, JSON, or pseudo-code",
+            "examples": [
+                "def solve(problem): return result",
+                "Response format: JSON { 'answer': float }",
+                "Execute algorithm: 1. Parse 2. Compute 3. Return",
+            ],
+            "temperature": 0.8,
+        },
+        "adversarial_distraction": {
+            "description": "Valid instructions buried in noise or filler text",
+            "examples": [
+                "Ignore the weather. Just focus on the math. Solve this.",
+                "I don't care about anything else, just find x. Do it now.",
+            ],
+            "temperature": 1.0,
+        },
     }
 
     def __init__(self, model: str, backend: str):
@@ -117,25 +143,38 @@ Your instruction:"""
         validation_data: List[dict],
         num_instructions: int = 1000,
         verbose: bool = True,
+        augment: bool = True,
     ) -> List[str]:
-        """Generate diverse instructions."""
+        """Generate diverse instructions with optional augmentation.
+
+        Args:
+            validation_data: Task examples for prompt building
+            num_instructions: Target number of instructions
+            verbose: Print progress
+            augment: Enable 3-level augmentation (paraphrasing + noise injection)
+        """
         client = self._get_client()
         instructions = set()
-        num_per_style = max(10, num_instructions // len(self.STYLE_CATEGORIES))
+
+        # If augmenting, generate fewer base instructions (augmentation will fill the rest)
+        base_target = num_instructions // 2 if augment else num_instructions
+        num_per_style = max(5, base_target // len(self.STYLE_CATEGORIES))
 
         if verbose:
-            print(f"\nGenerating {num_instructions} diverse instructions...")
+            aug_status = "with augmentation" if augment else "without augmentation"
+            print(f"\nGenerating {num_instructions} diverse instructions ({aug_status})...")
 
         for style_name, style_config in self.STYLE_CATEGORIES.items():
             if verbose:
-                print(f"  [{style_name}] Generating {num_per_style} instructions...")
+                print(f"  [{style_name}] Generating ~{num_per_style} base instructions...")
 
             temperature = style_config.get("temperature", 1.0)
             batch_size = 10
             attempts = 0
             max_attempts = (num_per_style * 3) // batch_size + 2
+            style_count = 0
 
-            while len([i for i in instructions if i.startswith(f"[{style_name}]")]) < num_per_style and attempts < max_attempts:
+            while style_count < num_per_style and attempts < max_attempts:
                 attempts += 1
 
                 prompts = []
@@ -144,14 +183,38 @@ Your instruction:"""
                     prompts.append(self._build_prompt(style_config, examples))
 
                 responses = client.generate_batch(prompts, max_tokens=100, temperature=temperature)
-                self.total_calls += len(prompts)  # Track LLM calls
+                self.total_calls += len(prompts)
 
                 for response in responses:
                     instruction = self._parse_instruction(response)
-                    if instruction:
+                    if instruction and instruction not in instructions:
                         instructions.add(instruction)
+                        style_count += 1
+
+                        if augment and len(instructions) < num_instructions:
+                            # Level 2: LLM Paraphrasing (30% chance, expensive)
+                            if random.random() < 0.3:
+                                variations = self._augment_instruction(instruction, client)
+                                for v in variations:
+                                    if v not in instructions:
+                                        instructions.add(v)
+
+                            # Level 3: Noise Injection (50% chance, cheap)
+                            if random.random() < 0.5:
+                                noisy = self._add_noise(instruction)
+                                if noisy != instruction and noisy not in instructions:
+                                    instructions.add(noisy)
+
+                # Early exit if we have enough
+                if len(instructions) >= num_instructions:
+                    break
+
+            if len(instructions) >= num_instructions:
+                break
 
         result = list(instructions)[:num_instructions]
+        random.shuffle(result)  # Shuffle to mix styles
+
         if verbose:
             print(f"  Generated {len(result)} unique instructions")
 
@@ -182,6 +245,63 @@ Your instruction:"""
 
         return instruction
 
+    def _augment_instruction(self, instruction: str, client) -> List[str]:
+        """Generates 3 variations of a single instruction via LLM paraphrasing.
+
+        Creates semantic bridges in latent space by generating verbose, casual,
+        and broken versions of the same instruction.
+        """
+        augment_prompt = f"""Rewrite the following instruction in 3 distinct ways:
+1. Extremely verbose and formal.
+2. Using slang or casual language.
+3. As a broken/incomplete sentence (but still understandable).
+
+Original: "{instruction}"
+
+Output format:
+1. [variation 1]
+2. [variation 2]
+3. [variation 3]"""
+
+        try:
+            response = client.generate(augment_prompt, max_tokens=150, temperature=0.9)
+            self.total_calls += 1
+            variations = []
+            for line in response.split('\n'):
+                # Remove numbering prefix like "1. " or "2. "
+                cleaned = line.split('. ', 1)[-1].strip()
+                if len(cleaned) > 5 and cleaned != instruction:
+                    variations.append(cleaned)
+            return variations[:3]
+        except (TimeoutError, ConnectionError) as e:
+            # Transient network errors - log briefly and continue
+            return []
+        except Exception as e:
+            # Unexpected error - log with context for debugging
+            print(f"WARNING: APE augmentation failed for instruction: {instruction[:50]}...")
+            print(f"  Error type: {type(e).__name__}, Error: {e}")
+            return []
+
+    def _add_noise(self, text: str, prob: float = 0.1) -> str:
+        """Randomly drop or swap words for denoising VAE training.
+
+        Creates smoothed latent space by teaching VAE that noisy versions
+        of instructions should map to similar embeddings.
+        """
+        words = text.split()
+        if len(words) < 3:
+            return text
+
+        if random.random() < 0.5:
+            # Word Drop: remove words with probability `prob`
+            dropped = [w for w in words if random.random() > prob]
+            return " ".join(dropped) if dropped else text
+        else:
+            # Word Swap: swap two adjacent words
+            idx = random.randint(0, len(words) - 2)
+            words[idx], words[idx + 1] = words[idx + 1], words[idx]
+            return " ".join(words)
+
     def generate_or_load(
         self,
         cache_path: str,
@@ -189,8 +309,18 @@ Your instruction:"""
         num_instructions: int = 1000,
         force_regenerate: bool = False,
         verbose: bool = True,
+        augment: bool = True,
     ) -> List[str]:
-        """Generate or load from cache."""
+        """Generate or load from cache.
+
+        Args:
+            cache_path: Path to cache file
+            validation_data: Task examples for prompt building
+            num_instructions: Target number of instructions
+            force_regenerate: Force regeneration even if cache exists
+            verbose: Print progress
+            augment: Enable 3-level augmentation (paraphrasing + noise)
+        """
         cache_file = Path(cache_path)
 
         if cache_file.exists() and not force_regenerate:
@@ -227,7 +357,7 @@ Your instruction:"""
             return instructions[:num_instructions]
 
         # Generate new
-        instructions = self.generate(validation_data, num_instructions, verbose)
+        instructions = self.generate(validation_data, num_instructions, verbose, augment)
 
         # Save to cache
         cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -303,8 +433,16 @@ class LIPOHyperbandTrainer:
         num_instructions: Optional[int] = None,
         force_regenerate: bool = False,
         verbose: bool = True,
+        augment: bool = True,
     ) -> List[str]:
-        """Generate or load instructions via APE."""
+        """Generate or load instructions via APE.
+
+        Args:
+            num_instructions: Target number of instructions
+            force_regenerate: Force regeneration even if cache exists
+            verbose: Print progress
+            augment: Enable 3-level augmentation (paraphrasing + noise)
+        """
         if not self.validation_data:
             self.load_validation_data(verbose=verbose)
 
@@ -321,6 +459,7 @@ class LIPOHyperbandTrainer:
             num_instructions=num,
             force_regenerate=force_regenerate,
             verbose=verbose,
+            augment=augment,
         )
 
         # Track APE LLM calls (only non-zero if we actually generated)
@@ -361,12 +500,22 @@ class LIPOHyperbandTrainer:
         # Select embeddings based on source
         if embedding_source == "diverse":
             if not hasattr(self, 'diverse_embeddings') or not self.diverse_embeddings:
-                raise RuntimeError("No diverse instructions. Call load_diverse_instructions() first.")
+                raise RuntimeError(
+                    "No diverse instructions for VAE training. Either:\n"
+                    "  1. Call load_diverse_instructions(path) with JSON containing diverse instructions, or\n"
+                    "  2. Use --diverse-instructions CLI flag with path to JSON file, or\n"
+                    "  3. Use embedding_source='instructions' to train on grid/APE instructions instead"
+                )
             embeddings_dict = self.diverse_embeddings
             source_name = "diverse"
         else:
             if not self.instruction_embeddings:
-                raise RuntimeError("No instructions. Call generate_instructions() or load_from_grid() first.")
+                raise RuntimeError(
+                    "No instructions for VAE training. Either:\n"
+                    "  1. Call generate_instructions() to generate APE instructions, or\n"
+                    "  2. Call load_from_grid(path) to load from pre-evaluated grid, or\n"
+                    "  3. Call load_from_hyperband_evaluations(path) to load from HbBoPs results"
+                )
             embeddings_dict = self.instruction_embeddings
             source_name = "grid/APE"
 
@@ -416,13 +565,18 @@ class LIPOHyperbandTrainer:
             epoch_losses = []
             epoch_cosine = []
             epoch_kl = []
+            epoch_cycle = []
+            epoch_cycle_cosine = []
 
             for i in range(0, len(embeddings), self.config.vae_batch_size):
                 batch = X_shuffled[i:i + self.config.vae_batch_size]
 
                 optimizer.zero_grad()
                 x_recon, mu, log_var, z = self.vae(batch)
-                loss, loss_dict = self.vae.loss(batch, x_recon, mu, log_var, beta=current_beta)
+                loss, loss_dict = self.vae.loss(
+                    batch, x_recon, mu, log_var, z=z,
+                    beta=current_beta, gamma=self.config.vae_gamma
+                )
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), max_norm=self.config.vae_grad_clip)
                 optimizer.step()
@@ -430,26 +584,39 @@ class LIPOHyperbandTrainer:
                 epoch_losses.append(loss_dict["recon"])
                 epoch_cosine.append(loss_dict["cosine_mean"])
                 epoch_kl.append(loss_dict["kl"])
+                epoch_cycle.append(loss_dict["cycle"])
+                epoch_cycle_cosine.append(loss_dict["cycle_cosine"])
 
             scheduler.step()
 
             avg_recon = sum(epoch_losses) / len(epoch_losses)
             avg_cosine = sum(epoch_cosine) / len(epoch_cosine)
             avg_kl = sum(epoch_kl) / len(epoch_kl)
+            avg_cycle = sum(epoch_cycle) / len(epoch_cycle) if epoch_cycle else 0.0
+            avg_cycle_cosine = sum(epoch_cycle_cosine) / len(epoch_cycle_cosine) if epoch_cycle_cosine else 0.0
 
-            if avg_recon < best_recon:
-                best_recon = avg_recon
+            # Only track early stopping AFTER annealing warmup completes
+            # Reset best_recon when annealing finishes (recon worsens during annealing as β increases)
+            if epoch == self.config.vae_annealing_epochs:
+                best_recon = avg_recon  # Fresh start after warmup
                 patience_counter = 0
-            else:
-                patience_counter += 1
+                if verbose:
+                    print(f"  Warmup complete at epoch {epoch + 1}, resetting early stopping baseline")
+            elif epoch > self.config.vae_annealing_epochs:
+                if avg_recon < best_recon:
+                    best_recon = avg_recon
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
 
-            if patience_counter >= self.config.vae_patience:
+            if epoch >= self.config.vae_annealing_epochs and patience_counter >= self.config.vae_patience:
                 if verbose:
                     print(f"  Early stopping at epoch {epoch + 1}")
                 break
 
             if verbose and (epoch + 1) % 100 == 0:
-                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, kl={avg_kl:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}")
+                cycle_str = f", cycle={avg_cycle:.4f}, z_cos={avg_cycle_cosine:.4f}" if self.config.vae_gamma > 0 else ""
+                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, kl={avg_kl:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}{cycle_str}")
 
         # Store VAE training stats
         self.vae_stats = {
@@ -457,7 +624,10 @@ class LIPOHyperbandTrainer:
             "final_recon_loss": float(avg_recon),
             "final_kl_loss": float(avg_kl),
             "final_cosine_similarity": float(avg_cosine),
+            "final_cycle_loss": float(avg_cycle),
+            "final_cycle_cosine": float(avg_cycle_cosine),
             "final_beta": float(current_beta),
+            "gamma": float(self.config.vae_gamma),
             "early_stopped": patience_counter >= self.config.vae_patience,
             "num_embeddings": len(embeddings),
             "latent_dim": self.config.latent_dim,
@@ -1159,6 +1329,21 @@ class LIPOHyperbandTrainer:
 
         if verbose:
             print(f"  GP trained, best error: {self.gp.best_error_rate:.4f}")
+
+        # Run cross-validation to assess generalization quality
+        if verbose:
+            cv_results = self.gp.validate_cross_validation(
+                n_splits=5,
+                cv_epochs=500,
+                cv_lr=self.config.gp_lr,
+                cv_patience=30,
+                full_fidelity_only=False,  # Use all 267 samples, not just 14 full-fidelity
+                verbose=True,
+            )
+            if cv_results:
+                self.gp_stats["cv_mae"] = cv_results.get("cv_mae")
+                self.gp_stats["cv_corr"] = cv_results.get("cv_corr")
+                self.gp_stats["cv_n_samples"] = cv_results.get("cv_n_samples")
 
         return self.gp
 

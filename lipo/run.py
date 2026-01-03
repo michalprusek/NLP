@@ -222,6 +222,10 @@ def main():
         "--force-regenerate-ape", action="store_true",
         help="Force regenerate APE instructions even if cache exists"
     )
+    parser.add_argument(
+        "--no-ape-augment", action="store_true",
+        help="Disable APE instruction augmentation (paraphrasing + noise injection)"
+    )
 
     # VAE training
     parser.add_argument(
@@ -235,6 +239,10 @@ def main():
     parser.add_argument(
         "--vae-annealing", type=int, default=500,
         help="VAE KL annealing epochs"
+    )
+    parser.add_argument(
+        "--vae-gamma", type=float, default=1.0,
+        help="VAE cycle consistency weight (ensures z ≈ encode(decode(z)))"
     )
 
     # Hyperband
@@ -256,8 +264,8 @@ def main():
     )
     parser.add_argument(
         "--hyperband-evals-path", type=str,
-        default="lipo/data/ape_instructions.json",
-        help="Path to JSON with hyperband_evaluations (default: lipo/data/ape_instructions.json)"
+        default="lipo/data/hbbops_results_20260102.json",
+        help="Path to JSON with hyperband_evaluations (default: lipo/data/hbbops_results_20260102.json)"
     )
 
     # GP training
@@ -444,6 +452,7 @@ def main():
         ape_cache_path=args.ape_cache,
         # VAE Training
         vae_beta=args.vae_beta,
+        vae_gamma=args.vae_gamma,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
         # Hyperband
@@ -484,6 +493,18 @@ def main():
 
     if args.skip_hbbops:
         trainer.load_validation_data(verbose=True)
+
+        # Regenerate APE instructions if requested (before loading hyperband evaluations)
+        if args.force_regenerate_ape:
+            print("\n" + "=" * 60)
+            print("Regenerating APE Instructions")
+            print("=" * 60)
+            trainer.generate_instructions(
+                num_instructions=args.ape_instructions,
+                force_regenerate=True,
+                verbose=True,
+                augment=not args.no_ape_augment,
+            )
 
         # Load instructions and evaluations from JSON
         trainer.load_from_hyperband_evaluations(
@@ -548,7 +569,7 @@ def main():
                 save_hbbops_results(
                     results=hbbops_results,
                     output_path=hbbops_output_path,
-                    source_log=str(log_path),
+                    source_log=str(log_file),
                     max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
                     instructions=trainer.instructions,
                 )
@@ -616,12 +637,14 @@ def main():
                 num_instructions=args.ape_instructions,
                 force_regenerate=False,
                 verbose=True,
+                augment=not args.no_ape_augment,
             )
         else:
             trainer.generate_instructions(
                 num_instructions=args.ape_instructions,
                 force_regenerate=args.force_regenerate_ape,
                 verbose=True,
+                augment=not args.no_ape_augment,
             )
 
         trainer.train_vae(verbose=True)
@@ -639,7 +662,7 @@ def main():
             save_hbbops_results(
                 results=hbbops_results,
                 output_path=hbbops_output_path,
-                source_log=str(log_path),
+                source_log=str(log_file),
                 max_fidelity=len(trainer.validation_data) if trainer.validation_data else 1319,
                 instructions=trainer.instructions,
             )
@@ -675,6 +698,20 @@ def main():
         initial_best_error=best_error,
     )
 
+    # === Round-Trip Diagnostic ===
+    # Test VAE+Vec2Text reconstruction on top training instructions before inference
+    if trainer.instructions and trainer.grid_error_rates:
+        # Get top-10 instructions sorted by error rate (best first)
+        sorted_indices = sorted(
+            range(len(trainer.grid_error_rates)),
+            key=lambda i: trainer.grid_error_rates[i]
+        )[:10]
+        top_instructions = [trainer.instructions[i] for i in sorted_indices]
+        round_trip_results = inference.run_round_trip_diagnostic(top_instructions, verbose=True)
+    else:
+        round_trip_results = None
+        print("WARNING: Skipping round-trip diagnostic (no training instructions available)")
+
     history = inference.run(
         iterations=args.iterations,
         num_restarts=config.num_restarts,
@@ -707,12 +744,12 @@ def main():
     print(f"  TOTAL: {total_llm_calls}")
     print("=" * 70)
 
-    _save_results(args, trainer, evaluator, best_prompt, best_error, inference, timestamp, vae_quality_metrics)
+    _save_results(args, trainer, evaluator, best_prompt, best_error, inference, timestamp, vae_quality_metrics, round_trip_results)
 
 
 def _save_results(
     args, trainer, evaluator, best_prompt, best_error, inference, timestamp: str,
-    vae_quality_metrics: dict = None
+    vae_quality_metrics: dict = None, round_trip_results: dict = None
 ):
     """Save results to JSON file."""
     output_dir = Path(args.output_dir)
@@ -728,6 +765,13 @@ def _save_results(
     result = {
         "timestamp": timestamp,
         "vae_quality_metrics": vae_quality_metrics,
+        "round_trip_diagnostic": {
+            "mean_similarity": round_trip_results["mean_similarity"] if round_trip_results else None,
+            "min_similarity": round_trip_results["min_similarity"] if round_trip_results else None,
+            "max_similarity": round_trip_results["max_similarity"] if round_trip_results else None,
+            "below_90": round_trip_results["below_90"] if round_trip_results else None,
+            "below_95": round_trip_results["below_95"] if round_trip_results else None,
+        } if round_trip_results else None,
         "config": {
             # Mode
             "mode": "grid_loading" if args.load_grid else "standard",
@@ -803,6 +847,11 @@ def _save_results(
                     "log_ei": r.log_ei,
                     "gap": r.gap,
                     "inversion_iters": r.inversion_iters,
+                    # Optimization Gap Test metrics
+                    "z_opt_z_real_cosine": r.z_opt_z_real_cosine,
+                    "z_opt_z_real_euclidean": r.z_opt_z_real_euclidean,
+                    "z_opt_z_real_gp_cosine": r.z_opt_z_real_gp_cosine,
+                    "predicted_error_at_z_real": r.predicted_error_at_z_real,
                 }
                 for r in inference.iteration_history
             ],

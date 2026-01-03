@@ -34,10 +34,11 @@ class Config:
 
     # === VAE Training ===
     vae_beta: float = 0.003  # KL regularization weight (scaled for latent_dim=64)
+    vae_gamma: float = 1.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
     vae_epochs: int = 10000
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
-    vae_lr: float = 0.0003
+    vae_lr: float = 0.0006
     vae_batch_size: int = 64
     vae_grad_clip: float = 1.0
     vae_eta_min: float = 1e-4
