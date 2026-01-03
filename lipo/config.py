@@ -53,9 +53,9 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.015  # KL regularization weight (5x stronger for latent_dim=16)
-    vae_gamma: float = 1.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
-    vae_epochs: int = 15000
+    vae_beta: float = 0.015  # KL regularization weight (increased for smoother latent space)
+    vae_gamma: float = 5.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
+    vae_epochs: int = 20000  # Increased for better convergence with higher beta
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
     vae_lr: float = 0.0006
@@ -65,7 +65,7 @@ class Config:
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 16  # VAE latent dimension (compressed for denser representation)
+    latent_dim: int = 64  # VAE latent dimension (768/64 = 12x compression)
     gp_latent_dim: int = 10  # Adapter output dimension for GP
 
     # === Hyperband ===
@@ -84,9 +84,9 @@ class Config:
     raw_samples: int = 1024  # Raw samples for initialization seeding
     use_inversion: bool = True  # Use InvBO inversion loop
     max_inversion_iters: int = 3  # Maximum inversion iterations per step
-    gap_threshold: float = 0.1  # Gap threshold for re-inversion (cosine distance)
-    cosine_sim_threshold: float = 0.90  # Min cosine similarity between decoder(z) and GTR(text)
-    max_rejection_attempts: int = 5  # Max attempts to find aligned candidate before falling back
+    gap_threshold: float = 0.08  # Gap threshold for re-inversion (stricter to reduce optimization gap)
+    cosine_sim_threshold: float = 0.93  # Min cosine similarity (increased for better alignment)
+    max_rejection_attempts: int = 10  # Max attempts (increased for better candidates)
 
     # === Vec2Text ===
     vec2text_beam: int = 8  # Beam width for Vec2Text generation
@@ -95,11 +95,11 @@ class Config:
 
     # === TuRBO (Trust Region) ===
     turbo_enabled: bool = True  # Enable trust region optimization
-    turbo_L_init: float = 0.8  # Initial side length (fraction of unit cube)
-    turbo_L_max: float = 1.6  # Maximum side length
+    turbo_L_init: float = 0.4  # Initial side length (reduced to prevent large jumps)
+    turbo_L_max: float = 0.8  # Maximum side length (reduced for tighter exploration)
     turbo_L_min: float = 0.0078  # Minimum side length (0.5^7, triggers restart)
     turbo_tau_succ: int = 3  # Consecutive successes to double L
-    turbo_tau_fail: int = 40  # Consecutive failures to halve L
+    turbo_tau_fail: int = 25  # Consecutive failures to halve L (faster shrinking)
 
     # === PAS (Potential-Aware Anchor Selection) ===
     pas_enabled: bool = True  # Enable potential-aware anchor selection
@@ -110,6 +110,14 @@ class Config:
     inversion_lr: float = 0.1  # Adam learning rate
     inversion_convergence_threshold: float = 0.01  # Early stop threshold
     latent_margin: float = 0.2  # Margin for latent bounds expansion
+
+    # === ZSInvert Refinement ===
+    zsinvert_enabled: bool = True  # Enable ZSInvert refinement after Vec2Text
+    zsinvert_iterations: int = 25  # Max refinement iterations (increased for better convergence)
+    zsinvert_lr: float = 0.1  # Learning rate for gradient refinement
+    zsinvert_steps_per_iter: int = 50  # Optimization steps per iteration
+    zsinvert_improvement_threshold: float = 0.005  # Min improvement (finer detection)
+    zsinvert_patience: int = 8  # Patience for early stopping (increased)
 
     # === GP Retrain (during inference) ===
     gp_retrain_epochs: int = 1000

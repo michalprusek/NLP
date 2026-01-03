@@ -224,13 +224,13 @@ uv run python -m lipo.run --iterations 10
 - **GP training**: Uses only HbBoPs-evaluated prompts with accuracy labels
 
 **Architecture:**
-- VAE: 768D GTR → 16D latent (frozen during GP training)
-- Adapter: 16D → 10D (trainable with GP)
+- VAE: 768D GTR → 64D latent (frozen during GP training)
+- Adapter: 64D → 10D (trainable with GP)
 - GP: Matern 5/2 kernel on 10D adapter output with Kumaraswamy input warping
 
 **Optimization flow:**
 ```
-z (16D) → Adapter → z_gp (10D) → GP → qLogEI
+z (64D) → Adapter → z_gp (10D) → GP → qLogEI
 ```
 
 **Skip HbBoPs Mode:**
@@ -244,6 +244,7 @@ When `--skip-hbbops` is enabled:
 - **Always update `lipo/PIPELINE.md`** when making changes to LIPO code (dimensions, parameters, architecture)
 - PIPELINE.md is the single source of truth for LIPO architecture and parameters
 - Keep dimensions, loss functions, and training parameters in sync with `config.py`
+- **Always update `lipo/run.py` CLI argument defaults** when changing `config.py` defaults - CLI overrides config!
 
 ## Coding Standards
 

@@ -60,7 +60,7 @@ class TrustRegionManager:
         """Initialize trust region manager.
 
         Args:
-            dim: Dimensionality of latent space (16 for VAE latent, matches config.latent_dim)
+            dim: Dimensionality of latent space (64 for VAE latent, matches config.latent_dim)
             device: Torch device
             L_init: Initial side length (fraction of unit cube)
             L_max: Maximum side length
@@ -113,6 +113,72 @@ class TrustRegionManager:
         # Compute trust region bounds
         lower = center - half_length
         upper = center + half_length
+
+        # Clamp to global bounds
+        lower = torch.maximum(lower, global_bounds[0])
+        upper = torch.minimum(upper, global_bounds[1])
+
+        return torch.stack([lower, upper], dim=0)
+
+    def get_ard_bounds(
+        self,
+        global_bounds: torch.Tensor,
+        lengthscales: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Compute trust region bounds scaled by ARD lengthscales (LOL-BO style).
+
+        From LOL-BO paper: Trust region is scaled per-dimension based on kernel
+        lengthscales. Dimensions with shorter lengthscales are more important
+        and get tighter bounds.
+
+        Args:
+            global_bounds: Global optimization bounds, shape (2, dim)
+                          bounds[0] = lower, bounds[1] = upper
+            lengthscales: ARD lengthscales from GP kernel, shape (gp_latent_dim,)
+                         If None, uses uniform scaling (same as get_bounds)
+
+        Returns:
+            Trust region bounds, shape (2, dim)
+        """
+        if self.state.center is None:
+            import warnings
+            warnings.warn(
+                "TrustRegionManager.get_ard_bounds() called with no anchor set. "
+                "Using global bounds. This is normal on first iteration."
+            )
+            return global_bounds
+
+        center = self.state.center
+        L = self.state.length
+        dim = global_bounds.shape[1]
+
+        if lengthscales is not None and lengthscales.shape[0] == dim:
+            # LOL-BO style: scale trust region by inverse normalized lengthscales
+            # Shorter lengthscale = more important = tighter bound
+            ls_mean = lengthscales.mean()
+            ls_normalized = lengthscales / ls_mean
+
+            # Clamp to [0.5, 2.0] to avoid extreme scaling
+            ls_clamped = ls_normalized.clamp(0.5, 2.0)
+
+            # Per-dimension half-length: L / ls_normalized
+            # (smaller L for dimensions with smaller lengthscale)
+            per_dim_half_L = (L / 2) / ls_clamped
+        else:
+            # Uniform scaling (standard TuRBO)
+            if lengthscales is not None:
+                import warnings
+                warnings.warn(
+                    f"ARD lengthscales dimension ({lengthscales.shape[0]}) does not match "
+                    f"bounds dimension ({dim}). Using uniform trust region scaling. "
+                    f"This is expected when GP operates in adapter space (10D) "
+                    f"but bounds are in VAE latent space ({dim}D)."
+                )
+            per_dim_half_L = torch.full((dim,), L / 2, device=global_bounds.device)
+
+        # Compute bounds
+        lower = center - per_dim_half_L
+        upper = center + per_dim_half_L
 
         # Clamp to global bounds
         lower = torch.maximum(lower, global_bounds[0])
@@ -392,7 +458,7 @@ def create_turbo_manager(config, device: torch.device) -> TrustRegionManager:
         Configured TrustRegionManager
     """
     return TrustRegionManager(
-        dim=config.latent_dim,  # 16D VAE latent (config.latent_dim)
+        dim=config.latent_dim,  # 64D VAE latent (config.latent_dim)
         device=device,
         L_init=config.turbo_L_init,
         L_max=config.turbo_L_max,
