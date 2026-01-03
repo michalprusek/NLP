@@ -3,8 +3,6 @@
 Provides:
 - GTRInstructionEncoder: GTR-T5-Base encoder wrapper (Vec2Text compatible)
 - InstructionVAE: Variational autoencoder with KL regularization for smooth latent space
-
-Self-contained - no imports from other modules.
 """
 
 import torch
@@ -12,6 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from typing import List, Tuple, Optional
+
+from lipo.config import get_device
 
 
 class GTRInstructionEncoder:
@@ -39,18 +39,9 @@ class GTRInstructionEncoder:
         self.model_name = model_name
         self.normalize = normalize
         self.embedding_dim = 768
-        self.device = self._get_device(device)
+        self.device = get_device(device)
 
         self.model = SentenceTransformer(model_name, device=self.device)
-
-    def _get_device(self, device: str) -> str:
-        if device == "auto":
-            if torch.cuda.is_available():
-                return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "mps"
-            return "cpu"
-        return device
 
     def encode(self, text: str) -> np.ndarray:
         """Encode text to 768D numpy array."""
@@ -370,17 +361,17 @@ class VAEWithAdapter(nn.Module):
     """Wrapper combining frozen VAE encoder with trainable adapter.
 
     Architecture for optimization:
-        z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+        z (32D) → Adapter → z_gp (10D) → GP → qLogEI
 
     The adapter compresses VAE latent for efficient GP modeling while
-    optimization happens in the full 64D space with gradients flowing
+    optimization happens in the full 32D space with gradients flowing
     through the adapter.
 
     For decoding after optimization:
-        z (64D) → VAE decoder → embedding (768D)
+        z (32D) → VAE decoder → embedding (768D)
     """
 
-    def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 32, gp_latent_dim: int = 10):
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -391,16 +382,16 @@ class VAEWithAdapter(nn.Module):
         self.vae_latent_dim = vae_latent_dim
         self.gp_latent_dim = gp_latent_dim
 
-        # Trainable adapter: compresses VAE latents (64D) to GP latents (10D)
+        # Trainable adapter: compresses VAE latents (32D) to GP latents (10D)
         self.adapter = nn.Sequential(
-            nn.Linear(vae_latent_dim, 32),
+            nn.Linear(vae_latent_dim, 20),  # 32 → 20 (intermediate)
             nn.ReLU(),
-            nn.LayerNorm(32),
-            nn.Linear(32, gp_latent_dim),
+            nn.LayerNorm(20),
+            nn.Linear(20, gp_latent_dim),  # 20 → 10
         )
 
     def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode embedding to 64D VAE latent (deterministic mu).
+        """Encode embedding to 32D VAE latent (deterministic mu).
 
         Use this for getting latent for optimization bounds.
         """
@@ -409,7 +400,7 @@ class VAEWithAdapter(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Encode embedding to 10D GP latent (through adapter).
 
-        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
+        Pipeline: x (768D) → VAE encoder → z (32D) → adapter → z_gp (10D)
 
         This is used for GP training.
         """
@@ -420,7 +411,7 @@ class VAEWithAdapter(nn.Module):
         """Apply adapter to VAE latent.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            z: VAE latent tensor of shape (..., 32)
 
         Returns:
             GP latent tensor of shape (..., 10)
@@ -428,10 +419,10 @@ class VAEWithAdapter(nn.Module):
         return self.adapter(z)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode 64D VAE latent to 768D embedding.
+        """Decode 32D VAE latent to 768D embedding.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            z: VAE latent tensor of shape (..., 32)
 
         Returns:
             Embedding tensor of shape (..., 768)

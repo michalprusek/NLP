@@ -37,10 +37,11 @@ FÁZE 2: VAE TRÉNINK
 ┌──────────────────────────────────────────┐
 │ InstructionVAE Training                  │
 │ - Input: 768D GTR embeddingy             │
-│ - Latent: 64D (hladký přes KL)           │
+│ - Latent: 16D (hladký přes KL)           │
 │ - KL annealing: β roste od 0 do β_max    │
+│ - Cycle consistency: γ·cycle_loss        │
 │ - Output: L2-normalizovaná rekonstrukce  │
-│ - Loss: cosine_recon + β·KL              │
+│ - Loss: cosine_recon + β·KL + γ·cycle    │
 └──────────────────────────────────────────┘
 
 FÁZE 3: HYPERBAND EVALUACE
@@ -56,7 +57,8 @@ FÁZE 3: HYPERBAND EVALUACE
 ┌──────────────────────────────────────────┐
 │ GP Training (z Hyperband dat)            │
 │ - VAEWithAdapter: VAE(frozen) + MLP      │
-│ - 64D VAE latent → 10D (přes adapter)    │
+│ - 16D VAE latent → 10D (přes adapter)    │
+│ - Kumaraswamy input warping (dynamic D)  │
 │ - Matern 5/2 kernel s ARD (10D)          │
 │ - FixedNoiseGaussianLikelihood           │
 │ - Heteroscedastic noise: p(1-p)/n        │
@@ -66,7 +68,9 @@ FÁZE 3: HYPERBAND EVALUACE
 FÁZE 4: InvBO INFERENCE
 ┌──────────────────────────────────────────┐
 │ BoTorch qLogEI Optimalizace              │
-│ - Optimalizace 64D VAE latent            │
+│ - Optimalizace 16D VAE latent            │
+│ - TuRBO trust region (optional)          │
+│ - PAS anchor selection (optional)        │
 │ - Multi-start L-BFGS-B (64 restartů)     │
 │ - Raw samples inicializace (1024)        │
 │ - LogEI: numericky stabilní EI           │
@@ -82,7 +86,7 @@ FÁZE 4: InvBO INFERENCE
                     ↓
 ┌──────────────────────────────────────────┐
 │ VAE Decoder + Vec2Text Inverze           │
-│ - z_opt (64D) → decoder → embedding (768D)
+│ - z_opt (16D) → decoder → embedding (768D)
 │ - embedding → Vec2Text → text            │
 │ - 512_tokens model (max 128 tokenů)      │
 └──────────────────────────────────────────┘
@@ -112,12 +116,12 @@ FÁZE 4: InvBO INFERENCE
 
 ```
 lipo/
-├── config.py           # Unified configuration (SSOT)
+├── config.py           # Unified configuration (SSOT) + get_device() utility
 ├── encoder.py          # GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
 ├── gp.py               # InstructionDeepKernelGP, GPWithEI, LogEI funkce
 ├── hyperband.py        # LIPOHyperband (Hyperband + BO)
 ├── training.py         # APEGenerator, LIPOHyperbandTrainer
-├── inference.py        # Vec2TextInverter, LIPOHyperbandInference
+├── inference.py        # Vec2TextInverter, LIPOHyperbandInference, _log_iteration_summary()
 ├── botorch_acq.py      # CompositeLogEI, LatentSpaceAcquisition
 ├── evaluate.py         # GSM8KEvaluator
 ├── instruction.py      # InstructionOnlyPrompt dataclass
@@ -130,6 +134,22 @@ lipo/
 ---
 
 ## Konfigurace (config.py)
+
+### Utility funkce
+
+**`get_device(device: str = "auto") -> str`** - Centralizovaná detekce zařízení:
+```python
+from lipo.config import get_device
+
+device = get_device("auto")  # "cuda" pokud dostupné, jinak "cpu"
+device = get_device("cuda")  # Force CUDA
+device = get_device("cpu")   # Force CPU
+```
+
+Tato funkce je sdílená napříč všemi moduly (encoder.py, hyperband.py, inference.py),
+eliminující duplicitní implementace.
+
+### Config dataclass
 
 Veškeré parametry jsou centralizované v `Config` dataclass:
 
@@ -147,8 +167,9 @@ Veškeré parametry jsou centralizované v `Config` dataclass:
 ### VAE Trénink
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `vae_beta` | 0.003 | KL regularizace (škálováno pro 64D) |
-| `vae_epochs` | 10000 | Max počet epoch |
+| `vae_beta` | 0.015 | KL regularizace (5x silnější pro latent_dim=16) |
+| `vae_gamma` | 1.0 | Cycle consistency weight: z ≈ encode(decode(z)) |
+| `vae_epochs` | 15000 | Max počet epoch |
 | `vae_annealing_epochs` | 500 | Počet epoch pro KL annealing |
 | `vae_patience` | 500 | Early stopping patience |
 | `vae_lr` | 0.0006 | Learning rate |
@@ -160,7 +181,7 @@ Veškeré parametry jsou centralizované v `Config` dataclass:
 | Parametr | Default | Popis |
 |----------|---------|-------|
 | `embedding_dim` | 768 | GTR embedding dimenze |
-| `latent_dim` | 64 | VAE latentní dimenze |
+| `latent_dim` | 16 | VAE latentní dimenze (kompaktnější pro hustší reprezentaci) |
 | `gp_latent_dim` | 10 | Adapter output pro GP |
 
 ### Hyperband
@@ -193,6 +214,22 @@ for_hyperband_gp() → {epochs: 3000, lr: 0.01, patience: 50}
 | `gap_threshold` | 0.1 | Threshold pro re-inverzi (cosine distance) |
 | `cosine_sim_threshold` | 0.90 | Min cosine similarity pro akceptaci kandidáta |
 | `max_rejection_attempts` | 5 | Max pokusů před fallback akceptací |
+
+### TuRBO (Trust Region)
+| Parametr | Default | Popis |
+|----------|---------|-------|
+| `turbo_enabled` | True | Povolit trust region optimalizaci |
+| `turbo_L_init` | 0.8 | Počáteční velikost regionu (% unit cube) |
+| `turbo_L_max` | 1.6 | Maximální velikost regionu |
+| `turbo_L_min` | 0.0078 | Minimální velikost (0.5^7, trigger restart) |
+| `turbo_tau_succ` | 3 | Počet úspěchů pro zdvojnásobení L |
+| `turbo_tau_fail` | 40 | Počet neúspěchů pro zmenšení L |
+
+### PAS (Potential-Aware Anchor Selection)
+| Parametr | Default | Popis |
+|----------|---------|-------|
+| `pas_enabled` | True | Povolit potential-aware anchor selection |
+| `pas_n_candidates` | 100 | Počet kandidátů pro Thompson Sampling |
 
 ### Vec2Text
 | Parametr | Default | Popis |
@@ -241,8 +278,8 @@ class GTRInstructionEncoder:
 Variational autoencoder pro hladký latentní prostor:
 
 ```
-Encoder: 768D → 384 → LayerNorm → 192 → LayerNorm → 2×64 (mu + log_var)
-Decoder: 64 → 192 → LayerNorm → 384 → LayerNorm → 768D (L2 normalized)
+Encoder: 768D → 384 → GELU → LayerNorm → 192 → GELU → LayerNorm → 2×16 (mu + log_var)
+Decoder: 16 → 192 → GELU → LayerNorm → 384 → GELU → LayerNorm → 768D (L2 normalized)
 ```
 
 **GELU aktivace:** Hladší gradienty než ReLU, používá se v transformerech.
@@ -252,7 +289,8 @@ Decoder: 64 → 192 → LayerNorm → 384 → LayerNorm → 768D (L2 normalized)
 ```python
 recon_loss = mean(1 - cosine_similarity(x, x_recon))
 kl_loss = -0.5 * mean(sum(1 + log_var - mu² - exp(log_var)))
-total_loss = recon_loss + beta(epoch) * kl_loss
+cycle_loss = mean(1 - cosine_similarity(z, encode_mu(decode(z))))  # Cycle consistency
+total_loss = recon_loss + beta(epoch) * kl_loss + gamma * cycle_loss
 ```
 
 **KL Annealing:**
@@ -260,8 +298,10 @@ total_loss = recon_loss + beta(epoch) * kl_loss
 if epoch < annealing_epochs:
     beta = vae_beta * (epoch / annealing_epochs)  # Lineární růst od 0
 else:
-    beta = vae_beta  # Konstanta
+    beta = vae_beta  # Konstanta (0.015 pro latent_dim=16)
 ```
+
+**Cycle consistency:** Zajišťuje, že z ≈ encode(decode(z)), čímž předchází "dírám" v latentním prostoru.
 
 **Účel:** Zajišťuje hladký latentní prostor (žádné "díry"), distribuci kolem N(0,1), a lepší generalizaci.
 
@@ -270,24 +310,24 @@ else:
 Kombinuje zmrazenou VAE s trénovatelným adaptérem:
 
 ```
-x (768D) → VAE.encode_mu (frozen) → z_vae (64D) → adapter → z_gp (10D)
+x (768D) → VAE.encode_mu (frozen) → z_vae (16D) → adapter → z_gp (10D)
 ```
 
 **Architektura adaptéru:**
 ```python
 adapter = nn.Sequential(
-    nn.Linear(64, 32),
+    nn.Linear(16, 20),   # 16 → 20 (intermediate)
     nn.ReLU(),
-    nn.LayerNorm(32),
-    nn.Linear(32, 10),
+    nn.LayerNorm(20),
+    nn.Linear(20, 10),   # 20 → 10
 )
 ```
 
 **Metody:**
-- `encode_vae(x)` - 768D → 64D (pouze VAE encoder)
+- `encode_vae(x)` - 768D → 16D (pouze VAE encoder)
 - `forward(x)` - 768D → 10D (celá pipeline)
-- `adapt(z)` - 64D → 10D (pouze adapter)
-- `decode(z)` - 64D → 768D (pouze VAE decoder)
+- `adapt(z)` - 16D → 10D (pouze adapter)
+- `decode(z)` - 16D → 768D (pouze VAE decoder)
 
 ### 4. InstructionDeepKernelGP (gp.py)
 
@@ -295,6 +335,12 @@ GP model s deep kernel pro instrukční optimalizaci:
 
 ```python
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
+    # Kumaraswamy input warping (dynamická dimenze z dat)
+    input_transform = Warp(
+        d=input_dim,  # Dynamicky z train_x.shape[-1]
+        indices=list(range(input_dim)),
+    )
+
     mean_module = ZeroMean()
     covar_module = ScaleKernel(
         MaternKernel(
@@ -308,13 +354,16 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
 
 **Forward pass:**
 ```python
-def forward(self, x):  # x: (batch, 64)
+def forward(self, x):  # x: (batch, 16) - 16D VAE latent
     latent = self.adapter(x)  # (batch, 10)
     return MultivariateNormal(
         self.mean_module(latent),
         self.covar_module(latent),
     )
 ```
+
+**DŮLEŽITÉ:** Warp dimenze je nyní dynamická (`d=self._input_dim` z `train_x.shape[-1]`),
+nikoliv hardcoded, což zabraňuje CUDA "index out of bounds" chybám při změně `latent_dim`.
 
 ### 5. GPWithEI (gp.py) - DETAILNÍ POPIS
 
@@ -332,13 +381,14 @@ error rates pro BoTorch maximizaci.
 │       ↓                                                        │
 │  VAEWithAdapter.encode_vae() [frozen]                          │
 │       ↓                                                        │
-│  64D VAE latent (X_train)                                      │
+│  16D VAE latent (X_train)                                      │
 │       ↓                                                        │
 │  Unit cube normalization: (X - X_min) / (X_max - X_min)        │
 │       ↓                                                        │
 │  ┌────────────────────────────────────────┐                    │
 │  │ InstructionDeepKernelGP                │                    │
-│  │   ├─ adapter: 64D → 10D [trainable]    │                    │
+│  │   ├─ input_transform: Warp(d=16)       │                    │
+│  │   ├─ adapter: 16D → 10D [trainable]    │                    │
 │  │   ├─ mean_module: ZeroMean             │                    │
 │  │   └─ covar_module: ScaleKernel(        │                    │
 │  │         MaternKernel(nu=2.5, ARD=10D)) │                    │
@@ -348,7 +398,7 @@ error rates pro BoTorch maximizaci.
 │       ↓                                                        │
 │  FixedNoiseGaussianLikelihood                                  │
 │    ├─ noise = Bernoulli variance p(1-p)/n                      │
-│    └─ learn_additional_noise = True                            │
+│    └─ learn_additional_noise = False (CUDA stability)          │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -428,32 +478,34 @@ GP pak více důvěřuje high-fidelity observacím.
 ```python
 # Noise je transformován do standardizovaného prostoru
 raw_noise = self._compute_observation_noise(error_rates_original, fidelity_train)
-noise_standardized = raw_noise / (y_std ** 2 + 1e-8)
-noise_standardized = torch.clamp(noise_standardized, max=1.0)
+y_std_sq = max(y_std.item() ** 2, 1e-6)  # Robustní extrakce
+noise_standardized = raw_noise / y_std_sq
+noise_standardized = torch.clamp(noise_standardized, min=1e-4, max=1.0)
+noise_standardized = noise_standardized.view(-1).contiguous()
 
-# Likelihood s fixním heteroscedastic noise + learnable additional noise
+# Likelihood s fixním heteroscedastic noise
 self.likelihood = FixedNoiseGaussianLikelihood(
     noise=noise_standardized,
-    learn_additional_noise=True,  # GP se učí reziduální šum
+    learn_additional_noise=False,  # CUDA stability - avoid second_noise_covar errors
 )
 ```
 
-**Proč `learn_additional_noise=True`?**
-- Bernoulli variance pokrývá sampling noise
-- Ale existuje i "model mismatch" noise (prompt funguje jinak na různých typech otázek)
-- GP se učí tento additional noise z dat
+**Proč `learn_additional_noise=False`?**
+- `learn_additional_noise=True` způsoboval CUDA chyby v `second_noise_covar`
+- Bernoulli variance p(1-p)/n je dostatečná pro modelování observačního šumu
+- Vyšší stabilita při trénování GP
 
 #### 5.5 Normalizace Detaily
 
 **Input normalizace (Unit cube):**
 ```python
 # Každá dimenze normalizována do [0, 1]
-X_min = X_train.min(dim=0)[0]  # (64,)
-X_max = X_train.max(dim=0)[0]  # (64,)
+X_min = X_train.min(dim=0)[0]  # (16,)
+X_max = X_train.max(dim=0)[0]  # (16,)
 denom = X_max - X_min
 denom[denom == 0] = 1.0  # Avoid division by zero for constant dims
 
-X_norm = (X_train - X_min) / denom  # (N, 64) in [0, 1]
+X_norm = (X_train - X_min) / denom  # (N, 16) in [0, 1]
 ```
 
 **Output normalizace (Z-score via BoTorch Standardize):**
@@ -506,134 +558,15 @@ def train(self, epochs=10000, lr=0.01, patience=100):
 
 **Cholesky jitter:** `1e-4` pro numerickou stabilitu při inverzi covariance matice.
 
-#### 5.7 Validace na Full-Fidelity
+#### 5.7 Validace GP
 
-Po tréninku GP validujeme kvalitu predikcí na nejspolehlivějších datech:
+**POZNÁMKA:** GP validace na trénovacích datech byla odstraněna, protože dávala
+optimisticky zkreslený výsledek. GP se nyní validuje pouze na inference výsledcích:
+porovnáním `predicted_error` vs `actual_error` v každé iteraci.
 
-```python
-def _validate_on_full_fidelity(self):
-    max_fid = self.fidelity_train.max()
-    full_fid_mask = self.fidelity_train >= max_fid * 0.99
-
-    if full_fid_mask.sum() < 3:
-        print("WARNING: Too few full-fidelity samples")
-        return
-
-    X_val = self.X_train[full_fid_mask]
-    y_val = self._error_rates_original[full_fid_mask]  # Positive error rates
-
-    # Normalize and predict
-    X_val_norm = (X_val - self.X_min) / (self.X_max - self.X_min)
-
-    with torch.no_grad():
-        pred = self.likelihood(self.gp_model(X_val_norm))
-        pred_neg_error = pred.mean * self.y_std + self.y_mean
-        pred_error = -pred_neg_error  # Positive error rate
-
-    # Compute metrics
-    mae = (pred_error - y_val).abs().mean()
-    rmse = ((pred_error - y_val) ** 2).mean().sqrt()
-    correlation = np.corrcoef(pred_error.cpu(), y_val.cpu())[0, 1]
-
-    print(f"GP Validation: MAE={mae:.4f}, RMSE={rmse:.4f}, Corr={correlation:.4f}")
-```
-
-**DŮLEŽITÉ:** Full-fidelity validace měří chybu NA TRÉNOVACÍCH DATECH → optimistická!
-Pro objektivní měření generalizace používáme K-Fold CV (viz 5.7.1).
-
-#### 5.7.1 K-Fold Cross-Validation (Robustní validace)
-
-Pro **objektivní měření generalizace GP** používáme K-Fold CV. Toto je jediná
-metoda, která měří chybu na datech, která model NIKDY NEVIDĚL.
-
-```python
-def validate_cross_validation(self, n_splits=5, cv_epochs=500):
-    """
-    K-Fold Cross-Validation na high-fidelity datech.
-
-    Pro každý fold:
-    1. Trénuj GP na (k-1) foldech
-    2. Validuj na held-out foldu (neviděná data)
-    3. Počítej MAE a korelaci
-    """
-    # 1. Filtruj pouze high-fidelity data (věrohodná)
-    max_fid = self.fidelity_train.max()
-    mask = self.fidelity_train >= max_fid * 0.99
-
-    X_full = self.X_train[mask]
-    y_full = self._error_rates_original[mask]
-
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-
-    mae_scores, correlations = [], []
-
-    for fold, (train_idx, val_idx) in enumerate(kf.split(X_full)):
-        # Split dat
-        X_fold_train, X_fold_val = X_full[train_idx], X_full[val_idx]
-        y_fold_train, y_fold_val = y_full[train_idx], y_full[val_idx]
-
-        # === NORMALIZACE POMOCÍ TRÉNOVACÍHO FOLDU ===
-        X_min_fold = X_fold_train.min(dim=0)[0]
-        X_max_fold = X_fold_train.max(dim=0)[0]
-        X_train_norm = (X_fold_train - X_min_fold) / (X_max_fold - X_min_fold)
-
-        # Negace pro BoTorch
-        y_train_neg = -y_fold_train
-        y_mean_fold = y_train_neg.mean()
-        y_std_fold = y_train_neg.std()
-        y_train_norm = (y_train_neg - y_mean_fold) / y_std_fold
-
-        # === TRÉNINK NOVÉHO GP NA TOMTO FOLDU ===
-        fold_gp = InstructionDeepKernelGP(X_train_norm, y_train_norm, ...)
-        # Rychlý trénink (500 epoch místo 10000)
-        train_gp(fold_gp, epochs=cv_epochs)
-
-        # === VALIDACE NA HELD-OUT FOLDU ===
-        X_val_norm = (X_fold_val - X_min_fold) / (X_max_fold - X_min_fold)
-        pred_norm = fold_gp(X_val_norm).mean
-        pred_pos = -(pred_norm * y_std_fold + y_mean_fold)  # Denormalize + negate
-
-        mae = (pred_pos - y_fold_val).abs().mean()
-        corr = np.corrcoef(pred_pos, y_fold_val)[0, 1]
-
-        mae_scores.append(mae)
-        correlations.append(corr)
-
-    return {
-        "cv_mae": np.mean(mae_scores),
-        "cv_mae_std": np.std(mae_scores),
-        "cv_corr": np.mean(correlations),
-        "cv_corr_std": np.std(correlations),
-    }
-```
-
-**Proč K-Fold CV:**
-| Metoda | Validace na | Bias | Použití |
-|--------|-------------|------|---------|
-| Full-fidelity | Trénovací data | Optimistická | Rychlá kontrola |
-| K-Fold CV | Neviděná data | Objektivní | Finální hodnocení |
-
-**Náročnost:** 5× delší výpočet (5 tréninkových běhů), ale jediná spolehlivá metrika.
-
-**Výstup CV:**
-```
-Running 5-Fold Cross-Validation on 50 high-fidelity samples...
-  Fold 1/5: MAE=0.0312, RMSE=0.0421, Corr=0.8234
-  Fold 2/5: MAE=0.0287, RMSE=0.0395, Corr=0.8512
-  Fold 3/5: MAE=0.0305, RMSE=0.0410, Corr=0.8156
-  Fold 4/5: MAE=0.0291, RMSE=0.0388, Corr=0.8421
-  Fold 5/5: MAE=0.0296, RMSE=0.0402, Corr=0.8398
-
-Cross-Validation Results (5-fold):
-  MAE:  0.0298 ± 0.0009
-  RMSE: 0.0403
-  Corr: 0.8344 ± 0.0137
-```
-
-**Interpretace:**
-- **MAE 0.03** = průměrná chyba predikce 3% (na škále error rate 0-1)
-- **Corr 0.83** = silná pozitivní korelace mezi predikcemi a skutečností
-- **Nízká variance** (±0.01) = stabilní výkon napříč foldy
+Metriky pro hodnocení kvality GP predikcí jsou součástí iteration summary:
+- Predicted error vs actual error
+- Optimization gap metrics (z_opt vs z_real)
 
 #### 5.8 Prediction Pipeline
 
@@ -645,7 +578,7 @@ def predict(self, embedding):
     """
     # 1. Encode to VAE latent if needed
     if embedding.shape[-1] == 768:
-        z_vae = self.vae_with_adapter.encode_vae(embedding)
+        z_vae = self.vae_with_adapter.encode_vae(embedding)  # 768D → 16D
     else:
         z_vae = embedding
 
@@ -653,12 +586,15 @@ def predict(self, embedding):
     X_norm = (z_vae - self.X_min) / (self.X_max - self.X_min)
 
     # 3. GP prediction (in standardized -error space)
+    # DŮLEŽITÉ: Používáme gp_model přímo, NE přes likelihood!
+    # FixedNoiseGaussianLikelihood ukládá noise pro trénovací body,
+    # proto jej nepoužíváme pro predikci na nových bodech
     self.gp_model.eval()
     self.likelihood.eval()
     with torch.no_grad():
-        pred = self.likelihood(self.gp_model(X_norm))
-        mean_norm = pred.mean
-        std_norm = pred.stddev
+        posterior = self.gp_model(X_norm)  # Přímo z GP modelu
+        mean_norm = posterior.mean
+        std_norm = posterior.stddev
 
     # 4. Denormalize from standardized space
     neg_error = mean_norm * self.y_std + self.y_mean
@@ -669,6 +605,10 @@ def predict(self, embedding):
 
     return mean, std
 ```
+
+**DŮLEŽITÉ:** Predikce nyní používá `self.gp_model(X_norm)` přímo místo
+`self.likelihood(self.gp_model(X_norm))`. Toto zabraňuje `GPInputWarning`
+o nesouladu velikosti šumu při predikci na nových bodech.
 
 #### 5.9 add_observation s Laplace Smoothing
 
@@ -689,7 +629,7 @@ def add_observation(self, embedding, error_rate, fidelity=1319):
     if not 0.0 <= error_rate <= 1.0:
         raise ValueError(f"error_rate must be in [0, 1], got {error_rate}")
 
-    # Encode to VAE latent
+    # Encode to VAE latent (768D → 16D)
     new_z = self.vae_with_adapter.encode_vae(embedding)
 
     # Laplace smoothing: (errors + 1) / (n + 2)
@@ -791,7 +731,7 @@ def best_error_rate(self):
 
 ```
 TRAINING:
-  embeddings (768D) → VAE encoder → latents (64D)
+  embeddings (768D) → VAE encoder → latents (16D)
                                         ↓
   error_rates → negate → y_train = -error_rates
                                ↓
@@ -799,16 +739,14 @@ TRAINING:
                                         ↓
   Unit cube normalize X, Z-score normalize y
                     ↓
-  Train adapter + GP kernel jointly (MLL loss)
-                    ↓
-  Validate on full-fidelity samples (MAE, RMSE, Corr)
+  Train adapter + GP kernel + Warp jointly (MLL loss)
 
 PREDICTION:
-  embedding (768D) → VAE encoder → latent (64D)
+  embedding (768D) → VAE encoder → latent (16D)
                                       ↓
   Normalize to unit cube
                     ↓
-  GP forward → MultivariateNormal(mean, var)
+  GP forward (BEZ likelihood!) → MultivariateNormal(mean, var)
                     ↓
   Denormalize: neg_error = mean * y_std + y_mean
                     ↓
@@ -827,6 +765,9 @@ ADD OBSERVATION:
                     ↓
   Call train() to retrain GP from scratch
 ```
+
+**POZNÁMKA:** GP validace probíhá výhradně na inference výsledcích (predicted vs actual error).
+Predikce používá `self.gp_model(X_norm)` přímo, NE `self.likelihood(self.gp_model(X_norm))`.
 
 ### 6. LIPOHyperband (hyperband.py)
 
@@ -920,7 +861,7 @@ for attempt in range(max_rejection_attempts):  # default 5
 2. **Decode & Invert**
    ```python
    z_unnorm = z_opt * (X_max - X_min) + X_min  # Denormalizace
-   embedding = vae_with_adapter.decode(z_unnorm)  # 64D → 768D
+   embedding = vae_with_adapter.decode(z_unnorm)  # 16D → 768D
    text = vec2text.invert(embedding)  # 768D → text
    ```
 
@@ -932,7 +873,7 @@ for attempt in range(max_rejection_attempts):  # default 5
        optimizer = Adam([z], lr=0.1)
 
        for step in range(100):
-           z_vae = z * x_range + X_min
+           z_vae = z * x_range + X_min  # Denormalizace do 16D
            decoded = vae.decode(z_vae)
            loss = 1 - cosine_similarity(decoded, GTR(text))
            loss.backward()
@@ -968,6 +909,43 @@ if not retrain_success:
         raise RuntimeError("GP retraining failed 3x consecutively")
 ```
 
+**Centralizovaný Iteration Summary (`_log_iteration_summary`):**
+
+Na konci každé iterace se vypisuje konsolidovaný přehled všech metrik:
+
+```
+═══════════════════════════════════════════════════════════════
+ITERATION 1 SUMMARY
+═══════════════════════════════════════════════════════════════
+Instruction: Let's think step by step...
+─────────────────────────────────────────────────────────────────
+PERFORMANCE METRICS:
+  Predicted Error:    0.1523 ± 0.0234
+  Actual Error:       0.1489
+  Best Error So Far:  0.1489
+  Improved:           YES
+─────────────────────────────────────────────────────────────────
+OPTIMIZATION GAP METRICS:
+  VAE Latent Cosine:  0.9234
+  VAE Latent L2:      0.4521
+  GP Space Cosine:    0.9456
+  Pred @ z_real:      0.1534
+─────────────────────────────────────────────────────────────────
+GENERATION QUALITY:
+  Cosine Similarity:  0.9512
+  LogEI:              -2.3456
+  Gap (inversion):    0.0489
+  Inversion Iters:    2
+  Rejection Attempts: 0
+  Low Quality Accept: False
+─────────────────────────────────────────────────────────────────
+GP Status:
+  Training Samples:   226
+═══════════════════════════════════════════════════════════════
+```
+
+Tento formát centralizuje všechny metriky na jednom místě pro snadné sledování optimalizace.
+
 ### 9. LatentSpaceAcquisition (botorch_acq.py)
 
 BoTorch optimalizace v latentním prostoru:
@@ -979,22 +957,22 @@ class LatentSpaceAcquisition:
 
         candidate, acq_value = optimize_acqf(
             acq_function=acq_fn,
-            bounds=bounds,  # (2, 64) pro 64D VAE latent
+            bounds=bounds,  # (2, 16) pro 16D VAE latent
             q=1,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
             options={"maxiter": 200, "batch_limit": 5},
         )
 
-        return candidate, acq_value  # (1, 64), scalar
+        return candidate, acq_value  # (1, 16), scalar
 ```
 
 **Bounds výpočet:**
 ```python
 def get_latent_bounds(X_train, X_min, X_max, margin=0.2):
     latents_norm = (X_train - X_min) / (X_max - X_min)
-    z_min = latents_norm.min(dim=0)[0]
-    z_max = latents_norm.max(dim=0)[0]
+    z_min = latents_norm.min(dim=0)[0]  # (16,)
+    z_max = latents_norm.max(dim=0)[0]  # (16,)
     z_range = z_max - z_min
     return torch.stack([
         z_min - margin * z_range,  # 20% pod minimum
@@ -1081,12 +1059,14 @@ uv run python -m lipo.run --hyperband-only
 
 ## Klíčové designové rozhodnutí
 
-### 1. Proč 64D VAE latent?
-- Poskytuje hladký optimalizační povrch vs 768D embeddingy
-- KL annealing zabraňuje posterior collapse
+### 1. Proč 16D VAE latent (místo 64D)?
+- Kompaktnější reprezentace → hustější latentní prostor
+- Silnější KL regularizace (β=0.015) zabraňuje posterior collapse
+- Cycle consistency (γ=1.0) zajišťuje z ≈ encode(decode(z))
 - Cosine loss (rotačně invariantní) místo MSE
+- Menší dimenze = rychlejší optimalizace
 
-### 2. Proč Adapter 64D → 10D?
+### 2. Proč Adapter 16D → 10D?
 - Efektivní GP modelování
 - Rychlejší BoTorch optimalizace
 - Trénovatelný - učí se task-relevant features společně s GP
@@ -1116,7 +1096,7 @@ uv run python -m lipo.run --hyperband-only
 - Bernoulli variance: Var = p(1-p)/n
 - Nízká fidelity (malé n) → vysoká variance → GP méně důvěřuje
 - Vysoká fidelity (velké n) → nízká variance → GP více důvěřuje
-- `FixedNoiseGaussianLikelihood` s `learn_additional_noise=True`
+- `FixedNoiseGaussianLikelihood` s `learn_additional_noise=False` (CUDA stabilita)
 
 ### 8. Proč Candidate Rejection?
 - Problém: Vec2Text může generovat text vzdálený od decoder outputu
@@ -1144,14 +1124,15 @@ uv run python -m lipo.run --hyperband-only
 ```python
 recon_loss = mean(1 - cosine_similarity(x, x_recon))
 kl_loss = -0.5 * mean(sum(1 + log_var - mu² - exp(log_var)))
-total_loss = recon_loss + beta(epoch) * kl_loss
+cycle_loss = mean(1 - cosine_similarity(z, encode_mu(decode(z))))
+total_loss = recon_loss + beta(epoch) * kl_loss + gamma * cycle_loss
 
 # KL Annealing
 beta(epoch) = vae_beta * (epoch / annealing_epochs)  # epoch < annealing
-            = vae_beta                                 # jinak
+            = vae_beta                                 # jinak (0.015 pro 16D)
 ```
 
-**Optimizer:** AdamW, lr=0.0003
+**Optimizer:** AdamW, lr=0.0006
 **Scheduler:** CosineAnnealingLR, T_max=2×epochs, eta_min=1e-4
 **Early stopping:** Na recon_loss, patience=500
 
@@ -1192,26 +1173,30 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
     "mse_mean": 5e-05,
     "mse_std": 3e-05,
     "l2_relative_error": 0.18,
-    "latent_norm_mean": 8.0,
-    "latent_norm_std": 0.7,
+    "latent_norm_mean": 4.0,
+    "latent_norm_std": 0.5,
     "latent_var_mean": 1.01,
     "latent_var_min": 0.87,
     "latent_var_max": 1.21,
-    "active_dims": 64,
-    "total_dims": 64,
+    "active_dims": 16,
+    "total_dims": 16,
     "kld_mean": 8.4,
     "kld_std": 2.8,
     "posterior_collapsed": false
   },
   "config": {
     "mode": "standard",
-    "vae_beta": 0.003,
-    "vae_epochs": 10000,
+    "vae_beta": 0.015,
+    "vae_gamma": 1.0,
+    "vae_epochs": 15000,
     "vae_annealing": 500,
-    "vae_latent_dim": 64,
+    "vae_latent_dim": 16,
+    "gp_latent_dim": 10,
     "gp_epochs": 10000,
     "gp_lr": 0.01,
     "gp_patience": 100,
+    "turbo_enabled": true,
+    "pas_enabled": true,
     ...
   },
   "vae_training": {
@@ -1252,7 +1237,12 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
         "gap": 0.05,
         "inversion_iters": 2,
         "rejection_attempts": 0,
-        "low_quality_accepted": false
+        "low_quality_accepted": false,
+        "gp_samples": 226,
+        "z_opt_z_real_cosine": 0.92,
+        "z_opt_z_real_euclidean": 0.45,
+        "z_opt_z_real_gp_cosine": 0.95,
+        "predicted_error_at_z_real": 0.15
       },
       ...
     ]
@@ -1268,17 +1258,23 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
 | Komponenta | Parametr | Default | Účel |
 |------------|----------|---------|------|
 | APE | num_instructions | 2000 | Diverzita instrukcí |
-| VAE | beta | 0.003 | KL regularizace (škálováno pro 64D) |
+| VAE | latent_dim | 16 | Kompaktní latentní prostor |
+| VAE | beta | 0.015 | KL regularizace (5x silnější pro 16D) |
+| VAE | gamma | 1.0 | Cycle consistency weight |
 | VAE | annealing_epochs | 500 | β ramp období |
-| VAE | epochs | 10000 | Max trénovací iterace |
-| VAE | lr | 0.0003 | Learning rate |
+| VAE | epochs | 15000 | Max trénovací iterace |
+| VAE | lr | 0.0006 | Learning rate |
 | VAE | patience | 500 | Early stopping |
 | Hyperband | bmin | 10 | Min fidelity |
 | Hyperband | eta | 2.0 | Successive halving rate |
 | Hyperband | min_fidelity_pct | 0.75 | Top 25% pro GP |
+| GP | gp_latent_dim | 10 | Adapter output dimenze |
 | GP | epochs | 10000 | Max trénovací iterace |
 | GP | lr | 0.01 | Learning rate |
 | GP | patience | 100 | Early stopping |
+| TuRBO | L_init | 0.8 | Počáteční trust region |
+| TuRBO | tau_succ | 3 | Úspěchy pro expand |
+| TuRBO | tau_fail | 40 | Neúspěchy pro shrink |
 | Inference | num_restarts | 64 | L-BFGS-B multi-start |
 | Inference | raw_samples | 1024 | Inicializace |
 | Inference | max_inversion_iters | 3 | InvBO refinement |

@@ -12,10 +12,16 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
 
-from lipo.config import Config
+from lipo.config import Config, get_device
 from lipo.encoder import GTRInstructionEncoder, InstructionVAE
 from lipo.gp import GPWithEI
 from lipo.instruction import InstructionOnlyPrompt
+from lipo.turbo import (
+    TrustRegionManager,
+    PotentialAwareAnchorSelector,
+    create_turbo_manager,
+    create_pas_selector,
+)
 
 
 @dataclass
@@ -50,6 +56,10 @@ class IterationRecord:
     z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
     z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
     predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
+    # TuRBO trust region state
+    trust_region_length: float = 0.0  # Current trust region side length
+    trust_region_action: str = ""  # Action taken: "none", "expand", "shrink", "restart"
+    anchor_idx: int = -1  # Index of selected anchor in training data
 
 
 @dataclass
@@ -92,19 +102,10 @@ class Vec2TextInverter:
         self.num_steps = num_steps
         self.beam_width = beam_width
         self.max_length = max_length
-        self.device = self._get_device(device)
+        self.device = get_device(device)
         self.model_type = model_type
         self._corrector = None
         self._inversion_model = None
-
-    def _get_device(self, device: str) -> str:
-        if device == "auto":
-            if torch.cuda.is_available():
-                return "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "mps"
-            return "cpu"
-        return device
 
     def _load_model(self):
         """Lazy load Vec2Text model."""
@@ -315,12 +316,49 @@ class LIPOHyperbandInference:
             self.best_error = gp.best_error_rate  # Use property that returns positive error rate
             # Note: instruction not available from GP alone
 
+        # Initialize TuRBO trust region manager
+        self.use_turbo = getattr(config, 'turbo_enabled', True)
+        self.use_pas = getattr(config, 'pas_enabled', True)
+
+        if self.use_turbo:
+            self.trust_region = create_turbo_manager(config, self.device)
+        else:
+            self.trust_region = None
+
+        if self.use_pas:
+            self.anchor_selector = create_pas_selector(config, self.device)
+        else:
+            self.anchor_selector = None
+
+        # Cache global bounds (computed on first iteration)
+        self._global_bounds: Optional[torch.Tensor] = None
+
+    def _get_global_bounds(self) -> torch.Tensor:
+        """Get global latent bounds from training data.
+
+        Computes bounds on first call and caches them.
+
+        Returns:
+            Global bounds tensor, shape (2, 64)
+        """
+        if self._global_bounds is None:
+            from lipo.botorch_acq import get_latent_bounds
+            self._global_bounds = get_latent_bounds(
+                encoder=self.gp.vae_with_adapter,
+                X_train=self.gp.X_train,
+                X_min=self.gp.X_min,
+                X_max=self.gp.X_max,
+                margin=self.config.latent_margin,
+            )
+        return self._global_bounds
+
     def optimize_latent_botorch(
         self,
         num_restarts: int = 64,
         raw_samples: int = 1024,
         verbose: bool = True,
         seed: Optional[int] = None,
+        bounds: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, float]:
         """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
@@ -337,6 +375,7 @@ class LIPOHyperbandInference:
             raw_samples: Raw samples for initialization seeding (default: 1024)
             verbose: Print progress
             seed: Optional random seed for reproducibility
+            bounds: Optional custom bounds (e.g., trust region bounds). If None, uses global bounds.
 
         Returns:
             (optimal_latent, log_ei) tuple where:
@@ -348,14 +387,15 @@ class LIPOHyperbandInference:
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
 
-        # Get latent bounds from training data (64D VAE latent space)
-        bounds = get_latent_bounds(
-            encoder=self.gp.vae_with_adapter,
-            X_train=self.gp.X_train,
-            X_min=self.gp.X_min,
-            X_max=self.gp.X_max,
-            margin=self.config.latent_margin,
-        )
+        # Get latent bounds (use provided bounds or compute global bounds)
+        if bounds is None:
+            bounds = get_latent_bounds(
+                encoder=self.gp.vae_with_adapter,
+                X_train=self.gp.X_train,
+                X_min=self.gp.X_min,
+                X_max=self.gp.X_max,
+                margin=self.config.latent_margin,
+            )
 
         # Create acquisition optimizer
         # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
@@ -485,6 +525,59 @@ class LIPOHyperbandInference:
             converged=converged,
         )
 
+    def _log_iteration_summary(
+        self,
+        record: IterationRecord,
+        pred_std: float = 0.0,
+    ) -> None:
+        """Print consolidated iteration summary with all metrics.
+
+        Centralizes all iteration metrics in one formatted output block
+        for easy monitoring and debugging.
+
+        Args:
+            record: IterationRecord with all iteration data
+            pred_std: Prediction standard deviation from GP
+        """
+        # Truncate instruction for display (show first 100 chars)
+        instr_display = record.instruction[:100]
+        if len(record.instruction) > 100:
+            instr_display += "..."
+
+        actual_str = f"{record.actual_error:.4f}" if record.actual_error is not None else "N/A (skipped)"
+        improved_str = "YES" if record.improved else "no"
+        log_ei_str = f"{record.log_ei:.4f}" if record.log_ei is not None else "N/A"
+
+        print(f"""
+═══════════════════════════════════════════════════════════════
+ITERATION {record.iteration} SUMMARY
+═══════════════════════════════════════════════════════════════
+Instruction: {instr_display}
+─────────────────────────────────────────────────────────────────
+PERFORMANCE METRICS:
+  Predicted Error:    {record.predicted_error:.4f} ± {pred_std:.4f}
+  Actual Error:       {actual_str}
+  Best Error So Far:  {record.best_error_so_far:.4f}
+  Improved:           {improved_str}
+─────────────────────────────────────────────────────────────────
+OPTIMIZATION GAP METRICS:
+  VAE Latent Cosine:  {record.z_opt_z_real_cosine:.4f}
+  VAE Latent L2:      {record.z_opt_z_real_euclidean:.4f}
+  GP Space Cosine:    {record.z_opt_z_real_gp_cosine:.4f}
+  Pred @ z_real:      {record.predicted_error_at_z_real:.4f}
+─────────────────────────────────────────────────────────────────
+GENERATION QUALITY:
+  Cosine Similarity:  {record.cosine_similarity:.4f}
+  LogEI:              {log_ei_str}
+  Gap (inversion):    {record.gap:.4f}
+  Inversion Iters:    {record.inversion_iters}
+  Rejection Attempts: {record.rejection_attempts}
+  Low Quality Accept: {record.low_quality_accepted}
+─────────────────────────────────────────────────────────────────
+GP Status:
+  Training Samples:   {record.gp_samples}
+═══════════════════════════════════════════════════════════════""")
+
     def run_iteration(
         self,
         iteration: int,
@@ -533,9 +626,51 @@ class LIPOHyperbandInference:
         rejection_attempts = 0
         low_quality_accepted = False
 
+        # === TuRBO + PAS: Select anchor and compute trust region bounds ===
+        anchor_idx = -1
+        turbo_action = ""
+        trust_region_length = 0.0
+
+        global_bounds = self._get_global_bounds()
+
+        if self.use_turbo and self.trust_region is not None:
+            trust_region_length = self.trust_region.state.length
+
+            # Select anchor using PAS (Potential-Aware Selection)
+            if self.use_pas and self.anchor_selector is not None:
+                anchor, anchor_idx = self.anchor_selector.select_anchor(
+                    gp_model=self.gp.gp_model,
+                    X_train=self.gp.X_train,
+                    y_train=self.gp.y_train,
+                    X_min=self.gp.X_min,
+                    X_max=self.gp.X_max,
+                    trust_length=trust_region_length,
+                    global_bounds=global_bounds,
+                    verbose=verbose,
+                )
+                self.trust_region.set_anchor(anchor)
+            else:
+                # Without PAS, use best observed point as anchor
+                best_idx = self.gp.y_train.argmax().item()
+                denom = self.gp.X_max - self.gp.X_min
+                denom[denom == 0] = 1.0
+                anchor = (self.gp.X_train[best_idx] - self.gp.X_min) / denom
+                self.trust_region.set_anchor(anchor)
+                anchor_idx = best_idx
+
+            # Get trust region bounds
+            bounds = self.trust_region.get_bounds(global_bounds)
+
+            if verbose:
+                print(f"  TuRBO: {self.trust_region.get_state_summary()}")
+                print(f"  Anchor: idx={anchor_idx}, using {'PAS' if self.use_pas else 'best-y'} selection")
+        else:
+            # Global optimization (no trust region)
+            bounds = global_bounds
+
         # Main loop with rejection for low cosine similarity
         for attempt in range(max_rejection_attempts):
-            # Optimize latent using BoTorch qLogEI
+            # Optimize latent using BoTorch qLogEI (within trust region if enabled)
             # Use different seed for each attempt to get different candidates
             attempt_seed = iteration * max_rejection_attempts + attempt
             z_opt, log_ei = self.optimize_latent_botorch(
@@ -543,6 +678,7 @@ class LIPOHyperbandInference:
                 raw_samples=raw_samples,
                 verbose=verbose and (attempt == 0),  # Only verbose on first attempt
                 seed=attempt_seed,
+                bounds=bounds,
             )
 
             # Denormalize and decode to embedding (64D latent -> 768D embedding)
@@ -606,9 +742,6 @@ class LIPOHyperbandInference:
                 embedding.unsqueeze(0), reencoded.unsqueeze(0)
             ).item()
 
-            if verbose:
-                print(f"  Cosine similarity: {cosine_sim:.4f}")
-
             # Check cosine similarity threshold
             if cosine_sim >= cosine_sim_threshold:
                 # Good alignment, proceed with this candidate
@@ -630,9 +763,6 @@ class LIPOHyperbandInference:
 
         # GP prediction on re-encoded embedding (matches training data distribution)
         pred_error, pred_std = self.gp.predict(reencoded)
-
-        if verbose:
-            print(f"  Predicted error: {pred_error:.4f} +/- {pred_std:.4f}")
 
         # === Optimization Gap Test ===
         # Measure gap between z_opt (BoTorch proposal) and z_real (actual text embedding)
@@ -661,11 +791,10 @@ class LIPOHyperbandInference:
             # This shows if GP was "fooled" by holes in latent space
             pred_error_at_z_real, _ = self.gp.predict(reencoded)
 
-        if verbose:
-            print(f"  Optimization Gap: VAE cosine={z_opt_z_real_cosine:.4f}, "
-                  f"GP cosine={z_opt_z_real_gp_cosine:.4f}, euclidean={z_opt_z_real_euclidean:.4f}")
-            if z_opt_z_real_cosine < 0.85:
-                print(f"  WARNING: Large optimization gap! GP may be optimizing in empty space.")
+        # Critical warning for large optimization gap (not in summary)
+        if z_opt_z_real_cosine < 0.85:
+            print(f"  WARNING: Large optimization gap (VAE cosine={z_opt_z_real_cosine:.4f})! "
+                  f"GP may be optimizing in empty space.")
 
         # Evaluate with LLM (or use GP prediction)
         actual_error = None
@@ -674,17 +803,26 @@ class LIPOHyperbandInference:
             actual_error = self.evaluator(prompt, self.validation_data)
             self.total_llm_calls += len(self.validation_data)
 
-            if verbose:
-                print(f"  Actual error: {actual_error:.4f}")
-
         # Update best
         error_to_use = actual_error if actual_error is not None else pred_error
         improved = error_to_use < self.best_error
         if improved:
             self.best_error = error_to_use
             self.best_instruction = instruction
-            if verbose:
-                print(f"  NEW BEST!")
+
+        # === TuRBO: Update trust region state based on iteration result ===
+        if self.use_turbo and self.trust_region is not None:
+            turbo_info = self.trust_region.update(improved=improved)
+            turbo_action = turbo_info["action"]
+            trust_region_length = turbo_info["length_after"]
+
+            if verbose and turbo_action != "none":
+                if turbo_action == "expand":
+                    print(f"  TuRBO: EXPANDED trust region to L={trust_region_length:.4f}")
+                elif turbo_action == "shrink":
+                    print(f"  TuRBO: SHRUNK trust region to L={trust_region_length:.4f}")
+                elif turbo_action == "restart":
+                    print(f"  TuRBO: RESTARTED trust region (restart #{turbo_info['restart_count']})")
 
         # Add observation and retrain GP from scratch
         # Full retraining ensures normalization parameters and noise values are recomputed
@@ -747,9 +885,17 @@ class LIPOHyperbandInference:
             z_opt_z_real_euclidean=z_opt_z_real_euclidean,
             z_opt_z_real_gp_cosine=z_opt_z_real_gp_cosine,
             predicted_error_at_z_real=pred_error_at_z_real,
+            # TuRBO trust region state
+            trust_region_length=trust_region_length,
+            trust_region_action=turbo_action,
+            anchor_idx=anchor_idx,
         )
 
         self.iteration_history.append(record)
+
+        # Print consolidated iteration summary
+        if verbose:
+            self._log_iteration_summary(record, pred_std=pred_std)
 
         return record
 
