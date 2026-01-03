@@ -37,11 +37,11 @@ FÁZE 2: VAE TRÉNINK
 ┌──────────────────────────────────────────┐
 │ InstructionVAE Training                  │
 │ - Input: 768D GTR embeddingy             │
-│ - Latent: 16D (hladký přes KL)           │
+│ - Latent: 64D (hladký přes KL)           │
 │ - KL annealing: β roste od 0 do β_max    │
 │ - Cycle consistency: γ·cycle_loss        │
 │ - Output: L2-normalizovaná rekonstrukce  │
-│ - Loss: cosine_recon + β·KL + γ·cycle    │
+│ - Loss: recon + β·KL + γ·cycle           │
 └──────────────────────────────────────────┘
 
 FÁZE 3: HYPERBAND EVALUACE
@@ -57,7 +57,7 @@ FÁZE 3: HYPERBAND EVALUACE
 ┌──────────────────────────────────────────┐
 │ GP Training (z Hyperband dat)            │
 │ - VAEWithAdapter: VAE(frozen) + MLP      │
-│ - 16D VAE latent → 10D (přes adapter)    │
+│ - 64D VAE latent → 10D (přes adapter)    │
 │ - Kumaraswamy input warping (dynamic D)  │
 │ - Matern 5/2 kernel s ARD (10D)          │
 │ - FixedNoiseGaussianLikelihood           │
@@ -68,8 +68,8 @@ FÁZE 3: HYPERBAND EVALUACE
 FÁZE 4: InvBO INFERENCE
 ┌──────────────────────────────────────────┐
 │ BoTorch qLogEI Optimalizace              │
-│ - Optimalizace 16D VAE latent            │
-│ - TuRBO trust region (optional)          │
+│ - Optimalizace 64D VAE latent            │
+│ - TuRBO trust region (ARD-aware)         │
 │ - PAS anchor selection (optional)        │
 │ - Multi-start L-BFGS-B (64 restartů)     │
 │ - Raw samples inicializace (1024)        │
@@ -86,9 +86,18 @@ FÁZE 4: InvBO INFERENCE
                     ↓
 ┌──────────────────────────────────────────┐
 │ VAE Decoder + Vec2Text Inverze           │
-│ - z_opt (16D) → decoder → embedding (768D)
+│ - z_opt (64D) → decoder → embedding (768D)
 │ - embedding → Vec2Text → text            │
 │ - 512_tokens model (max 128 tokenů)      │
+└──────────────────────────────────────────┘
+                    ↓
+┌──────────────────────────────────────────┐
+│ ZSInvert Refinement (každá iterace)      │
+│ - Iterativní zlepšení Vec2Text outputu   │
+│ - Gradient-based z refinement            │
+│ - Minimalizace ||decode(z) - GTR(text)|| │
+│ - Re-inverze s vylepšeným embedingem     │
+│ - Early stopping při konvergenci         │
 └──────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────┐
@@ -167,8 +176,8 @@ Veškeré parametry jsou centralizované v `Config` dataclass:
 ### VAE Trénink
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `vae_beta` | 0.015 | KL regularizace (5x silnější pro latent_dim=16) |
-| `vae_gamma` | 1.0 | Cycle consistency weight: z ≈ encode(decode(z)) |
+| `vae_beta` | 0.003 | KL regularizace (nízká pro text VAE) |
+| `vae_gamma` | 5.0 | Cycle consistency weight: z ≈ encode(decode(z)) |
 | `vae_epochs` | 15000 | Max počet epoch |
 | `vae_annealing_epochs` | 500 | Počet epoch pro KL annealing |
 | `vae_patience` | 500 | Early stopping patience |
@@ -181,7 +190,7 @@ Veškeré parametry jsou centralizované v `Config` dataclass:
 | Parametr | Default | Popis |
 |----------|---------|-------|
 | `embedding_dim` | 768 | GTR embedding dimenze |
-| `latent_dim` | 16 | VAE latentní dimenze (kompaktnější pro hustší reprezentaci) |
+| `latent_dim` | 64 | VAE latentní dimenze (768/64 = 12× komprese) |
 | `gp_latent_dim` | 10 | Adapter output pro GP |
 
 ### Hyperband
@@ -231,6 +240,16 @@ for_hyperband_gp() → {epochs: 3000, lr: 0.01, patience: 50}
 | `pas_enabled` | True | Povolit potential-aware anchor selection |
 | `pas_n_candidates` | 100 | Počet kandidátů pro Thompson Sampling |
 
+### ZSInvert Refinement
+| Parametr | Default | Popis |
+|----------|---------|-------|
+| `zsinvert_enabled` | True | Povolit ZSInvert refinement |
+| `zsinvert_iterations` | 15 | Max iterací refinementu |
+| `zsinvert_lr` | 0.1 | Learning rate pro gradient descent |
+| `zsinvert_steps_per_iter` | 50 | Optimalizačních kroků na iteraci |
+| `zsinvert_improvement_threshold` | 0.01 | Min zlepšení pro pokračování |
+| `zsinvert_patience` | 5 | Patience pro early stopping |
+
 ### Vec2Text
 | Parametr | Default | Popis |
 |----------|---------|-------|
@@ -278,8 +297,8 @@ class GTRInstructionEncoder:
 Variational autoencoder pro hladký latentní prostor:
 
 ```
-Encoder: 768D → 384 → GELU → LayerNorm → 192 → GELU → LayerNorm → 2×16 (mu + log_var)
-Decoder: 16 → 192 → GELU → LayerNorm → 384 → GELU → LayerNorm → 768D (L2 normalized)
+Encoder: 768D → 384 → GELU → LayerNorm → 192 → GELU → LayerNorm → 2×64 (mu + log_var)
+Decoder: 64 → 192 → GELU → LayerNorm → 384 → GELU → LayerNorm → 768D (L2 normalized)
 ```
 
 **GELU aktivace:** Hladší gradienty než ReLU, používá se v transformerech.
@@ -298,7 +317,7 @@ total_loss = recon_loss + beta(epoch) * kl_loss + gamma * cycle_loss
 if epoch < annealing_epochs:
     beta = vae_beta * (epoch / annealing_epochs)  # Lineární růst od 0
 else:
-    beta = vae_beta  # Konstanta (0.015 pro latent_dim=16)
+    beta = vae_beta  # Konstanta (0.003 pro latent_dim=64)
 ```
 
 **Cycle consistency:** Zajišťuje, že z ≈ encode(decode(z)), čímž předchází "dírám" v latentním prostoru.
@@ -310,24 +329,24 @@ else:
 Kombinuje zmrazenou VAE s trénovatelným adaptérem:
 
 ```
-x (768D) → VAE.encode_mu (frozen) → z_vae (16D) → adapter → z_gp (10D)
+x (768D) → VAE.encode_mu (frozen) → z_vae (64D) → adapter → z_gp (10D)
 ```
 
 **Architektura adaptéru:**
 ```python
 adapter = nn.Sequential(
-    nn.Linear(16, 20),   # 16 → 20 (intermediate)
+    nn.Linear(64, 32),   # 64 → 32 (intermediate)
     nn.ReLU(),
-    nn.LayerNorm(20),
-    nn.Linear(20, 10),   # 20 → 10
+    nn.LayerNorm(32),
+    nn.Linear(32, 10),   # 32 → 10
 )
 ```
 
 **Metody:**
-- `encode_vae(x)` - 768D → 16D (pouze VAE encoder)
+- `encode_vae(x)` - 768D → 64D (pouze VAE encoder)
 - `forward(x)` - 768D → 10D (celá pipeline)
-- `adapt(z)` - 16D → 10D (pouze adapter)
-- `decode(z)` - 16D → 768D (pouze VAE decoder)
+- `adapt(z)` - 64D → 10D (pouze adapter)
+- `decode(z)` - 64D → 768D (pouze VAE decoder)
 
 ### 4. InstructionDeepKernelGP (gp.py)
 
@@ -337,7 +356,7 @@ GP model s deep kernel pro instrukční optimalizaci:
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
     # Kumaraswamy input warping (dynamická dimenze z dat)
     input_transform = Warp(
-        d=input_dim,  # Dynamicky z train_x.shape[-1]
+        d=input_dim,  # Dynamicky z train_x.shape[-1] (32D)
         indices=list(range(input_dim)),
     )
 
@@ -354,7 +373,7 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
 
 **Forward pass:**
 ```python
-def forward(self, x):  # x: (batch, 16) - 16D VAE latent
+def forward(self, x):  # x: (batch, 64) - 64D VAE latent
     latent = self.adapter(x)  # (batch, 10)
     return MultivariateNormal(
         self.mean_module(latent),
@@ -363,7 +382,7 @@ def forward(self, x):  # x: (batch, 16) - 16D VAE latent
 ```
 
 **DŮLEŽITÉ:** Warp dimenze je nyní dynamická (`d=self._input_dim` z `train_x.shape[-1]`),
-nikoliv hardcoded, což zabraňuje CUDA "index out of bounds" chybám při změně `latent_dim`.
+nikoliv hardcoded, což zabraňuje CUDA "index out of bounds" chybám při změně `latent_dim` (nyní 64D).
 
 ### 5. GPWithEI (gp.py) - DETAILNÍ POPIS
 
@@ -381,14 +400,14 @@ error rates pro BoTorch maximizaci.
 │       ↓                                                        │
 │  VAEWithAdapter.encode_vae() [frozen]                          │
 │       ↓                                                        │
-│  16D VAE latent (X_train)                                      │
+│  64D VAE latent (X_train)                                      │
 │       ↓                                                        │
 │  Unit cube normalization: (X - X_min) / (X_max - X_min)        │
 │       ↓                                                        │
 │  ┌────────────────────────────────────────┐                    │
 │  │ InstructionDeepKernelGP                │                    │
-│  │   ├─ input_transform: Warp(d=16)       │                    │
-│  │   ├─ adapter: 16D → 10D [trainable]    │                    │
+│  │   ├─ input_transform: Warp(d=64)       │                    │
+│  │   ├─ adapter: 64D → 10D [trainable]    │                    │
 │  │   ├─ mean_module: ZeroMean             │                    │
 │  │   └─ covar_module: ScaleKernel(        │                    │
 │  │         MaternKernel(nu=2.5, ARD=10D)) │                    │
@@ -500,12 +519,12 @@ self.likelihood = FixedNoiseGaussianLikelihood(
 **Input normalizace (Unit cube):**
 ```python
 # Každá dimenze normalizována do [0, 1]
-X_min = X_train.min(dim=0)[0]  # (16,)
-X_max = X_train.max(dim=0)[0]  # (16,)
+X_min = X_train.min(dim=0)[0]  # (64,)
+X_max = X_train.max(dim=0)[0]  # (64,)
 denom = X_max - X_min
 denom[denom == 0] = 1.0  # Avoid division by zero for constant dims
 
-X_norm = (X_train - X_min) / denom  # (N, 16) in [0, 1]
+X_norm = (X_train - X_min) / denom  # (N, 64) in [0, 1]
 ```
 
 **Output normalizace (Z-score via BoTorch Standardize):**
@@ -578,7 +597,7 @@ def predict(self, embedding):
     """
     # 1. Encode to VAE latent if needed
     if embedding.shape[-1] == 768:
-        z_vae = self.vae_with_adapter.encode_vae(embedding)  # 768D → 16D
+        z_vae = self.vae_with_adapter.encode_vae(embedding)  # 768D → 64D
     else:
         z_vae = embedding
 
@@ -629,7 +648,7 @@ def add_observation(self, embedding, error_rate, fidelity=1319):
     if not 0.0 <= error_rate <= 1.0:
         raise ValueError(f"error_rate must be in [0, 1], got {error_rate}")
 
-    # Encode to VAE latent (768D → 16D)
+    # Encode to VAE latent (768D → 64D)
     new_z = self.vae_with_adapter.encode_vae(embedding)
 
     # Laplace smoothing: (errors + 1) / (n + 2)
@@ -731,7 +750,7 @@ def best_error_rate(self):
 
 ```
 TRAINING:
-  embeddings (768D) → VAE encoder → latents (16D)
+  embeddings (768D) → VAE encoder → latents (64D)
                                         ↓
   error_rates → negate → y_train = -error_rates
                                ↓
@@ -742,7 +761,7 @@ TRAINING:
   Train adapter + GP kernel + Warp jointly (MLL loss)
 
 PREDICTION:
-  embedding (768D) → VAE encoder → latent (16D)
+  embedding (768D) → VAE encoder → latent (64D)
                                       ↓
   Normalize to unit cube
                     ↓
@@ -861,7 +880,7 @@ for attempt in range(max_rejection_attempts):  # default 5
 2. **Decode & Invert**
    ```python
    z_unnorm = z_opt * (X_max - X_min) + X_min  # Denormalizace
-   embedding = vae_with_adapter.decode(z_unnorm)  # 16D → 768D
+   embedding = vae_with_adapter.decode(z_unnorm)  # 64D → 768D
    text = vec2text.invert(embedding)  # 768D → text
    ```
 
@@ -873,7 +892,7 @@ for attempt in range(max_rejection_attempts):  # default 5
        optimizer = Adam([z], lr=0.1)
 
        for step in range(100):
-           z_vae = z * x_range + X_min  # Denormalizace do 16D
+           z_vae = z * x_range + X_min  # Denormalizace do 64D
            decoded = vae.decode(z_vae)
            loss = 1 - cosine_similarity(decoded, GTR(text))
            loss.backward()
@@ -957,28 +976,115 @@ class LatentSpaceAcquisition:
 
         candidate, acq_value = optimize_acqf(
             acq_function=acq_fn,
-            bounds=bounds,  # (2, 16) pro 16D VAE latent
+            bounds=bounds,  # (2, 64) pro 64D VAE latent
             q=1,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
             options={"maxiter": 200, "batch_limit": 5},
         )
 
-        return candidate, acq_value  # (1, 16), scalar
+        return candidate, acq_value  # (1, 64), scalar
 ```
 
 **Bounds výpočet:**
 ```python
 def get_latent_bounds(X_train, X_min, X_max, margin=0.2):
     latents_norm = (X_train - X_min) / (X_max - X_min)
-    z_min = latents_norm.min(dim=0)[0]  # (16,)
-    z_max = latents_norm.max(dim=0)[0]  # (16,)
+    z_min = latents_norm.min(dim=0)[0]  # (64,)
+    z_max = latents_norm.max(dim=0)[0]  # (64,)
     z_range = z_max - z_min
     return torch.stack([
         z_min - margin * z_range,  # 20% pod minimum
         z_max + margin * z_range,  # 20% nad maximum
     ])
 ```
+
+### 10. TuRBO ARD-Aware Trust Regions (turbo.py)
+
+TuRBO trust region management s LOL-BO style ARD škálováním:
+
+**get_ard_bounds() - ARD-aware trust region bounds:**
+```python
+def get_ard_bounds(global_bounds, lengthscales=None):
+    """
+    LOL-BO style: škáluj trust region podle ARD lengthscales.
+    Kratší lengthscale = důležitější dimenze = užší region.
+    """
+    if lengthscales is not None and lengthscales.shape[0] == dim:
+        # Normalizuj lengthscales na [0.5, 2.0] rozsah
+        ls_normalized = lengthscales / lengthscales.mean()
+        ls_clamped = ls_normalized.clamp(0.5, 2.0)
+
+        # Per-dimension half-length: L / ls_normalized
+        # (menší L pro dimenze s menším lengthscale)
+        per_dim_half_L = (L / 2) / ls_clamped
+    else:
+        # Uniform scaling (standard TuRBO)
+        per_dim_half_L = L / 2
+
+    lower = center - per_dim_half_L
+    upper = center + per_dim_half_L
+    return torch.stack([lower, upper])
+```
+
+**Účel ARD-aware bounds:**
+- Důležité dimenze (krátký lengthscale) dostávají užší bounds
+- Nedůležité dimenze (dlouhý lengthscale) dostávají širší bounds
+- Lepší explorace v relevantních dimenzích
+
+### 11. ZSInvertRefiner (inference.py)
+
+ZSInvert-style iterativní refinement pro Vec2Text output:
+
+**Algoritmus:**
+```python
+class ZSInvertRefiner:
+    def refine(initial_text, initial_z, X_min, X_max):
+        """Iterativně zlepšuje Vec2Text output.
+
+        Pro každou iteraci:
+        1. Encode text → target_emb
+        2. Gradient descent: minimize ||decode(z) - target_emb||
+        3. Decode optimized z → new_emb
+        4. Vec2Text invert → new_text
+        5. Check improvement, continue if significant
+        """
+        best_text = initial_text
+        best_sim = 0.0
+
+        for iter in range(n_iterations):
+            target_emb = GTR.encode(best_text)
+
+            # Gradient-based z refinement
+            z_opt = z.clone().requires_grad_(True)
+            optimizer = Adam([z_opt], lr=0.1)
+
+            for step in range(n_steps):
+                decoded = VAE.decode(z_opt * x_range + X_min)
+                loss = 1 - cosine_similarity(decoded, target_emb)
+                loss.backward()
+                optimizer.step()
+                z_opt.clamp_(0, 1)
+
+            # Re-decode and invert
+            new_emb = VAE.decode(z_opt)
+            new_text = Vec2Text.invert(new_emb)
+
+            if new_sim > best_sim + threshold:
+                best_sim = new_sim
+                best_text = new_text
+            else:
+                break  # Convergence
+
+        return best_text, z_opt, metrics
+```
+
+**Účel ZSInvert:**
+- Vec2Text má round-trip similarity ~0.85 (semantic drift)
+- ZSInvert iterativně zlepšuje alignment
+- Cíl: sim ~0.90+ po refinementu
+
+**Kdy běží:** Každou iteraci po Vec2Text inverzi (before GP update)
 
 ---
 
@@ -1059,14 +1165,13 @@ uv run python -m lipo.run --hyperband-only
 
 ## Klíčové designové rozhodnutí
 
-### 1. Proč 16D VAE latent (místo 64D)?
-- Kompaktnější reprezentace → hustější latentní prostor
-- Silnější KL regularizace (β=0.015) zabraňuje posterior collapse
-- Cycle consistency (γ=1.0) zajišťuje z ≈ encode(decode(z))
-- Cosine loss (rotačně invariantní) místo MSE
-- Menší dimenze = rychlejší optimalizace
+### 1. Proč 64D VAE latent?
+- Pro text s vysokou entropií je potřeba více prostoru
+- 768/64 = 12× komprese (lepší rekonstrukce než 32D)
+- Nízká KL regularizace (β=0.003) pro hladký latentní prostor
+- Silná cycle consistency (γ=5.0) zajišťuje z ≈ encode(decode(z))
 
-### 2. Proč Adapter 16D → 10D?
+### 2. Proč Adapter 64D → 10D?
 - Efektivní GP modelování
 - Rychlejší BoTorch optimalizace
 - Trénovatelný - učí se task-relevant features společně s GP
@@ -1129,7 +1234,7 @@ total_loss = recon_loss + beta(epoch) * kl_loss + gamma * cycle_loss
 
 # KL Annealing
 beta(epoch) = vae_beta * (epoch / annealing_epochs)  # epoch < annealing
-            = vae_beta                                 # jinak (0.015 pro 16D)
+            = vae_beta                                 # jinak (0.0001 pro 64D)
 ```
 
 **Optimizer:** AdamW, lr=0.0006
@@ -1186,11 +1291,11 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
   },
   "config": {
     "mode": "standard",
-    "vae_beta": 0.015,
-    "vae_gamma": 1.0,
+    "vae_beta": 0.003,
+    "vae_gamma": 5.0,
     "vae_epochs": 15000,
     "vae_annealing": 500,
-    "vae_latent_dim": 16,
+    "vae_latent_dim": 64,
     "gp_latent_dim": 10,
     "gp_epochs": 10000,
     "gp_lr": 0.01,
@@ -1258,9 +1363,9 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
 | Komponenta | Parametr | Default | Účel |
 |------------|----------|---------|------|
 | APE | num_instructions | 2000 | Diverzita instrukcí |
-| VAE | latent_dim | 16 | Kompaktní latentní prostor |
-| VAE | beta | 0.015 | KL regularizace (5x silnější pro 16D) |
-| VAE | gamma | 1.0 | Cycle consistency weight |
+| VAE | latent_dim | 64 | Kompaktní latentní prostor (12× komprese) |
+| VAE | beta | 0.003 | KL regularizace (nízká pro text VAE) |
+| VAE | gamma | 5.0 | Cycle consistency weight |
 | VAE | annealing_epochs | 500 | β ramp období |
 | VAE | epochs | 15000 | Max trénovací iterace |
 | VAE | lr | 0.0006 | Learning rate |
@@ -1286,3 +1391,9 @@ Výsledky se ukládají do `lipo/results/result_{timestamp}.json`:
 | Vec2Text | beam_width | 8 | Beam search width |
 | Vec2Text | max_length | 128 | Max output tokenů |
 | Vec2Text | model_type | 512_tokens | Podpora delších sekvencí |
+| ZSInvert | enabled | True | Iterativní refinement |
+| ZSInvert | iterations | 15 | Max refinement iterací |
+| ZSInvert | lr | 0.1 | Learning rate pro gradient descent |
+| ZSInvert | steps_per_iter | 50 | Kroků na iteraci |
+| ZSInvert | improvement_threshold | 0.01 | Min zlepšení pro pokračování |
+| ZSInvert | patience | 5 | Early stopping patience |

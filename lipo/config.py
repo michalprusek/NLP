@@ -53,8 +53,8 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.015  # KL regularization weight (5x stronger for latent_dim=16)
-    vae_gamma: float = 1.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
+    vae_beta: float = 0.003  # KL regularization weight (low for text VAE)
+    vae_gamma: float = 5.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
     vae_epochs: int = 15000
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
@@ -65,7 +65,7 @@ class Config:
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 16  # VAE latent dimension (compressed for denser representation)
+    latent_dim: int = 64  # VAE latent dimension (768/64 = 12x compression)
     gp_latent_dim: int = 10  # Adapter output dimension for GP
 
     # === Hyperband ===
@@ -110,6 +110,14 @@ class Config:
     inversion_lr: float = 0.1  # Adam learning rate
     inversion_convergence_threshold: float = 0.01  # Early stop threshold
     latent_margin: float = 0.2  # Margin for latent bounds expansion
+
+    # === ZSInvert Refinement ===
+    zsinvert_enabled: bool = True  # Enable ZSInvert refinement after Vec2Text
+    zsinvert_iterations: int = 15  # Max refinement iterations
+    zsinvert_lr: float = 0.1  # Learning rate for gradient refinement
+    zsinvert_steps_per_iter: int = 50  # Optimization steps per iteration
+    zsinvert_improvement_threshold: float = 0.01  # Min improvement to continue
+    zsinvert_patience: int = 5  # Patience for early stopping in ZSInvert
 
     # === GP Retrain (during inference) ===
     gp_retrain_epochs: int = 1000

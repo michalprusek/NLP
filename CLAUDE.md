@@ -244,6 +244,7 @@ When `--skip-hbbops` is enabled:
 - **Always update `lipo/PIPELINE.md`** when making changes to LIPO code (dimensions, parameters, architecture)
 - PIPELINE.md is the single source of truth for LIPO architecture and parameters
 - Keep dimensions, loss functions, and training parameters in sync with `config.py`
+- **Always update `lipo/run.py` CLI argument defaults** when changing `config.py` defaults - CLI overrides config!
 
 ## Coding Standards
 

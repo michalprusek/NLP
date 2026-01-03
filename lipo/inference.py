@@ -247,12 +247,174 @@ class Vec2TextInverter:
         return result.strip()
 
 
+class ZSInvertRefiner:
+    """ZSInvert-style iterative refinement for Vec2Text output.
+
+    After Vec2Text inverts embedding→text, there's often semantic drift
+    (similarity ~0.85). ZSInvert uses gradient-based optimization to refine
+    the latent z so decode(z) better matches GTR(text), then re-inverts.
+
+    Algorithm (per iteration):
+        1. Encode current text with GTR → target_emb
+        2. Gradient descent: minimize ||decode(z) - target_emb||
+        3. Decode optimized z and re-invert with Vec2Text
+        4. Check improvement, continue if significant
+
+    This "tightens" the loop between latent optimization and text generation.
+    """
+
+    def __init__(
+        self,
+        vae_with_adapter,
+        gtr_encoder: GTRInstructionEncoder,
+        inverter: Vec2TextInverter,
+        n_iterations: int = 3,
+        lr: float = 0.1,
+        n_steps_per_iter: int = 50,
+        improvement_threshold: float = 0.01,
+        patience: int = 5,
+        device: str = "cuda",
+    ):
+        """Initialize ZSInvert refiner.
+
+        Args:
+            vae_with_adapter: VAEWithAdapter for decoding latents to embeddings
+            gtr_encoder: GTR encoder for text→embedding
+            inverter: Vec2Text inverter for embedding→text
+            n_iterations: Maximum refinement iterations
+            lr: Learning rate for gradient descent
+            n_steps_per_iter: Optimization steps per iteration
+            improvement_threshold: Minimum improvement to continue
+            patience: Number of iterations without improvement before stopping
+            device: Torch device
+        """
+        self.vae = vae_with_adapter
+        self.gtr = gtr_encoder
+        self.inverter = inverter
+        self.n_iterations = n_iterations
+        self.lr = lr
+        self.n_steps = n_steps_per_iter
+        self.threshold = improvement_threshold
+        self.patience = patience
+        self.device = torch.device(device)
+
+    def refine(
+        self,
+        initial_text: str,
+        initial_z: torch.Tensor,
+        X_min: torch.Tensor,
+        X_max: torch.Tensor,
+        verbose: bool = False,
+    ) -> Tuple[str, torch.Tensor, dict]:
+        """Iteratively refine text using gradient-based latent optimization.
+
+        Args:
+            initial_text: Vec2Text output to refine
+            initial_z: Normalized latent [0,1]^d from optimization
+            X_min, X_max: Denormalization parameters
+            verbose: Print progress
+
+        Returns:
+            (refined_text, refined_z_normalized, metrics) tuple where:
+            - refined_text: Best refined instruction text
+            - refined_z_normalized: Corresponding latent in [0,1]^d
+            - metrics: Dict with iterations, initial_sim, final_sim, improvement
+        """
+        best_text = initial_text
+        best_sim = 0.0
+        z = initial_z.clone().to(self.device)
+        x_range = (X_max - X_min).to(self.device)
+        X_min_dev = X_min.to(self.device)
+        patience_counter = 0
+
+        metrics = {
+            "iterations": 0,
+            "initial_sim": 0.0,
+            "final_sim": 0.0,
+            "improvement": 0.0,
+        }
+
+        self.vae.eval()
+
+        for iteration in range(self.n_iterations):
+            # 1. Encode current best text
+            target_emb = self.gtr.encode_tensor(best_text)
+
+            # 2. Compute current similarity
+            with torch.no_grad():
+                z_unnorm = z * x_range + X_min_dev
+                current_emb = self.vae.decode(z_unnorm)
+                current_sim = F.cosine_similarity(
+                    current_emb.unsqueeze(0),
+                    target_emb.unsqueeze(0)
+                ).item()
+
+            if iteration == 0:
+                metrics["initial_sim"] = current_sim
+                best_sim = current_sim
+
+            # 3. Gradient-based refinement of z
+            z_opt = z.clone().requires_grad_(True)
+            optimizer = torch.optim.Adam([z_opt], lr=self.lr)
+
+            for step in range(self.n_steps):
+                optimizer.zero_grad()
+                z_unnorm = z_opt * x_range + X_min_dev
+                decoded = self.vae.decode(z_unnorm)
+                loss = 1 - F.cosine_similarity(
+                    decoded.unsqueeze(0),
+                    target_emb.unsqueeze(0)
+                )
+                loss.backward()
+                optimizer.step()
+
+                # Clamp to valid normalized range [0, 1]
+                with torch.no_grad():
+                    z_opt.data.clamp_(0, 1)
+
+            # 4. Decode refined latent and invert to text
+            z = z_opt.detach()
+            with torch.no_grad():
+                z_unnorm = z * x_range + X_min_dev
+                new_emb = self.vae.decode(z_unnorm)
+
+            new_text = self.inverter.invert(new_emb.clone())
+
+            # 5. Evaluate improvement (GTR similarity between new_emb and GTR(new_text))
+            new_target = self.gtr.encode_tensor(new_text)
+            new_sim = F.cosine_similarity(
+                new_emb.unsqueeze(0),
+                new_target.unsqueeze(0)
+            ).item()
+
+            if verbose:
+                print(f"    ZSInvert iter {iteration + 1}: sim {current_sim:.4f} → {new_sim:.4f}")
+
+            if new_sim > best_sim + self.threshold:
+                best_sim = new_sim
+                best_text = new_text
+                metrics["iterations"] = iteration + 1
+                patience_counter = 0  # Reset patience on improvement
+            else:
+                patience_counter += 1
+                if patience_counter >= self.patience:
+                    # Patience exhausted, stop
+                    if verbose:
+                        print(f"    ZSInvert: patience exhausted ({self.patience}), stopping")
+                    break
+
+        metrics["final_sim"] = best_sim
+        metrics["improvement"] = best_sim - metrics["initial_sim"]
+
+        return best_text, z, metrics
+
+
 class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 16D VAE latent space using LogEI acquisition
-           (GP uses adapter: 16D → 10D for kernel computation)
+        1. Optimize in 64D VAE latent space using LogEI acquisition
+           (GP uses adapter: 64D → 10D for kernel computation)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
@@ -329,6 +491,23 @@ class LIPOHyperbandInference:
             self.anchor_selector = create_pas_selector(config, self.device)
         else:
             self.anchor_selector = None
+
+        # Initialize ZSInvert refiner (runs after Vec2Text for iterative refinement)
+        self.use_zsinvert = getattr(config, 'zsinvert_enabled', False)
+        if self.use_zsinvert:
+            self.zsinvert_refiner = ZSInvertRefiner(
+                vae_with_adapter=self.vae_with_adapter,
+                gtr_encoder=self.gtr,
+                inverter=self.inverter,
+                n_iterations=getattr(config, 'zsinvert_iterations', 3),
+                lr=getattr(config, 'zsinvert_lr', 0.1),
+                n_steps_per_iter=getattr(config, 'zsinvert_steps_per_iter', 50),
+                improvement_threshold=getattr(config, 'zsinvert_improvement_threshold', 0.01),
+                patience=getattr(config, 'zsinvert_patience', 5),
+                device=str(self.device),
+            )
+        else:
+            self.zsinvert_refiner = None
 
         # Cache global bounds (computed on first iteration)
         self._global_bounds: Optional[torch.Tensor] = None
@@ -667,11 +846,26 @@ GP Status:
                 self.trust_region.set_anchor(anchor)
                 anchor_idx = best_idx
 
-            # Get trust region bounds
-            bounds = self.trust_region.get_bounds(global_bounds)
+            # Get ARD lengthscales from GP kernel for LOL-BO style scaling
+            # Note: lengthscales are in 10D adapter space, bounds are in 32D VAE space
+            # get_ard_bounds() handles dimension mismatch by falling back to uniform scaling
+            lengthscales = None
+            try:
+                if hasattr(self.gp.gp_model, 'covar_module'):
+                    base_kernel = self.gp.gp_model.covar_module.base_kernel
+                    if hasattr(base_kernel, 'lengthscale'):
+                        lengthscales = base_kernel.lengthscale.detach().squeeze()
+            except Exception:
+                pass  # Fall back to uniform scaling
+
+            # Get ARD-aware trust region bounds (LOL-BO style)
+            bounds = self.trust_region.get_ard_bounds(global_bounds, lengthscales)
 
             if verbose:
                 print(f"  TuRBO: {self.trust_region.get_state_summary()}")
+                if lengthscales is not None:
+                    ls_str = ", ".join([f"{ls:.3f}" for ls in lengthscales[:5].tolist()])
+                    print(f"  ARD lengthscales (first 5): [{ls_str}, ...]")
                 print(f"  Anchor: idx={anchor_idx}, using {'PAS' if self.use_pas else 'best-y'} selection")
         else:
             # Global optimization (no trust region)
@@ -743,6 +937,29 @@ GP Status:
 
                     if verbose:
                         print(f"  Re-generated:\n{instruction}")
+
+            # ZSInvert refinement - runs EVERY iteration after Vec2Text
+            # Improves text-embedding alignment via gradient-based latent optimization
+            if self.use_zsinvert and self.zsinvert_refiner is not None:
+                instruction, z_refined, zsinvert_metrics = self.zsinvert_refiner.refine(
+                    initial_text=instruction,
+                    initial_z=z_opt,
+                    X_min=self.gp.X_min,
+                    X_max=self.gp.X_max,
+                    verbose=verbose,
+                )
+                # Update z_opt if refinement occurred
+                if zsinvert_metrics["iterations"] > 0:
+                    z_opt = z_refined
+                    # Re-decode to get updated embedding
+                    z_unnorm = z_opt * x_range + self.gp.X_min
+                    with torch.no_grad():
+                        embedding = self.vae_with_adapter.decode(z_unnorm)
+
+                if verbose:
+                    print(f"  ZSInvert: {zsinvert_metrics['iterations']} iters, "
+                          f"sim: {zsinvert_metrics['initial_sim']:.4f} → {zsinvert_metrics['final_sim']:.4f} "
+                          f"(Δ={zsinvert_metrics['improvement']:+.4f})")
 
             # Re-encode for GP prediction
             # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data

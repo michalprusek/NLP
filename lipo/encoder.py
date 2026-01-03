@@ -90,8 +90,8 @@ class InstructionVAE(nn.Module):
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
     Architecture:
-        Encoder: 768D → 384 → 192 → 2*latent_dim (mu + log_var)
-        Decoder: latent_dim → 192 → 384 → 768D (L2 normalized)
+        Encoder: 768D → 384 → 192 → 2*64 (mu + log_var)
+        Decoder: 64D → 192 → 384 → 768D (L2 normalized)
 
     Loss:
         L = recon_loss + beta * KL(q(z|x) || N(0,1))
@@ -106,7 +106,7 @@ class InstructionVAE(nn.Module):
     def __init__(
         self,
         input_dim: int = 768,
-        latent_dim: int = 16,
+        latent_dim: int = 64,
         beta: float = 0.1,
         gamma: float = 0.0,
     ):
@@ -114,7 +114,7 @@ class InstructionVAE(nn.Module):
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Latent space dimension (16 by default, matches config.latent_dim)
+            latent_dim: Latent space dimension (64 by default, matches config.latent_dim)
             beta: KL regularization weight (higher = more regularized)
             gamma: Cycle consistency weight (ensures z ≈ encode(decode(z)))
         """
@@ -241,46 +241,6 @@ class InstructionVAE(nn.Module):
         x_recon = self.decode(z)
         return x_recon, mu, log_var, z
 
-    def lipschitz_loss(
-        self,
-        z: torch.Tensor,
-        y: torch.Tensor,
-        K: float = 10.0,
-    ) -> torch.Tensor:
-        """Compute Lipschitz regularization penalty (CoBO-style).
-
-        Penalizes violations of Lipschitz property in latent space:
-        |y_i - y_j| <= K * ||z_i - z_j||
-
-        This ensures that nearby points in latent space have similar
-        objective values, aligning the latent geometry with the objective.
-
-        Args:
-            z: Latent samples (N, latent_dim)
-            y: Objective values (N,) - e.g., error rates or accuracies
-            K: Target Lipschitz constant
-
-        Returns:
-            Mean Lipschitz violation penalty
-        """
-        N = z.shape[0]
-        if N < 2:
-            return torch.tensor(0.0, device=z.device)
-
-        # Sample random pairs efficiently (max 1000 pairs for speed)
-        n_pairs = min(N * (N - 1) // 2, 1000)
-        idx1 = torch.randint(0, N, (n_pairs,), device=z.device)
-        idx2 = torch.randint(0, N, (n_pairs,), device=z.device)
-
-        # Compute distances
-        z_dist = torch.norm(z[idx1] - z[idx2], p=2, dim=-1)  # ||z_i - z_j||
-        y_dist = torch.abs(y[idx1] - y[idx2])  # |y_i - y_j|
-
-        # Lipschitz violation: penalize when y changes faster than K * z_dist
-        violation = F.relu(y_dist - K * z_dist)
-
-        return violation.mean()
-
     def loss(
         self,
         x: torch.Tensor,
@@ -290,32 +250,23 @@ class InstructionVAE(nn.Module):
         z: Optional[torch.Tensor] = None,
         beta: Optional[float] = None,
         gamma: Optional[float] = None,
-        y: Optional[torch.Tensor] = None,
-        lipschitz_weight: float = 0.0,
-        lipschitz_K: float = 10.0,
     ) -> Tuple[torch.Tensor, dict]:
-        """Compute VAE loss with optional cycle consistency and Lipschitz reg.
+        """Compute VAE loss with optional cycle consistency.
 
-        Loss = recon_loss + beta * KL_loss + gamma * cycle_loss + lip_weight * lip_loss
+        Loss = recon_loss + beta * KL_loss + gamma * cycle_loss
 
         Cycle consistency ensures that z ≈ encode_mu(decode(z)), preventing
         the latent space from having "holes" where decoded embeddings map
         back to different latent regions.
-
-        Lipschitz regularization (CoBO-style) ensures that nearby points
-        in latent space have similar objective values.
 
         Args:
             x: Original embeddings (batch, 768)
             x_recon: Reconstructed embeddings (batch, 768)
             mu: Latent means
             log_var: Latent log variances
-            z: Sampled latent (required if gamma > 0 or lipschitz_weight > 0)
+            z: Sampled latent (required if gamma > 0)
             beta: Optional override for KL weight
             gamma: Optional override for cycle consistency weight
-            y: Objective values for Lipschitz regularization (batch,)
-            lipschitz_weight: Weight for Lipschitz penalty
-            lipschitz_K: Target Lipschitz constant
 
         Returns:
             (total_loss, loss_dict) tuple
@@ -346,20 +297,14 @@ class InstructionVAE(nn.Module):
             cycle_loss = (1 - z_cosine).mean()
             cycle_cosine = z_cosine.mean().item()
 
-        # Lipschitz regularization (CoBO-style)
-        lip_loss = torch.tensor(0.0, device=x.device)
-        if lipschitz_weight > 0 and y is not None and z is not None:
-            lip_loss = self.lipschitz_loss(z, y, K=lipschitz_K)
-
         # Total loss
-        total_loss = recon_loss + beta * kl_loss + gamma * cycle_loss + lipschitz_weight * lip_loss
+        total_loss = recon_loss + beta * kl_loss + gamma * cycle_loss
 
         loss_dict = {
             "total": total_loss.item(),
             "recon": recon_loss.item(),
             "kl": kl_loss.item(),
             "cycle": cycle_loss.item() if gamma > 0 else 0.0,
-            "lipschitz": lip_loss.item() if lipschitz_weight > 0 else 0.0,
             "cosine_mean": cosine_sim.mean().item(),
             "cycle_cosine": cycle_cosine,
         }
@@ -416,17 +361,17 @@ class VAEWithAdapter(nn.Module):
     """Wrapper combining frozen VAE encoder with trainable adapter.
 
     Architecture for optimization:
-        z (16D) → Adapter → z_gp (10D) → GP → qLogEI
+        z (64D) → Adapter → z_gp (10D) → GP → qLogEI
 
     The adapter compresses VAE latent for efficient GP modeling while
-    optimization happens in the full 16D space with gradients flowing
+    optimization happens in the full 64D space with gradients flowing
     through the adapter.
 
     For decoding after optimization:
-        z (16D) → VAE decoder → embedding (768D)
+        z (64D) → VAE decoder → embedding (768D)
     """
 
-    def __init__(self, vae: nn.Module, vae_latent_dim: int = 16, gp_latent_dim: int = 10):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -437,16 +382,18 @@ class VAEWithAdapter(nn.Module):
         self.vae_latent_dim = vae_latent_dim
         self.gp_latent_dim = gp_latent_dim
 
-        # Trainable adapter: compresses VAE latents (16D) to GP latents (10D)
+        # Trainable adapter: compresses VAE latents (64D) to GP latents (10D)
+        # Intermediate dimension scales with input: ~half of vae_latent_dim
+        intermediate_dim = max(vae_latent_dim // 2, gp_latent_dim * 2)
         self.adapter = nn.Sequential(
-            nn.Linear(vae_latent_dim, 20),  # 16 → 20 (intermediate)
+            nn.Linear(vae_latent_dim, intermediate_dim),  # 64 → 32
             nn.ReLU(),
-            nn.LayerNorm(20),
-            nn.Linear(20, gp_latent_dim),  # 20 → 10
+            nn.LayerNorm(intermediate_dim),
+            nn.Linear(intermediate_dim, gp_latent_dim),  # 32 → 10
         )
 
     def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode embedding to 16D VAE latent (deterministic mu).
+        """Encode embedding to VAE latent (deterministic mu).
 
         Use this for getting latent for optimization bounds.
         """
@@ -455,7 +402,7 @@ class VAEWithAdapter(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Encode embedding to 10D GP latent (through adapter).
 
-        Pipeline: x (768D) → VAE encoder → z (16D) → adapter → z_gp (10D)
+        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
 
         This is used for GP training.
         """
@@ -466,7 +413,7 @@ class VAEWithAdapter(nn.Module):
         """Apply adapter to VAE latent.
 
         Args:
-            z: VAE latent tensor of shape (..., 16)
+            z: VAE latent tensor of shape (..., 64)
 
         Returns:
             GP latent tensor of shape (..., 10)
@@ -474,10 +421,10 @@ class VAEWithAdapter(nn.Module):
         return self.adapter(z)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        """Decode 16D VAE latent to 768D embedding.
+        """Decode VAE latent to 768D embedding.
 
         Args:
-            z: VAE latent tensor of shape (..., 16)
+            z: VAE latent tensor of shape (..., 64)
 
         Returns:
             Embedding tensor of shape (..., 768)

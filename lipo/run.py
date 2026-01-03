@@ -229,8 +229,8 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.015,
-        help="VAE KL regularization weight (5x stronger for latent_dim=16)"
+        "--vae-beta", type=float, default=0.003,
+        help="VAE KL regularization weight (low for text VAE)"
     )
     parser.add_argument(
         "--vae-epochs", type=int, default=15000,
@@ -241,7 +241,7 @@ def main():
         help="VAE KL annealing epochs"
     )
     parser.add_argument(
-        "--vae-gamma", type=float, default=1.0,
+        "--vae-gamma", type=float, default=5.0,
         help="VAE cycle consistency weight (ensures z ≈ encode(decode(z)))"
     )
 

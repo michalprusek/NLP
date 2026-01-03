@@ -573,9 +573,10 @@ class LIPOHyperbandTrainer:
 
                 optimizer.zero_grad()
                 x_recon, mu, log_var, z = self.vae(batch)
+
                 loss, loss_dict = self.vae.loss(
                     batch, x_recon, mu, log_var, z=z,
-                    beta=current_beta, gamma=self.config.vae_gamma
+                    beta=current_beta, gamma=self.config.vae_gamma,
                 )
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.vae.parameters(), max_norm=self.config.vae_grad_clip)
