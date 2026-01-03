@@ -60,7 +60,7 @@ class TrustRegionManager:
         """Initialize trust region manager.
 
         Args:
-            dim: Dimensionality of latent space (32 for VAE latent)
+            dim: Dimensionality of latent space (16 for VAE latent, matches config.latent_dim)
             device: Torch device
             L_init: Initial side length (fraction of unit cube)
             L_max: Maximum side length
@@ -99,7 +99,12 @@ class TrustRegionManager:
             Trust region bounds, shape (2, dim)
         """
         if self.state.center is None:
-            # No anchor set - use global bounds
+            # No anchor set - use global bounds (expected on first iteration)
+            import warnings
+            warnings.warn(
+                "TrustRegionManager.get_bounds() called with no anchor set. "
+                "Using global bounds. This is normal on first iteration."
+            )
             return global_bounds
 
         center = self.state.center
@@ -223,7 +228,6 @@ class PotentialAwareAnchorSelector:
             Candidates, shape (n_samples, dim)
         """
         dim = center.shape[0]
-        half_length = trust_length / 2
 
         # Sample uniformly in [-0.5, 0.5]^d and scale
         samples = torch.rand(n_samples, dim, device=self.device) - 0.5
@@ -271,7 +275,7 @@ class PotentialAwareAnchorSelector:
                 sample = posterior.rsample(torch.Size([1]))  # (1, N)
 
             return sample.squeeze(0)  # (N,)
-        except Exception as e:
+        except (RuntimeError, gpytorch.utils.errors.NotPSDError) as e:
             error_msg = str(e).lower()
             if "cholesky" in error_msg or "nan" in error_msg or "singular" in error_msg:
                 raise RuntimeError(
@@ -303,20 +307,25 @@ class PotentialAwareAnchorSelector:
 
         Args:
             gp_model: Trained GP model (InstructionDeepKernelGP)
-            X_train: Training latents, shape (N, 32) - unnormalized VAE latents
+            X_train: Training latents, shape (N, latent_dim) - unnormalized VAE latents
             y_train: Training targets, shape (N,) - negated error rates
-            X_min: Min values for normalization, shape (32,)
-            X_max: Max values for normalization, shape (32,)
+            X_min: Min values for normalization, shape (latent_dim,)
+            X_max: Max values for normalization, shape (latent_dim,)
             trust_length: Current trust region side length
-            global_bounds: Global bounds in normalized space, shape (2, 32)
+            global_bounds: Global bounds in normalized space, shape (2, latent_dim)
             verbose: Print debug info
 
         Returns:
             (anchor_latent, anchor_idx) tuple where:
-            - anchor_latent: Selected anchor in normalized [0,1]^d space, shape (32,)
+            - anchor_latent: Selected anchor in normalized [0,1]^d space, shape (latent_dim,)
             - anchor_idx: Index of selected anchor in training data
+
+        Raises:
+            ValueError: If X_train is empty
         """
         n_points = X_train.shape[0]
+        if n_points == 0:
+            raise ValueError("Cannot select anchor from empty training data")
 
         # Normalize training data to [0, 1]^d
         denom = X_max - X_min
@@ -335,11 +344,9 @@ class PotentialAwareAnchorSelector:
                 n_samples=self.n_candidates,
             )
 
-            # Denormalize candidates for GP prediction
-            candidates_unnorm = candidates * denom + X_min
-
-            # Thompson Sampling: get max posterior sample in region
-            ts_values = self._thompson_sample(gp_model, candidates_unnorm)
+            # Thompson Sampling on normalized candidates
+            # GP model expects normalized [0,1] inputs (applies Kumaraswamy warping internally)
+            ts_values = self._thompson_sample(gp_model, candidates)
             potentials[i] = ts_values.max()
 
         # Step 3: Scale potentials to match objective value range
@@ -385,7 +392,7 @@ def create_turbo_manager(config, device: torch.device) -> TrustRegionManager:
         Configured TrustRegionManager
     """
     return TrustRegionManager(
-        dim=config.latent_dim,  # 32D VAE latent
+        dim=config.latent_dim,  # 16D VAE latent (config.latent_dim)
         device=device,
         L_init=config.turbo_L_init,
         L_max=config.turbo_L_max,

@@ -265,8 +265,8 @@ class GPWithEI:
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
-        # Training data - stored as 32D VAE latents
-        self.X_train: Optional[torch.Tensor] = None  # (N, 32) VAE latents
+        # Training data - stored as 16D VAE latents
+        self.X_train: Optional[torch.Tensor] = None  # (N, 16) VAE latents
         self.y_train: Optional[torch.Tensor] = None  # (N,) negated error rates (internal)
         self.fidelity_train: Optional[torch.Tensor] = None  # (N,) sample counts for each observation
         self._error_rates_original: Optional[torch.Tensor] = None  # (N,) positive error rates for noise computation
@@ -291,7 +291,7 @@ class GPWithEI:
     ):
         """Set training data for GP.
 
-        Transforms embeddings to 32D VAE latents using frozen VAE encoder.
+        Transforms embeddings to 16D VAE latents using frozen VAE encoder.
 
         IMPORTANT: We negate error_rates for BoTorch compatibility.
         BoTorch's qLogExpectedImprovement MAXIMIZES by default:
@@ -320,7 +320,7 @@ class GPWithEI:
                 f"Ensure you're passing GTR embeddings, not VAE latents."
             )
 
-        # Transform to 32D VAE latents using frozen encoder
+        # Transform to 16D VAE latents using frozen encoder
         self.vae_with_adapter.eval()
         with torch.no_grad():
             vae_latents = self.vae_with_adapter.encode_vae(embeddings)
@@ -333,7 +333,7 @@ class GPWithEI:
                 f"got {vae_latents.shape[-1]}. Check VAE configuration."
             )
 
-        self.X_train = vae_latents  # (N, 32)
+        self.X_train = vae_latents  # (N, 16)
 
         # Store original error rates for noise computation (needs positive values)
         self._error_rates_original = error_rates.to(self.device)
@@ -393,9 +393,9 @@ class GPWithEI:
         verbose: bool = True,
         use_input_warping: bool = True,
     ) -> bool:
-        """Train GP on stored 32D VAE latents.
+        """Train GP on stored 16D VAE latents.
 
-        Trains adapter (32D→10D), Kumaraswamy warping, and GP kernel jointly.
+        Trains adapter (16D→10D), Kumaraswamy warping, and GP kernel jointly.
         VAE encoder is frozen.
 
         Uses FixedNoiseGaussianLikelihood with heteroscedastic noise based on
@@ -414,10 +414,10 @@ class GPWithEI:
         if self.X_train is None or self.y_train is None:
             raise RuntimeError("No training data. Call set_training_data() first.")
 
-        X = self.X_train  # Already 32D VAE latents
+        X = self.X_train  # Already 16D VAE latents
         y = self.y_train
 
-        # Unit cube normalization for 32D latents
+        # Unit cube normalization for 16D latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -573,10 +573,10 @@ class GPWithEI:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
-        # Encode 768D embedding to 32D VAE latent if needed
+        # Encode 768D embedding to 16D VAE latent if needed
         with torch.no_grad():
             if embedding.shape[-1] == 768:
-                # Encode through VAE to get 32D latent
+                # Encode through VAE to get 16D latent
                 z_vae = self.vae_with_adapter.encode_vae(embedding)
             else:
                 z_vae = embedding
@@ -765,7 +765,7 @@ class GPWithEI:
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
         """Get 10D latent for embedding using trained adapter.
 
-        Pipeline: embedding (768D) → VAE encoder → z (32D) → normalize → adapter → z_gp (10D)
+        Pipeline: embedding (768D) → VAE encoder → z (16D) → normalize → adapter → z_gp (10D)
 
         Args:
             embedding: Instruction embedding (768,)
@@ -780,17 +780,17 @@ class GPWithEI:
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
 
-        # First encode to 32D VAE latent
+        # First encode to 16D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
             z_vae = self.vae_with_adapter.encode_vae(embedding)
 
-        # Normalize 32D latent
+        # Normalize 16D latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         z_norm = (z_vae - self.X_min) / denom
 
-        # Apply adapter: 32D → 10D
+        # Apply adapter: 16D → 10D
         with torch.no_grad():
             latent = self.vae_with_adapter.adapter(z_norm)
 
@@ -842,10 +842,10 @@ class GPWithEI:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
-        # Encode to 32D VAE latent
+        # Encode to 16D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 32)
+            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 16)
 
         # Apply Laplace smoothing for consistency with training data
         # Formula: (errors + 1) / (n + 2) - penalizes "lucky guesses" on low-fidelity samples

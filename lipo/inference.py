@@ -52,7 +52,7 @@ class IterationRecord:
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
     # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
-    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (64D)
+    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (16D)
     z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
     z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
     predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
@@ -251,8 +251,8 @@ class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 64D VAE latent space using LogEI acquisition
-           (GP uses adapter: 64D → 10D for kernel computation)
+        1. Optimize in 16D VAE latent space using LogEI acquisition
+           (GP uses adapter: 16D → 10D for kernel computation)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
@@ -286,7 +286,7 @@ class LIPOHyperbandInference:
         self.gp = gp
         self.vae = vae
         self.config = config
-        # VAEWithAdapter for decoding (64D -> 768D)
+        # VAEWithAdapter for decoding (16D -> 768D)
         self.vae_with_adapter = gp.vae_with_adapter
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.evaluator = evaluator
@@ -339,7 +339,7 @@ class LIPOHyperbandInference:
         Computes bounds on first call and caches them.
 
         Returns:
-            Global bounds tensor, shape (2, 64)
+            Global bounds tensor, shape (2, latent_dim)
         """
         if self._global_bounds is None:
             from lipo.botorch_acq import get_latent_bounds
@@ -363,10 +363,10 @@ class LIPOHyperbandInference:
         """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
         Uses multi-start L-BFGS-B with proper gradient flow through:
-            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
+            z (16D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
 
         This is the recommended optimization method as it:
-        1. Optimizes in rich 64D VAE latent space
+        1. Optimizes in 16D VAE latent space
         2. Uses adapter to compress to 10D for efficient GP
         3. Gradients flow through adapter for latent optimization
 
@@ -379,7 +379,7 @@ class LIPOHyperbandInference:
 
         Returns:
             (optimal_latent, log_ei) tuple where:
-            - optimal_latent: Best VAE latent tensor, shape (64,)
+            - optimal_latent: Best VAE latent tensor, shape (latent_dim,)
             - log_ei: Log expected improvement value at optimal point
         """
         from lipo.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
@@ -398,8 +398,8 @@ class LIPOHyperbandInference:
             )
 
         # Create acquisition optimizer
-        # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
-        # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
+        # Optimization path: z (16D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
+        # After optimization: z_opt (16D) → VAE decoder → embedding (768D)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
@@ -456,7 +456,7 @@ class LIPOHyperbandInference:
         encoder.eval()
 
         with torch.no_grad():
-            # Encode 768D embedding to 64D VAE latent (unnormalized)
+            # Encode 768D embedding to 16D VAE latent (unnormalized)
             z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
 
             # Normalize to GP input space
@@ -539,10 +539,8 @@ class LIPOHyperbandInference:
             record: IterationRecord with all iteration data
             pred_std: Prediction standard deviation from GP
         """
-        # Truncate instruction for display (show first 100 chars)
-        instr_display = record.instruction[:100]
-        if len(record.instruction) > 100:
-            instr_display += "..."
+        # IMPORTANT: Never truncate prompts in log output (per CLAUDE.md)
+        instr_display = record.instruction
 
         actual_str = f"{record.actual_error:.4f}" if record.actual_error is not None else "N/A (skipped)"
         improved_str = "YES" if record.improved else "no"
@@ -638,17 +636,28 @@ GP Status:
 
             # Select anchor using PAS (Potential-Aware Selection)
             if self.use_pas and self.anchor_selector is not None:
-                anchor, anchor_idx = self.anchor_selector.select_anchor(
-                    gp_model=self.gp.gp_model,
-                    X_train=self.gp.X_train,
-                    y_train=self.gp.y_train,
-                    X_min=self.gp.X_min,
-                    X_max=self.gp.X_max,
-                    trust_length=trust_region_length,
-                    global_bounds=global_bounds,
-                    verbose=verbose,
-                )
-                self.trust_region.set_anchor(anchor)
+                try:
+                    anchor, anchor_idx = self.anchor_selector.select_anchor(
+                        gp_model=self.gp.gp_model,
+                        X_train=self.gp.X_train,
+                        y_train=self.gp.y_train,
+                        X_min=self.gp.X_min,
+                        X_max=self.gp.X_max,
+                        trust_length=trust_region_length,
+                        global_bounds=global_bounds,
+                        verbose=verbose,
+                    )
+                    self.trust_region.set_anchor(anchor)
+                except RuntimeError as e:
+                    # PAS failed (e.g., GP numerical issues) - fall back to best-y
+                    print(f"WARNING: PAS anchor selection failed: {e}")
+                    print("  Falling back to best-y anchor selection")
+                    best_idx = self.gp.y_train.argmax().item()
+                    denom = self.gp.X_max - self.gp.X_min
+                    denom[denom == 0] = 1.0
+                    anchor = (self.gp.X_train[best_idx] - self.gp.X_min) / denom
+                    self.trust_region.set_anchor(anchor)
+                    anchor_idx = best_idx
             else:
                 # Without PAS, use best observed point as anchor
                 best_idx = self.gp.y_train.argmax().item()
@@ -681,7 +690,7 @@ GP Status:
                 bounds=bounds,
             )
 
-            # Denormalize and decode to embedding (64D latent -> 768D embedding)
+            # Denormalize and decode to embedding (16D latent -> 768D embedding)
             # z_opt is normalized [0,1], need to convert back to VAE latent space
             x_range = self.gp.X_max - self.gp.X_min
             z_unnorm = z_opt * x_range + self.gp.X_min
@@ -775,7 +784,7 @@ GP Status:
             denom[denom == 0] = 1.0
             z_real_norm = (z_real - self.gp.X_min) / denom
 
-            # Gap metrics in VAE latent space (64D)
+            # Gap metrics in VAE latent space (16D)
             z_opt_z_real_cosine = F.cosine_similarity(
                 z_opt_original.unsqueeze(0), z_real_norm.unsqueeze(0)
             ).item()
