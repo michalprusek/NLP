@@ -465,7 +465,7 @@ class LIPOHyperband:
         print(f"  GP training data: {len(best_observations)} unique prompts")
         print(f"  Fidelity range: [{fidelities.min().item():.0f}, {fidelities.max().item():.0f}]")
 
-        # Pass fidelities for heteroscedastic noise (Bernoulli variance weighting)
+        # Pass fidelities for heteroscedastic noise (Beta posterior variance weighting)
         gp_with_ei.set_training_data(embeddings, errors, fidelities)
 
         # Note: train() will recompute X_min, X_max, y_mean, y_std from training data

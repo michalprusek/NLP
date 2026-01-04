@@ -78,7 +78,7 @@ FÁZE 4: InvBO INFERENCE
                     ↓
 ┌──────────────────────────────────────────┐
 │ Candidate Rejection Loop                 │
-│ - Cosine sim threshold: 0.93             │
+│ - Cosine sim threshold: 0.90             │
 │ - Max rejection attempts: 10             │
 │ - Different seed per attempt             │
 │ - Fallback: accept low-quality candidate │
@@ -89,15 +89,6 @@ FÁZE 4: InvBO INFERENCE
 │ - z_opt (32D) → decoder → embedding (768D)
 │ - embedding → Vec2Text → text            │
 │ - 512_tokens model (max 128 tokenů)      │
-└──────────────────────────────────────────┘
-                    ↓
-┌──────────────────────────────────────────┐
-│ ZSInvert Refinement (každá iterace)      │
-│ - Iterativní zlepšení Vec2Text outputu   │
-│ - Gradient-based z refinement            │
-│ - Minimalizace ||decode(z) - GTR(text)|| │
-│ - Re-inverze s vylepšeným embedingem     │
-│ - Early stopping při konvergenci         │
 └──────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────┐
@@ -113,7 +104,7 @@ FÁZE 4: InvBO INFERENCE
 │ - Re-encode text s GTR                   │
 │ - Predikce error rate s GP               │
 │ - LLM evaluace (volitelná)               │
-│ - Laplace smoothing: (err*n+1)/(n+2)     │
+│ - Beta posterior: (err*n+1)/(n+2)        │
 │ - Přidání do training dat                │
 │ - Full retrain (1000 epoch)              │
 └──────────────────────────────────────────┘
@@ -224,7 +215,7 @@ for_hyperband_gp() → {epochs: 3000, lr: 0.01, patience: 50}
 | `use_inversion` | True | Použít InvBO inversion loop |
 | `max_inversion_iters` | 3 | Max iterací inverze |
 | `gap_threshold` | 0.08 | Threshold pro re-inverzi (zpřísněno pro menší optimization gap) |
-| `cosine_sim_threshold` | 0.93 | Min cosine similarity (zvýšeno pro lepší alignment) |
+| `cosine_sim_threshold` | 0.90 | Min cosine similarity for candidate acceptance |
 | `max_rejection_attempts` | 10 | Max pokusů (zvýšeno pro lepší kandidáty) |
 
 ### TuRBO (Trust Region)
@@ -260,16 +251,6 @@ Penalizuje latenty vzdálené od trénovacích dat, protože mají špatnou roun
 | `anchor_margin` | 0.4 | Margin kolem kotev pro exploraci |
 
 Přísnější než distance penalty - omezuje optimalizaci na okolí nejlepších bodů.
-
-### ZSInvert Refinement (pouze pro 512_tokens Vec2Text model)
-| Parametr | Default | Popis |
-|----------|---------|-------|
-| `zsinvert_enabled` | True | Povolit ZSInvert refinement (auto-disabled pro 32_tokens model) |
-| `zsinvert_iterations` | 25 | Max iterací refinementu (zvýšeno pro lepší konvergenci) |
-| `zsinvert_lr` | 0.1 | Learning rate pro gradient descent |
-| `zsinvert_steps_per_iter` | 50 | Optimalizačních kroků na iteraci |
-| `zsinvert_improvement_threshold` | 0.005 | Min zlepšení (jemnější detekce) |
-| `zsinvert_patience` | 8 | Patience pro early stopping (zvýšeno) |
 
 ### Vec2Text
 | Parametr | Default | Popis |
@@ -318,8 +299,8 @@ class GTRInstructionEncoder:
 Variational autoencoder pro hladký latentní prostor:
 
 ```
-Encoder: 768D → 384 → GELU → LayerNorm → 192 → GELU → LayerNorm → 2×32 (mu + log_var)
-Decoder: 32 → 192 → GELU → LayerNorm → 384 → GELU → LayerNorm → 768D (L2 normalized)
+Encoder: 768D → 384 → GELU → LN → 192 → GELU → LN → 96 → GELU → LN → 2×32 (mu + log_var)
+Decoder: 32 → 96 → GELU → LN → 192 → GELU → LN → 384 → GELU → LN → 768D (L2 normalized)
 ```
 
 **GELU aktivace:** Hladší gradienty než ReLU, používá se v transformerech.
@@ -367,16 +348,27 @@ GP model pro instrukční optimalizaci (přímo na 32D VAE latent):
 
 ```python
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
+    # Data-driven prior estimation from training data
+    median_dist = median_pairwise_distance(train_x)  # Empirical estimate
+    ls_alpha, ls_beta = 4.0, 4.0 / median_dist  # Gamma prior mean = median_dist
+
     mean_module = ZeroMean()
     covar_module = ScaleKernel(
         MaternKernel(
             nu=2.5,  # Matern 5/2
             ard_num_dims=input_dim,  # ARD na 32D
-            lengthscale_prior=GammaPrior(3.0, 6.0),
+            lengthscale_prior=GammaPrior(ls_alpha, ls_beta),  # Data-driven
         ),
-        outputscale_prior=GammaPrior(2.0, 0.15),
+        outputscale_prior=GammaPrior(2.0, 2.0),  # mean=1 for standardized y
     )
+    # Initialize lengthscales to median distance (better starting point)
+    covar_module.base_kernel.lengthscale = median_dist
 ```
+
+**Data-driven Priors:**
+- **Lengthscale:** Odhadnutý z mediánu pairwise distances v trénovacích datech
+- **Outputscale:** Gamma(2, 2) s mean=1 pro standardizované y
+- **Inicializace:** Lengthscales nastaveny na median distance (lepší start)
 
 **Forward pass:**
 ```python
@@ -421,7 +413,7 @@ error rates pro BoTorch maximizaci.
 │  MultivariateNormal(mean, covariance)                          │
 │       ↓                                                        │
 │  FixedNoiseGaussianLikelihood                                  │
-│    ├─ noise = Bernoulli variance p(1-p)/n                      │
+│    ├─ noise = Beta posterior variance p(1-p)/(n+3)             │
 │    └─ learn_additional_noise = False (CUDA stability)          │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
@@ -466,39 +458,46 @@ def predict(self, embedding):
     return mean, std
 ```
 
-#### 5.3 Heteroscedastic Noise (Bernoulli Variance)
+#### 5.3 Heteroscedastic Noise (Beta Posterior Variance)
 
 GP dostává informaci o spolehlivosti každé observace prostřednictvím
-heteroscedastic noise. Variance je počítána z Bernoulli statistiky:
+heteroscedastic noise. Variance je počítána z Beta posterior statistiky:
 
 ```python
 def _compute_observation_noise(self, y, fidelity):
     """
-    Pro error_rate měřenou na n vzorcích:
-    Var = p(1-p)/n
+    Pro error_rate měřenou na n vzorcích s Beta(1,1) prior:
+    - Posterior: Beta(α=1+errors, β=1+successes)
+    - Posterior variance: αβ/((α+β)²(α+β+1)) = p(1-p)/(n+3)
 
     kde:
-    - p = error_rate (proportion of errors)
+    - p = posterior mean (regularized error rate)
     - n = fidelity (number of samples)
     """
-    variance = (y * (1 - y)) / fidelity
+    # Beta posterior variance: p(1-p)/(n+3)
+    variance = (y * (1 - y)) / (fidelity + 3)
 
-    # Clamp to prevent numerical issues
-    variance = torch.clamp(variance, min=1e-6, max=0.1)
+    # Minimal clamp for numerical stability
+    variance = torch.clamp(variance, min=1e-8, max=0.1)
 
     return variance
 ```
 
 **Příklad vlivu fidelity:**
 ```
-Instrukce s error_rate = 0.20:
+Instrukce s posterior mean = 0.20:
 
-fidelity=10:   Var = 0.20 * 0.80 / 10   = 0.016   (HIGH uncertainty)
-fidelity=100:  Var = 0.20 * 0.80 / 100  = 0.0016  (medium uncertainty)
-fidelity=1319: Var = 0.20 * 0.80 / 1319 = 0.00012 (LOW uncertainty)
+fidelity=10:   Var = 0.20 * 0.80 / 13   = 0.0123  (HIGH uncertainty)
+fidelity=100:  Var = 0.20 * 0.80 / 103  = 0.0016  (medium uncertainty)
+fidelity=1319: Var = 0.20 * 0.80 / 1322 = 0.00012 (LOW uncertainty)
 ```
 
 GP pak více důvěřuje high-fidelity observacím.
+
+**Proč Beta posterior místo Bernoulli?**
+- Bernoulli variance p(1-p)/n = 0 pro p=0 nebo p=1 (nerealistické)
+- Beta posterior přirozeně regularizuje extrémní hodnoty
+- Konzistentní Bayesovský přístup (mean i variance z posteriorní distribuce)
 
 #### 5.4 FixedNoiseGaussianLikelihood
 
@@ -519,7 +518,7 @@ self.likelihood = FixedNoiseGaussianLikelihood(
 
 **Proč `learn_additional_noise=False`?**
 - `learn_additional_noise=True` způsoboval CUDA chyby v `second_noise_covar`
-- Bernoulli variance p(1-p)/n je dostatečná pro modelování observačního šumu
+- Beta posterior variance p(1-p)/(n+3) je dostatečná pro modelování observačního šumu
 - Vyšší stabilita při trénování GP
 
 #### 5.5 Normalizace Detaily
@@ -639,10 +638,10 @@ def predict(self, embedding):
 `self.likelihood(self.gp_model(X_norm))`. Toto zabraňuje `GPInputWarning`
 o nesouladu velikosti šumu při predikci na nových bodech.
 
-#### 5.9 add_observation s Laplace Smoothing
+#### 5.9 add_observation s Beta Posterior
 
-Při přidávání nových observací aplikujeme Laplace smoothing pro konzistenci
-s trénovacími daty:
+Při přidávání nových observací aplikujeme Beta(1,1) posterior pro konzistentní
+Bayesovskou regularizaci:
 
 ```python
 def add_observation(self, embedding, error_rate, fidelity=1319):
@@ -661,21 +660,21 @@ def add_observation(self, embedding, error_rate, fidelity=1319):
     # Encode to VAE latent (768D → 32D)
     new_z = self.vae_with_adapter.encode_vae(embedding)
 
-    # Laplace smoothing: (errors + 1) / (n + 2)
-    # Penalizes "lucky guesses" on low-fidelity samples
+    # Beta(1,1) posterior mean: (errors + 1) / (n + 2)
+    # Bayesian regularization for small samples
     num_errors = error_rate * fidelity
-    smoothed_error = (num_errors + 1) / (fidelity + 2)
+    posterior_mean = (num_errors + 1) / (fidelity + 2)
 
-    # Store original (smoothed) for noise computation
+    # Store posterior mean for noise computation (Beta posterior variance)
     self._error_rates_original = torch.cat([
         self._error_rates_original,
-        torch.tensor([smoothed_error])
+        torch.tensor([posterior_mean])
     ])
 
     # Negate for GP (BoTorch maximization)
     self.y_train = torch.cat([
         self.y_train,
-        torch.tensor([-smoothed_error])
+        torch.tensor([-posterior_mean])
     ])
 
     self.fidelity_train = torch.cat([
@@ -686,17 +685,17 @@ def add_observation(self, embedding, error_rate, fidelity=1319):
     self.X_train = torch.cat([self.X_train, new_z])
 
     # Update best if improved
-    if -smoothed_error > self.y_best:
-        self.y_best = -smoothed_error
+    if -posterior_mean > self.y_best:
+        self.y_best = -posterior_mean
 ```
 
-**Laplace smoothing příklad:**
+**Beta posterior příklad:**
 ```
-Raw error 0/10 (0.0)   → smoothed: (0+1)/(10+2)   = 0.083
-Raw error 0/100 (0.0)  → smoothed: (0+1)/(100+2)  = 0.0098
-Raw error 0/1319 (0.0) → smoothed: (0+1)/(1319+2) = 0.00076
+Raw error 0/10 (0.0)   → posterior mean: (0+1)/(10+2)   = 0.083
+Raw error 0/100 (0.0)  → posterior mean: (0+1)/(100+2)  = 0.0098
+Raw error 0/1319 (0.0) → posterior mean: (0+1)/(1319+2) = 0.00076
 
-Low-fidelity "perfect" results jsou penalizovány více!
+Low-fidelity "perfect" results jsou regularizovány!
 ```
 
 #### 5.10 LogEI Implementace
@@ -764,7 +763,7 @@ TRAINING (32D, no adapter):
                                         ↓
   error_rates → negate → y_train = -error_rates
                                ↓
-  fidelities → Bernoulli variance → noise = p(1-p)/n
+  fidelities → Beta posterior variance → noise = p(1-p)/(n+3)
                                         ↓
   Unit cube normalize X, Z-score normalize y
                     ↓
@@ -787,7 +786,7 @@ PREDICTION:
 ADD OBSERVATION:
   new_embedding (768D) + error_rate + fidelity
                     ↓
-  Laplace smoothing: (errors + 1) / (fidelity + 2)
+  Beta posterior mean: (errors + 1) / (fidelity + 2)
                     ↓
   Append to X_train, y_train, fidelity_train
                     ↓
@@ -864,7 +863,7 @@ for attempt in range(max_rejection_attempts):  # default 5
     reencoded = GTR.encode(instruction)
     cosine_sim = cosine_similarity(embedding, reencoded)
 
-    if cosine_sim >= cosine_sim_threshold:  # default 0.93
+    if cosine_sim >= cosine_sim_threshold:  # default 0.90
         break  # Dobrý kandidát
     elif attempt == max_rejection_attempts - 1:
         print("WARNING: Accepting low-quality candidate")
@@ -924,8 +923,8 @@ for attempt in range(max_rejection_attempts):  # default 5
    pred_error, pred_std = GP.predict(reencoded)
    actual_error = LLM.evaluate(text, validation_data)  # Volitelné
 
-   # Laplace smoothing pro nové observace
-   smoothed_error = (error * fidelity + 1) / (fidelity + 2)
+   # Beta posterior mean pro nové observace
+   posterior_mean = (error * fidelity + 1) / (fidelity + 2)
 
    GP.add_observation(reencoded, error_to_use, fidelity)
    GP.train(epochs=1000, patience=50)  # Full retrain
@@ -1043,88 +1042,6 @@ def get_ard_bounds(global_bounds, lengthscales=None):
 - Nedůležité dimenze (dlouhý lengthscale) dostávají širší bounds
 - Lepší explorace v relevantních dimenzích
 
-### 11. ZSInvertRefiner (inference.py)
-
-ZSInvert-style iterativní refinement pro Vec2Text output.
-
-**DŮLEŽITÉ:** ZSInvert je automaticky povoleno pouze pro `512_tokens` Vec2Text model.
-Pro `32_tokens` model je ZSInvert automaticky vypnuto (i když `zsinvert_enabled=True`).
-
-**Klíčový koncept: FIXED TARGET**
-
-Původní implementace měřila similaritu vůči měnícímu se cíli (GTR(current_best_text)),
-což vedlo k "skákajícím" hodnotám similarity. Opravená verze používá **fixní cíl**:
-
-```
-fixed_target = decode(initial_z)  # Originální decoder output - NEMĚNÍ SE
-```
-
-Měříme vždy: `cosine(GTR(new_text), fixed_target)` - konzistentní progress.
-
-**Algoritmus:**
-```python
-class ZSInvertRefiner:
-    def refine(initial_text, initial_z, X_min, X_max):
-        """Iterativně zlepšuje Vec2Text output.
-
-        Cíl: najít text kde GTR(text) ≈ decode(initial_z)
-
-        1. Compute fixed_target = decode(initial_z)  # FIXED!
-        2. Pro každou iteraci:
-           a. Gradient descent: minimize ||decode(z) - GTR(best_text)||
-           b. Decode optimized z → new_emb
-           c. Vec2Text invert → new_text
-           d. Measure sim = cosine(GTR(new_text), fixed_target)
-           e. Keep if improved toward fixed target
-        """
-        # Fixed target - neměnný cíl
-        fixed_target = VAE.decode(initial_z)
-        initial_sim = cosine(GTR(initial_text), fixed_target)
-        best_sim = initial_sim
-        best_text = initial_text
-
-        for iter in range(n_iterations):
-            # Optimize z toward current best text embedding
-            current_target = GTR.encode(best_text)
-            z_opt = z.clone().requires_grad_(True)
-            optimizer = Adam([z_opt], lr=0.1)
-
-            for step in range(n_steps):
-                decoded = VAE.decode(z_opt * x_range + X_min)
-                loss = 1 - cosine_similarity(decoded, current_target)
-                loss.backward()
-                optimizer.step()
-                z_opt.clamp_(0, 1)
-
-            # Re-decode and invert
-            new_emb = VAE.decode(z_opt)
-            new_text = Vec2Text.invert(new_emb)
-
-            # Measure against FIXED target (consistent!)
-            new_sim = cosine(GTR(new_text), fixed_target)
-
-            if new_sim > best_sim + threshold:
-                best_sim = new_sim
-                best_text = new_text
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    break
-
-        return best_text, z_opt, metrics
-```
-
-**Účel ZSInvert:**
-- Vec2Text má round-trip similarity ~0.85 (semantic drift)
-- ZSInvert iterativně zlepšuje alignment k fixnímu cíli
-- Cíl: sim ~0.90+ po refinementu
-
-**Proč fixed target:**
-- Bez fixed target: cíl se mění s každým Vec2Text outputem → "skákající" hodnoty
-- S fixed target: konzistentní měření progressu → monotónní zlepšování
-
-**Kdy běží:** Každou iteraci po Vec2Text inverzi (before GP update)
-
 ---
 
 ## APE Generator (training.py)
@@ -1239,22 +1156,26 @@ S ~200-500 trénovacími body z Hyperband byl adapter zbytečný a riskantní:
 - Evaluace: LLM evaluuje text, ne embedding
 
 ### 7. Proč Heteroscedastic Noise?
-- Bernoulli variance: Var = p(1-p)/n
+- Beta posterior variance: Var = p(1-p)/(n+3)
 - Nízká fidelity (malé n) → vysoká variance → GP méně důvěřuje
 - Vysoká fidelity (velké n) → nízká variance → GP více důvěřuje
+- Přirozeně řeší nulovou varianci pro p=0 nebo p=1
 - `FixedNoiseGaussianLikelihood` s `learn_additional_noise=False` (CUDA stabilita)
 
 ### 8. Proč Candidate Rejection?
 - Problém: Vec2Text může generovat text vzdálený od decoder outputu
-- Řešení: Ověř cosine similarity ≥ 0.93 mezi decoder a re-encoded
+- Řešení: Ověř cosine similarity ≥ 0.90 mezi decoder a re-encoded
 - Max 10 pokusů s různými seedy před fallback akceptací
 - Varování při nízké kvalitě: indikuje problémy s Vec2Text
 
-### 9. Proč Laplace Smoothing?
-- Penalizuje "lucky guesses" na low-fidelity vzorcích
-- Formula: (errors + 1) / (n + 2)
-- 0/10 → 1/12 = 0.083 (bylo 0.0 - nerealisticky nízké)
-- 0/1319 → 1/1321 = 0.00076 (zůstává blízko 0)
+### 9. Proč Beta Posterior?
+- Konzistentní Bayesovský přístup (mean i variance z Beta distribuce)
+- Prior: Beta(1,1) = uniform prior
+- Posterior mean: (errors + 1) / (n + 2)
+- Posterior variance: p(1-p) / (n + 3)
+- Přirozeně řeší nulovou varianci pro p=0 nebo p=1
+- 0/10 → mean=0.083, variance=0.0059 (regularizované)
+- 0/1319 → mean=0.00076, variance≈5.7e-7 (téměř nezměněno)
 
 ### 10. Proč negovat error_rate pro GP?
 - BoTorch's qLogEI MAXIMALIZUJE by default
@@ -1467,18 +1388,12 @@ gap_kpi = compute_system_gap(z_gaps)
 | Inference | raw_samples | 1024 | Inicializace |
 | Inference | max_inversion_iters | 3 | InvBO refinement |
 | Inference | gap_threshold | 0.08 | Re-inversion threshold (zpřísněno) |
-| Inference | cosine_sim_threshold | 0.93 | Candidate acceptance (zvýšeno) |
+| Inference | cosine_sim_threshold | 0.90 | Candidate acceptance |
 | Inference | max_rejection_attempts | 10 | Max attempts (zvýšeno) |
 | GP Retrain | epochs | 1000 | Inference GP retrain |
 | GP Retrain | patience | 50 | Retrain early stopping |
 | Vec2Text | beam_width | 8 | Beam search width |
 | Vec2Text | max_length | 128 | Max output tokenů |
 | Vec2Text | model_type | 512_tokens | Podpora delších sekvencí |
-| ZSInvert | enabled | True | Iterativní refinement (pouze 512_tokens model) |
-| ZSInvert | iterations | 25 | Max refinement iterací (zvýšeno) |
-| ZSInvert | lr | 0.1 | Learning rate pro gradient descent |
-| ZSInvert | steps_per_iter | 50 | Kroků na iteraci |
-| ZSInvert | improvement_threshold | 0.005 | Min zlepšení (jemnější) |
-| ZSInvert | patience | 8 | Early stopping patience (zvýšeno) |
 | Round-trip | validation_threshold | 0.90 | Min cosine similarity pro VAE kvalitu |
 | Round-trip | validation_samples | 20 | Počet vzorků pro test |

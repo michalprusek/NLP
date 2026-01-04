@@ -20,9 +20,8 @@ Complete reference for all configurable hyperparameters in the LIPO (Latent Inst
 10. [TuRBO Trust Region](#10-turbo-trust-region)
 11. [PAS (Potential-Aware Anchor Selection)](#11-pas-potential-aware-anchor-selection)
 12. [Inversion Optimization](#12-inversion-optimization)
-13. [ZSInvert Refinement](#13-zsinvert-refinement)
-14. [Device & Paths](#14-device--paths)
-15. [CLI-Only Arguments](#15-cli-only-arguments)
+13. [Device & Paths](#13-device--paths)
+14. [CLI-Only Arguments](#14-cli-only-arguments)
 16. [Architecture Details](#architecture-details)
 17. [Critical Thresholds Summary](#critical-thresholds-summary)
 
@@ -166,7 +165,7 @@ Gaussian Process model training parameters for initial fitting.
 - Kernel: Matern 5/2 with ARD (32 lengthscales)
 - Mean: ZeroMean
 - Priors: GammaPrior(3.0, 6.0) for lengthscales, GammaPrior(2.0, 0.15) for outputscale
-- Noise: FixedNoiseGaussianLikelihood with Bernoulli variance from fidelity
+- Noise: FixedNoiseGaussianLikelihood with Beta posterior variance from fidelity
 
 ---
 
@@ -197,7 +196,7 @@ Parameters for the BoTorch-based acquisition function optimization.
 | `use_inversion` | True | bool | - | Enable InvBO inversion loop |
 | `max_inversion_iters` | 3 | int | `--max-inversion-iters` | Max inversion iterations per step |
 | `gap_threshold` | 0.08 | float | `--gap-threshold` | Gap threshold for re-inversion |
-| `cosine_sim_threshold` | 0.93 | float | - | Min cosine similarity for acceptance |
+| `cosine_sim_threshold` | 0.90 | float | - | Min cosine similarity for acceptance |
 | `max_rejection_attempts` | 10 | int | - | Max rejection attempts before forced accept |
 
 **Purpose**: Controls the inner optimization loop that finds the best latent point according to the GP acquisition function (qLogEI).
@@ -231,27 +230,27 @@ Text inversion model configuration for converting embeddings back to text.
 
 **Impact**:
 - **Higher `vec2text_beam`**: Better quality but slower generation
-- **"512_tokens" model**: Enables ZSInvert refinement, better for longer instructions
-- **"32_tokens" model**: Faster but limited to short instructions, ZSInvert disabled
+- **"512_tokens" model**: Better for longer instructions
+- **"32_tokens" model**: Faster but limited to short instructions
 
 **Model Variants**:
 - `"32_tokens"`: ielabgroup/vec2text-small (fast, short sequences)
-- `"512_tokens"`: vec2text official (slower, longer sequences, supports ZSInvert)
+- `"512_tokens"`: vec2text official (slower, longer sequences)
 
 ---
 
 ## 10. TuRBO Trust Region
 
-Trust Region Bayesian Optimization for focused local search.
+Trust Region Bayesian Optimization for focused local search (Eriksson et al., NeurIPS 2019).
 
 | Parameter | Default | Type | Description |
 |-----------|---------|------|-------------|
 | `turbo_enabled` | True | bool | Enable TuRBO trust region optimization |
-| `turbo_L_init` | 0.4 | float | Initial trust region side length |
-| `turbo_L_max` | 0.8 | float | Maximum trust region side length |
-| `turbo_L_min` | 0.0078 | float | Minimum side length (0.5^7, triggers restart) |
+| `turbo_L_init` | 0.8 | float | Initial trust region side length (paper default) |
+| `turbo_L_max` | 1.6 | float | Maximum trust region side length (paper default) |
+| `turbo_L_min` | 0.0078 | float | Minimum side length (2^-7, triggers restart) |
 | `turbo_tau_succ` | 3 | int | Consecutive successes to expand (double L) |
-| `turbo_tau_fail` | 25 | int | Consecutive failures to shrink (halve L) |
+| `turbo_tau_fail` | 32 | int | Consecutive failures to shrink (paper: ⌈d/q⌉ for d=32, q=1) |
 
 **Purpose**: TuRBO maintains a local trust region around the best observed point. It expands when optimization succeeds and shrinks when it fails, balancing exploration and exploitation.
 
@@ -312,40 +311,7 @@ Parameters for the latent space refinement during inversion.
 
 ---
 
-## 13. ZSInvert Refinement
-
-Iterative refinement for 512_tokens Vec2Text model.
-
-| Parameter | Default | Type | Description |
-|-----------|---------|------|-------------|
-| `zsinvert_enabled` | True | bool | Enable ZSInvert (auto-disabled for 32_tokens) |
-| `zsinvert_iterations` | 25 | int | Maximum refinement iterations |
-| `zsinvert_lr` | 0.1 | float | Learning rate for gradient refinement |
-| `zsinvert_steps_per_iter` | 50 | int | Optimization steps per iteration |
-| `zsinvert_improvement_threshold` | 0.005 | float | Min improvement to continue |
-| `zsinvert_patience` | 8 | int | Iterations without improvement before stop |
-
-**Purpose**: ZSInvert iteratively refines the target embedding to improve Vec2Text output quality. Each iteration: generate text → encode → optimize embedding → repeat.
-
-**Impact**:
-- **Higher `zsinvert_iterations`**: Potentially better alignment but slower
-- **Higher `zsinvert_patience`**: More attempts before giving up
-- **Lower `zsinvert_improvement_threshold`**: Continues refinement for smaller gains
-
-**Algorithm**:
-```
-for iter in range(zsinvert_iterations):
-    text = vec2text(target_embedding)
-    actual_embedding = gtr_encode(text)
-    cosine_sim = similarity(target_embedding, actual_embedding)
-    if improvement < threshold for patience iterations:
-        break
-    target_embedding = gradient_optimize(target_embedding, actual_embedding)
-```
-
----
-
-## 14. Device & Paths
+## 13. Device & Paths
 
 Device configuration and file paths.
 
@@ -359,7 +325,7 @@ Device configuration and file paths.
 
 ---
 
-## 15. CLI-Only Arguments
+## 14. CLI-Only Arguments
 
 Arguments available only via command line, not in config.py.
 
@@ -414,9 +380,9 @@ Kernel: ScaleKernel(
     MaternKernel(nu=2.5, ard_num_dims=32)
 ) with Gamma priors
 
-Noise: Heteroscedastic from Bernoulli variance
-  variance = (y * (1-y)) / fidelity
-  Clamped to [1e-6, 0.1]
+Noise: Heteroscedastic from Beta posterior variance
+  variance = (y * (1-y)) / (fidelity + 3)
+  Clamped to [1e-8, 0.1]
 
 Output: Error rates are negated for BoTorch maximization
   y_train = -error_rates (so max(-error) = min(error))
@@ -439,13 +405,12 @@ Quick reference for the most important thresholds:
 
 | Threshold | Value | Impact |
 |-----------|-------|--------|
-| `cosine_sim_threshold` | 0.93 | Rejects Vec2Text outputs with low fidelity |
+| `cosine_sim_threshold` | 0.90 | Rejects Vec2Text outputs with low fidelity |
 | `gap_threshold` | 0.08 | Controls embedding-text alignment strictness |
 | `vae_beta` | 0.01 | KL regularization (10x baseline for tight latent) |
 | `turbo_L_min` | 0.0078 | Triggers trust region restart |
-| `turbo_L_init` | 0.4 | Initial trust region size |
+| `turbo_L_init` | 0.8 | Initial trust region size (paper default) |
 | `roundtrip_validation_threshold` | 0.90 | Min quality for full pipeline |
-| `zsinvert_improvement_threshold` | 0.005 | Min refinement improvement |
 | GP noise constraint | [0.001, 0.1] | Balances confidence vs overfitting |
 | Lengthscale prior | Gamma(3.0, 6.0) | Inductive bias toward moderate scales |
 
@@ -465,12 +430,10 @@ Quick reference for the most important thresholds:
 
 ### For Faster Inference
 - Decrease `num_restarts` and `raw_samples`
-- Decrease `zsinvert_iterations` and `zsinvert_patience`
 - Decrease `max_inversion_iters`
-- Use "32_tokens" Vec2Text model (disables ZSInvert)
+- Use "32_tokens" Vec2Text model (faster inversion)
 
 ### For Better Quality
 - Increase `cosine_sim_threshold`
 - Decrease `gap_threshold`
-- Increase `zsinvert_iterations` and `zsinvert_patience`
 - Increase `vec2text_beam`

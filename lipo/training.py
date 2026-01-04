@@ -1112,7 +1112,7 @@ class LIPOHyperbandTrainer:
                 print(f"  Max fidelity: {max_fidelity}")
 
         # Build lists of ALL evaluated instructions with their error rates and fidelities
-        # FixedNoiseGaussianLikelihood will weight by fidelity (Bernoulli variance)
+        # FixedNoiseGaussianLikelihood will weight by fidelity (Beta posterior variance)
         evaluated_instructions = []
         error_rates = []
         fidelities = []
@@ -1139,18 +1139,18 @@ class LIPOHyperbandTrainer:
 
             evaluated_instructions.append(instruction)
 
-            # Laplace smoothing: (errors + 1) / (n + 2)
-            # This penalizes "lucky guesses" on low-fidelity samples:
-            # - 0/10 → 1/12 = 0.083 (was 0.0)
-            # - 0/1319 → 1/1321 = 0.00076 (stays near 0)
+            # Beta(1,1) posterior mean: (errors + 1) / (n + 2)
+            # Bayesian estimate that regularizes extreme values on small samples:
+            # - 0/10 → 1/12 = 0.083 (regularized from 0.0)
+            # - 0/1319 → 1/1321 = 0.00076 (nearly unchanged)
             raw_error = result["error_rate"]
             num_errors = raw_error * fidelity
-            smoothed_error = (num_errors + 1) / (fidelity + 2)
-            error_rates.append(smoothed_error)
+            posterior_mean = (num_errors + 1) / (fidelity + 2)
+            error_rates.append(posterior_mean)
             fidelities.append(fidelity)
 
         if verbose:
-            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Laplace-smoothed)")
+            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Beta posterior)")
             errors = sorted(error_rates)
             print(f"  Smoothed error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
             print(f"  Best 5 smoothed errors: {[f'{e:.4f}' for e in errors[:5]]}")

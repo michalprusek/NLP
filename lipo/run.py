@@ -23,7 +23,24 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 from scipy.stats import spearmanr
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+
+    def default(self, obj):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 from lipo.hbbops_results import extract_from_hyperband, save_hbbops_results
 
@@ -909,7 +926,7 @@ def _save_results(
             result["quality_kpis"]["vae_quality"] = trainer.vae_quality_kpis
 
     with open(result_path, "w") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+        json.dump(result, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
 
     print(f"\nResults saved to {result_path}")
 

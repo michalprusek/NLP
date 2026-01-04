@@ -79,6 +79,7 @@ class GSM8KEvaluator:
         backend: str = "vllm",
         max_tokens: int = 512,
         temperature: float = 0.0,
+        gpu_memory_utilization: float = 0.80,
     ):
         """Initialize evaluator.
 
@@ -87,11 +88,14 @@ class GSM8KEvaluator:
             backend: LLM backend (vllm, openai, etc.)
             max_tokens: Maximum tokens for generation
             temperature: Sampling temperature (0 = greedy)
+            gpu_memory_utilization: Fraction of GPU memory for vLLM (default 0.80).
+                                    Lower values leave more room for other models (Vec2Text).
         """
         self.model = model
         self.backend = backend
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.gpu_memory_utilization = gpu_memory_utilization
         self._client = None
         self.total_calls = 0
 
@@ -100,7 +104,11 @@ class GSM8KEvaluator:
         if self._client is None:
             from src.llm_client import create_llm_client
             print(f"Initializing evaluation LLM: {self.model}")
-            self._client = create_llm_client(self.model, self.backend)
+            self._client = create_llm_client(
+                self.model,
+                self.backend,
+                gpu_memory_utilization=self.gpu_memory_utilization,
+            )
         return self._client
 
     def format_prompt(self, instruction: str, question: str) -> str:
@@ -216,10 +224,29 @@ class GSM8KEvaluator:
         """
         return self.evaluate_batch(prompt.instruction, data)
 
+    def shutdown(self):
+        """Release LLM client and free GPU memory.
+
+        Call this before reloading Vec2Text to GPU to avoid OOM.
+        The client will be lazy-loaded again on next evaluation.
+        """
+        if self._client is not None:
+            if hasattr(self._client, 'cleanup'):
+                self._client.cleanup()
+            self._client = None
+
+            import gc
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print("  Evaluator shutdown complete")
+
 
 def create_evaluator_function(
     model: str = "Qwen/Qwen2.5-7B-Instruct",
     backend: str = "vllm",
+    gpu_memory_utilization: float = 0.80,
 ) -> Callable[[InstructionOnlyPrompt, List[Dict]], float]:
     """Create evaluator function for Hyperband.
 
@@ -228,11 +255,16 @@ def create_evaluator_function(
     Args:
         model: Model name
         backend: LLM backend
+        gpu_memory_utilization: Fraction of GPU memory for vLLM (default 0.80)
 
     Returns:
         Evaluator function with .total_calls attribute
     """
-    evaluator = GSM8KEvaluator(model=model, backend=backend)
+    evaluator = GSM8KEvaluator(
+        model=model,
+        backend=backend,
+        gpu_memory_utilization=gpu_memory_utilization,
+    )
 
     def evaluate(prompt: InstructionOnlyPrompt, data: List[Dict]) -> float:
         return evaluator(prompt, data)

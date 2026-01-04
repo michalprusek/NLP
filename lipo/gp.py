@@ -165,15 +165,57 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
 
         self._input_dim = train_x.shape[-1]  # Get actual VAE latent dimension (32)
 
+        # === Data-driven prior estimation ===
+        # Lengthscale: estimate from median pairwise distances per dimension
+        # For [0,1] normalized inputs, typical distances are ~0.2-0.5
+        # We use a broad prior centered on median distance to allow flexibility
+        with torch.no_grad():
+            # Sample subset for efficiency (max 100 pairs)
+            n_samples = min(train_x.shape[0], 100)
+            idx = torch.randperm(train_x.shape[0])[:n_samples]
+            X_sample = train_x[idx]
+
+            # Compute per-dimension distances
+            # Shape: (n_samples, n_samples, D)
+            diffs = X_sample.unsqueeze(0) - X_sample.unsqueeze(1)
+            per_dim_dists = diffs.abs()
+
+            # Median distance per dimension (excluding self-distances)
+            mask = ~torch.eye(n_samples, dtype=torch.bool, device=train_x.device)
+            median_dists = []
+            for d in range(self._input_dim):
+                dim_dists = per_dim_dists[:, :, d][mask]
+                median_dists.append(dim_dists.median().item())
+            median_dist = np.median(median_dists)
+
+            # Clamp to reasonable range for numerical stability
+            median_dist = max(0.05, min(0.5, median_dist))
+
+        # Lengthscale prior: Gamma with mean = median_dist, moderate variance
+        # Gamma(α, β) has mean = α/β, variance = α/β²
+        # We want mean ≈ median_dist, std ≈ median_dist/2
+        # α = 4, β = 4/median_dist gives mean=median_dist, std=median_dist/2
+        ls_alpha = 4.0
+        ls_beta = ls_alpha / median_dist
+
+        # Outputscale prior: Since y is standardized (mean=0, std=1),
+        # outputscale should be around 1.0
+        # Gamma(2, 2) has mean=1, std=0.71 - reasonable for standardized targets
+        os_alpha = 2.0
+        os_beta = 2.0
+
         self.mean_module = gpytorch.means.ZeroMean()
         self.covar_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(
                 nu=2.5,  # Matern 5/2 - smooth but flexible
                 ard_num_dims=self._input_dim,  # Per-dimension lengthscales (32D)
-                lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
+                lengthscale_prior=gpytorch.priors.GammaPrior(ls_alpha, ls_beta),
             ),
-            outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
+            outputscale_prior=gpytorch.priors.GammaPrior(os_alpha, os_beta),
         )
+
+        # Initialize lengthscales to median distance (better starting point)
+        self.covar_module.base_kernel.lengthscale = median_dist
 
     def forward(self, x: torch.Tensor) -> MultivariateNormal:
         """Forward pass through GP.
@@ -319,31 +361,34 @@ class GPWithEI:
             )
 
     def _compute_observation_noise(self, y: torch.Tensor, fidelity: torch.Tensor) -> torch.Tensor:
-        """Compute observation noise variance based on Bernoulli statistics.
+        """Compute observation noise variance using Beta posterior.
 
-        For error_rate measured on n samples, variance is: Var = p(1-p)/n
-        where p is error_rate and n is fidelity (sample count).
+        Uses Beta(1,1) prior (uniform) with n observations.
+        For error_rate p measured on n samples:
+        - Posterior: Beta(α=1+errors, β=1+successes)
+        - Posterior mean: α/(α+β) = (1+errors)/(n+2)  [same as Laplace]
+        - Posterior variance: αβ/((α+β)²(α+β+1)) = p(1-p)/(n+3)
 
-        This gives GP information about observation reliability:
-        - Low fidelity (small n) → high variance → less trust
-        - High fidelity (large n) → low variance → more trust
+        This is more principled than Bernoulli variance p(1-p)/n because:
+        - Naturally handles p=0 or p=1 (no zero variance)
+        - Consistent Bayesian treatment (mean and variance from same posterior)
+        - Slightly more conservative for small n
 
         Args:
-            y: Error rates (N,)
-            fidelity: Sample counts (N,)
+            y: Beta posterior mean of error rates (N,) - already smoothed
+            fidelity: Sample counts n (N,)
 
         Returns:
-            Observation noise variance for each point (N,)
+            Beta posterior variance for each point (N,)
         """
-        # Bernoulli variance: p(1-p)/n
-        # Clamp fidelity to minimum of 1 to avoid division by zero
-        safe_fidelity = torch.clamp(fidelity, min=1.0)
-        variance = (y * (1 - y)) / safe_fidelity
+        # Beta posterior variance: p(1-p)/(n+3)
+        # where p = posterior mean, n = fidelity
+        # This naturally handles p=0 or p=1 (no zero variance problem)
+        variance = (y * (1 - y)) / (fidelity + 3)
 
-        # Clamp to avoid numerical issues:
-        # - min: prevent zero variance (causes numerical issues)
-        # - max: prevent extremely high variance for low-fidelity points
-        variance = torch.clamp(variance, min=1e-6, max=0.1)
+        # Minimal clamp for numerical stability only
+        # Beta posterior already provides reasonable variance even for extreme p
+        variance = torch.clamp(variance, min=1e-8, max=0.1)
 
         return variance
 
@@ -360,7 +405,7 @@ class GPWithEI:
         VAE encoder is frozen. No adapter - GP operates directly on 32D latent.
 
         Uses FixedNoiseGaussianLikelihood with heteroscedastic noise based on
-        Bernoulli variance: Var = p(1-p)/n, where n is fidelity (sample count).
+        Beta posterior variance: Var = p(1-p)/(n+3), where n is fidelity.
 
         Args:
             epochs: Maximum training epochs
@@ -400,8 +445,8 @@ class GPWithEI:
                 "Use VAEWithAdapter from encoder.py."
             )
 
-        # Compute heteroscedastic noise from Bernoulli variance
-        # Use original (positive) error rates for variance computation: p(1-p)/n
+        # Compute heteroscedastic noise from Beta posterior variance
+        # Use posterior mean for variance computation: p(1-p)/(n+3)
         # Noise in standardized space: scale by y_std^2
         raw_noise = self._compute_observation_noise(self._error_rates_original, self.fidelity_train)
         # Transform noise to standardized space (divide by y_std^2)
@@ -422,7 +467,7 @@ class GPWithEI:
 
         # FixedNoiseGaussianLikelihood with heteroscedastic noise
         # NOTE: learn_additional_noise=False to avoid CUDA errors with second_noise_covar
-        # The Bernoulli variance from fidelity is sufficient observation noise
+        # The Beta posterior variance from fidelity is sufficient observation noise
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=noise_standardized,
             learn_additional_noise=False,
@@ -434,6 +479,12 @@ class GPWithEI:
 
         # Register outcome transform for BoTorch compatibility
         self.gp_model.outcome_transform = self.outcome_transform
+
+        # Log data-driven prior estimation
+        if verbose:
+            init_ls = self.gp_model.covar_module.base_kernel.lengthscale.mean().item()
+            print(f"  Data-driven lengthscale prior: mean={init_ls:.4f} (from median pairwise distances)")
+            print(f"  Outputscale prior: mean=1.0 (for standardized targets)")
 
         # Training loop
         self.gp_model.train()
@@ -527,16 +578,33 @@ class GPWithEI:
                     # Re-raise all other RuntimeErrors - they indicate bugs, not expected failures
                     raise
 
+        # Get final lengthscales for analysis
+        final_ls = self.gp_model.covar_module.base_kernel.lengthscale.detach().cpu().squeeze()
+        final_os = self.gp_model.covar_module.outputscale.detach().cpu().item()
+
+        # Identify most relevant dimensions (smallest lengthscales = most important)
+        sorted_dims = torch.argsort(final_ls)
+        top_5_dims = sorted_dims[:5].tolist()
+        top_5_ls = final_ls[sorted_dims[:5]].tolist()
+
         # Store training stats
         self.training_stats = {
             "epochs_trained": epoch + 1,
             "final_loss": float(best_loss),
             "early_stopped": patience_counter >= patience,
             "num_samples": len(X),
+            "lengthscale_mean": float(final_ls.mean()),
+            "lengthscale_min": float(final_ls.min()),
+            "lengthscale_max": float(final_ls.max()),
+            "outputscale": float(final_os),
+            "top_5_relevant_dims": top_5_dims,
         }
 
         if verbose:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
+            print(f"  Final lengthscales: mean={final_ls.mean():.4f}, min={final_ls.min():.4f}, max={final_ls.max():.4f}")
+            print(f"  Final outputscale: {final_os:.4f}")
+            print(f"  Top 5 relevant dims (smallest lengthscale): {list(zip(top_5_dims, [f'{ls:.3f}' for ls in top_5_ls]))}")
 
         return True
 
@@ -807,13 +875,13 @@ class GPWithEI:
 
         NOTE: Does NOT retrain - call train() after adding observations.
 
-        Error rate is Laplace-smoothed and negated internally for consistency
-        with training data and BoTorch compatibility.
+        Error rate is converted to Beta(1,1) posterior mean and negated internally
+        for consistency with training data and BoTorch compatibility.
 
         Args:
             embedding: Instruction embedding (768,) or (1, 768)
-            error_rate: Observed error rate (positive, will be smoothed and negated internally)
-            fidelity: Number of samples used for evaluation (for noise estimation and smoothing)
+            error_rate: Observed error rate (positive, will be regularized and negated internally)
+            fidelity: Number of samples used for evaluation (for Beta posterior variance)
 
         Raises:
             ValueError: If error_rate is not in [0, 1] or fidelity < 1
@@ -850,16 +918,16 @@ class GPWithEI:
         # Move result back to GP device for training data storage
         new_z = new_z.to(self.device)
 
-        # Apply Laplace smoothing for consistency with training data
-        # Formula: (errors + 1) / (n + 2) - penalizes "lucky guesses" on low-fidelity samples
-        # This matches the smoothing applied in training.py:load_from_hyperband_evaluations()
+        # Beta(1,1) posterior mean for consistency with training data
+        # Formula: (errors + 1) / (n + 2) - Bayesian regularization for small samples
+        # This matches the posterior mean applied in training.py:load_from_hyperband_evaluations()
         num_errors = error_rate * fidelity
-        smoothed_error = (num_errors + 1) / (fidelity + 2)
+        posterior_mean = (num_errors + 1) / (fidelity + 2)
 
-        # Store original (smoothed) error rate for noise computation
-        new_error_original = torch.tensor([smoothed_error], dtype=torch.float32, device=self.device)
+        # Store posterior mean for noise computation (Beta posterior variance)
+        new_error_original = torch.tensor([posterior_mean], dtype=torch.float32, device=self.device)
         # Negate for GP training (BoTorch maximization)
-        new_y = torch.tensor([-smoothed_error], dtype=torch.float32, device=self.device)
+        new_y = torch.tensor([-posterior_mean], dtype=torch.float32, device=self.device)
         new_fid = torch.tensor([fidelity], dtype=torch.float32, device=self.device)
 
         # Append to existing data

@@ -107,6 +107,7 @@ class Vec2TextInverter:
         self.model_type = model_type
         self._corrector = None
         self._inversion_model = None
+        self._pre_reload_callback = None  # Called before reload to free GPU memory
 
     def _load_model(self):
         """Lazy load Vec2Text model."""
@@ -196,6 +197,52 @@ class Vec2TextInverter:
 
         print(f"  Vec2Text (512_tokens) loaded on {self.device}")
 
+    def _ensure_on_device(self, pre_reload_callback: callable = None):
+        """Ensure model is on the correct device.
+
+        Reloads from CPU if model was offloaded. This allows Vec2Text to be
+        offloaded during evaluation and automatically reloaded for next inversion.
+
+        Args:
+            pre_reload_callback: Optional callback to call BEFORE reloading to GPU.
+                                 Used to free GPU memory (e.g., shutdown vLLM evaluator).
+        """
+        needs_reload = False
+        # self.device can be str or torch.device - normalize to device type string
+        target_type = self.device.type if hasattr(self.device, 'type') else str(self.device).split(':')[0]
+
+        if self._inversion_model is not None:
+            # Check if 512_tokens model needs to be moved to GPU
+            try:
+                param = next(self._inversion_model.parameters())
+                if param.device.type == 'cpu' and target_type == 'cuda':
+                    needs_reload = True
+            except StopIteration:
+                pass
+
+        if self._corrector is not None:
+            # Check if 32_tokens model needs to be moved to GPU
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                try:
+                    param = next(self._corrector.model.parameters())
+                    if param.device.type == 'cpu' and target_type == 'cuda':
+                        needs_reload = True
+                except StopIteration:
+                    pass
+
+        if needs_reload:
+            if pre_reload_callback is not None:
+                pre_reload_callback()
+            self.reload()
+
+    def set_pre_reload_callback(self, callback: callable):
+        """Set callback to be called before reloading model to GPU.
+
+        This is used to free GPU memory (e.g., shutdown vLLM evaluator)
+        before reloading Vec2Text to GPU.
+        """
+        self._pre_reload_callback = callback
+
     def invert(self, embedding: torch.Tensor) -> str:
         """Invert embedding to text.
 
@@ -206,6 +253,10 @@ class Vec2TextInverter:
             Reconstructed text
         """
         self._load_model()
+
+        # Auto-reload to GPU if model was offloaded to CPU
+        # Use pre-reload callback to free GPU memory (e.g., shutdown vLLM evaluator)
+        self._ensure_on_device(self._pre_reload_callback)
 
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
@@ -246,6 +297,49 @@ class Vec2TextInverter:
         tokenizer = self._inversion_model.tokenizer
         result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         return result.strip()
+
+    def offload(self):
+        """Move Vec2Text model to CPU and clear CUDA cache.
+
+        Call this before loading large models (e.g., Qwen evaluator) to free GPU memory.
+        The model will be automatically reloaded to GPU on next invert() call.
+        """
+        import gc
+
+        if self._corrector is not None:
+            # 32_tokens model - move all components to CPU
+            if hasattr(self._corrector, 'inversion_trainer') and self._corrector.inversion_trainer is not None:
+                self._corrector.inversion_trainer.model = self._corrector.inversion_trainer.model.to('cpu')
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                self._corrector.model = self._corrector.model.to('cpu')
+            if hasattr(self._corrector, 'embedder') and self._corrector.embedder is not None:
+                self._corrector.embedder = self._corrector.embedder.to('cpu')
+            print("  Vec2Text (32_tokens) offloaded to CPU")
+
+        if self._inversion_model is not None:
+            # 512_tokens model - move to CPU
+            self._inversion_model = self._inversion_model.to('cpu')
+            print("  Vec2Text (512_tokens) offloaded to CPU")
+
+        # Clear CUDA cache
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def reload(self):
+        """Reload Vec2Text model to GPU after offload."""
+        if self._corrector is not None:
+            if hasattr(self._corrector, 'inversion_trainer') and self._corrector.inversion_trainer is not None:
+                self._corrector.inversion_trainer.model = self._corrector.inversion_trainer.model.to(self.device)
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                self._corrector.model = self._corrector.model.to(self.device)
+            if hasattr(self._corrector, 'embedder') and self._corrector.embedder is not None:
+                self._corrector.embedder = self._corrector.embedder.to(self.device)
+            print(f"  Vec2Text (32_tokens) reloaded to {self.device}")
+
+        if self._inversion_model is not None:
+            self._inversion_model = self._inversion_model.to(self.device)
+            print(f"  Vec2Text (512_tokens) reloaded to {self.device}")
 
 
 def validate_roundtrip_quality(
@@ -349,199 +443,6 @@ Interpretation: {quality} - {"good reconstruction" if quality == "GOOD" else "si
     return results
 
 
-class ZSInvertRefiner:
-    """ZSInvert-style iterative refinement for Vec2Text output.
-
-    After Vec2Text inverts embedding→text, there's often semantic drift
-    (similarity ~0.85). ZSInvert uses gradient-based optimization to refine
-    the latent z so decode(z) better matches GTR(text), then re-inverts.
-
-    Algorithm (per iteration):
-        1. Encode current text with GTR → target_emb
-        2. Gradient descent: minimize ||decode(z) - target_emb||
-        3. Decode optimized z and re-invert with Vec2Text
-        4. Check improvement, continue if significant
-
-    This "tightens" the loop between latent optimization and text generation.
-    """
-
-    def __init__(
-        self,
-        vae_with_adapter,
-        gtr_encoder: GTRInstructionEncoder,
-        inverter: Vec2TextInverter,
-        n_iterations: int = 3,
-        lr: float = 0.1,
-        n_steps_per_iter: int = 50,
-        improvement_threshold: float = 0.01,
-        patience: int = 5,
-        device: str = "cuda",
-    ):
-        """Initialize ZSInvert refiner.
-
-        Args:
-            vae_with_adapter: VAEWithAdapter for decoding latents to embeddings
-            gtr_encoder: GTR encoder for text→embedding
-            inverter: Vec2Text inverter for embedding→text
-            n_iterations: Maximum refinement iterations
-            lr: Learning rate for gradient descent
-            n_steps_per_iter: Optimization steps per iteration
-            improvement_threshold: Minimum improvement to continue
-            patience: Number of iterations without improvement before stopping
-            device: Torch device
-        """
-        self.vae = vae_with_adapter
-        self.gtr = gtr_encoder
-        self.inverter = inverter
-        self.n_iterations = n_iterations
-        self.lr = lr
-        self.n_steps = n_steps_per_iter
-        self.threshold = improvement_threshold
-        self.patience = patience
-        self.device = torch.device(device)
-
-    def refine(
-        self,
-        initial_text: str,
-        initial_z: torch.Tensor,
-        X_min: torch.Tensor,
-        X_max: torch.Tensor,
-        verbose: bool = False,
-    ) -> Tuple[str, torch.Tensor, dict]:
-        """Iteratively refine text using gradient-based latent optimization.
-
-        The goal is to find text where GTR(text) ≈ original_decoder_output.
-        We use a FIXED target (the original decoder output) to measure progress
-        consistently across iterations.
-
-        Algorithm:
-            1. Compute fixed target = decode(initial_z) - this is what we're trying to match
-            2. Each iteration:
-               a. Optimize z to minimize ||decode(z) - GTR(current_best_text)||
-               b. Decode optimized z and invert via Vec2Text
-               c. Measure sim = cosine(GTR(new_text), fixed_target)
-               d. Keep new_text if it improves similarity to fixed target
-
-        Args:
-            initial_text: Vec2Text output to refine
-            initial_z: Normalized latent [0,1]^d from optimization
-            X_min, X_max: Denormalization parameters
-            verbose: Print progress
-
-        Returns:
-            (refined_text, refined_z_normalized, metrics) tuple where:
-            - refined_text: Best refined instruction text
-            - refined_z_normalized: Corresponding latent in [0,1]^d
-            - metrics: Dict with iterations, initial_sim, final_sim, improvement
-        """
-        best_text = initial_text
-        z = initial_z.clone().to(self.device)
-        x_range = (X_max - X_min).to(self.device)
-        X_min_dev = X_min.to(self.device)
-        patience_counter = 0
-        iteration = 0
-
-        metrics = {
-            "iterations": 0,
-            "initial_sim": 0.0,
-            "final_sim": 0.0,
-            "improvement": 0.0,
-        }
-
-        self.vae.eval()
-
-        try:
-            # Compute FIXED target = original decoder output
-            # This is what we're trying to match with GTR(text)
-            vae_dev = self.vae.device
-            with torch.no_grad():
-                z_unnorm = initial_z.to(self.device) * x_range + X_min_dev
-                fixed_target = self.vae.decode(z_unnorm.to(vae_dev))
-
-            # Compute initial similarity: cosine(GTR(initial_text), fixed_target)
-            initial_gtr = self.gtr.encode_tensor(initial_text).to(vae_dev)
-            initial_sim = F.cosine_similarity(
-                initial_gtr.unsqueeze(0),
-                fixed_target.unsqueeze(0)
-            ).item()
-            metrics["initial_sim"] = initial_sim
-            best_sim = initial_sim
-
-            if verbose:
-                print(f"    ZSInvert: fixed target from decode(z), initial sim = {initial_sim:.4f}")
-
-            for iteration in range(self.n_iterations):
-                # 1. Get current best text embedding as optimization target
-                # (we optimize z so decode(z) → GTR(best_text))
-                current_target = self.gtr.encode_tensor(best_text).to(vae_dev)
-
-                # 2. Gradient-based refinement of z toward current_target
-                z_opt = z.clone().requires_grad_(True)
-                optimizer = torch.optim.Adam([z_opt], lr=self.lr)
-
-                for step in range(self.n_steps):
-                    optimizer.zero_grad()
-                    z_unnorm = z_opt * x_range + X_min_dev
-                    decoded = self.vae.decode(z_unnorm.to(vae_dev))
-                    loss = 1 - F.cosine_similarity(
-                        decoded.unsqueeze(0),
-                        current_target.unsqueeze(0)
-                    )
-                    loss.backward()
-                    optimizer.step()
-
-                    # Clamp to valid normalized range [0, 1]
-                    with torch.no_grad():
-                        z_opt.data.clamp_(0, 1)
-
-                # 3. Decode refined latent and invert to text
-                z = z_opt.detach()
-                with torch.no_grad():
-                    z_unnorm = z * x_range + X_min_dev
-                    new_emb = self.vae.decode(z_unnorm.to(vae_dev))
-
-                new_text = self.inverter.invert(new_emb.clone())
-
-                # 4. Evaluate improvement against FIXED target
-                # Measure: cosine(GTR(new_text), fixed_target)
-                # This is consistent - we always compare to the same goal
-                new_gtr = self.gtr.encode_tensor(new_text).to(vae_dev)
-                new_sim = F.cosine_similarity(
-                    new_gtr.unsqueeze(0),
-                    fixed_target.unsqueeze(0)
-                ).item()
-
-                if verbose:
-                    print(f"    ZSInvert iter {iteration + 1}: sim {best_sim:.4f} → {new_sim:.4f}")
-
-                if new_sim > best_sim + self.threshold:
-                    best_sim = new_sim
-                    best_text = new_text
-                    metrics["iterations"] = iteration + 1
-                    patience_counter = 0  # Reset patience on improvement
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.patience:
-                        # Patience exhausted, stop
-                        if verbose:
-                            print(f"    ZSInvert: patience exhausted ({self.patience}), stopping")
-                        break
-
-        except Exception as e:
-            # Log error and return best result so far
-            import warnings
-            warnings.warn(
-                f"ZSInvert refinement failed at iteration {iteration}: {e}. "
-                f"Returning best result found before failure."
-            )
-            metrics["error"] = str(e)
-            metrics["iterations"] = iteration
-
-        metrics["final_sim"] = best_sim
-        metrics["improvement"] = best_sim - metrics["initial_sim"]
-
-        return best_text, z, metrics
-
 
 class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
@@ -631,30 +532,6 @@ class LIPOHyperbandInference:
             self.anchor_selector = create_pas_selector(config, self.device)
         else:
             self.anchor_selector = None
-
-        # Initialize ZSInvert refiner (only for 512_tokens Vec2Text model)
-        # ZSInvert is disabled for 32_tokens model as it's not beneficial
-        zsinvert_enabled = getattr(config, 'zsinvert_enabled', True)
-        vec2text_model = getattr(config, 'vec2text_model', '512_tokens')
-        self.use_zsinvert = zsinvert_enabled and vec2text_model == '512_tokens'
-
-        if zsinvert_enabled and not self.use_zsinvert:
-            print("  ZSInvert disabled: only supported with 512_tokens Vec2Text model")
-
-        if self.use_zsinvert:
-            self.zsinvert_refiner = ZSInvertRefiner(
-                vae_with_adapter=self.vae_with_adapter,
-                gtr_encoder=self.gtr,
-                inverter=self.inverter,
-                n_iterations=getattr(config, 'zsinvert_iterations', 3),
-                lr=getattr(config, 'zsinvert_lr', 0.1),
-                n_steps_per_iter=getattr(config, 'zsinvert_steps_per_iter', 50),
-                improvement_threshold=getattr(config, 'zsinvert_improvement_threshold', 0.01),
-                patience=getattr(config, 'zsinvert_patience', 5),
-                device=str(self.device),
-            )
-        else:
-            self.zsinvert_refiner = None
 
         # Cache global bounds (computed on first iteration)
         self._global_bounds: Optional[torch.Tensor] = None
@@ -1116,30 +993,6 @@ GP Status:
 
                     if verbose:
                         print(f"  Re-generated:\n{instruction}")
-
-            # ZSInvert refinement - runs EVERY iteration after Vec2Text
-            # Improves text-embedding alignment via gradient-based latent optimization
-            if self.use_zsinvert and self.zsinvert_refiner is not None:
-                instruction, z_refined, zsinvert_metrics = self.zsinvert_refiner.refine(
-                    initial_text=instruction,
-                    initial_z=z_opt,
-                    X_min=self.gp.X_min,
-                    X_max=self.gp.X_max,
-                    verbose=verbose,
-                )
-                # Update z_opt if refinement occurred
-                if zsinvert_metrics["iterations"] > 0:
-                    z_opt = z_refined
-                    # Re-decode to get updated embedding
-                    z_unnorm = z_opt * x_range + self.gp.X_min
-                    with torch.no_grad():
-                        z_decode = z_unnorm.to(self.vae_with_adapter.device)
-                        embedding = self.vae_with_adapter.decode(z_decode)
-
-                if verbose:
-                    print(f"  ZSInvert: {zsinvert_metrics['iterations']} iters, "
-                          f"sim: {zsinvert_metrics['initial_sim']:.4f} → {zsinvert_metrics['final_sim']:.4f} "
-                          f"(Δ={zsinvert_metrics['improvement']:+.4f})")
 
             # Re-encode for GP prediction
             # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data

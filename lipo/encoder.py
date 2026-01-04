@@ -90,8 +90,10 @@ class InstructionVAE(nn.Module):
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
     Architecture (default 32D latent):
-        Encoder: 768D → 384 → 192 → 2*32 (mu + log_var)
-        Decoder: 32D → 192 → 384 → 768D (L2 normalized)
+        Encoder: 768D → 384 → 192 → 96 → 2*32 (mu + log_var)
+        Decoder: 32D → 96 → 192 → 384 → 768D (L2 normalized)
+
+    Compression ratios per layer: 2× → 2× → 2× → 3× (gradual, max 3×)
 
     Loss:
         L = recon_loss + beta * KL(q(z|x) || N(0,1))
@@ -129,28 +131,34 @@ class InstructionVAE(nn.Module):
         # Using LayerNorm instead of BatchNorm for:
         # - Stability with batch_size=1
         # - Consistent behavior in train/eval modes
-        # Architecture: 768 → 384 → 192 → 2*latent_dim
-        # Layer before latent (192) is 6× larger than latent (32) for feature mixing
+        # Architecture: 768 → 384 → 192 → 96 → 2*latent_dim
+        # Gradual compression: 2× → 2× → 3× (max 3× per layer)
         # GELU activation for smoother gradients (used in transformers)
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 384),
+            nn.Linear(input_dim, 384),  # 768 → 384 (2×)
             nn.GELU(),
             nn.LayerNorm(384),
-            nn.Linear(384, 192),
+            nn.Linear(384, 192),  # 384 → 192 (2×)
             nn.GELU(),
             nn.LayerNorm(192),
-            nn.Linear(192, latent_dim * 2),  # mu + log_var
+            nn.Linear(192, 96),  # 192 → 96 (2×)
+            nn.GELU(),
+            nn.LayerNorm(96),
+            nn.Linear(96, latent_dim * 2),  # 96 → 32 (3×) mu + log_var
         )
 
         # Decoder: latent -> 768 (symmetric architecture)
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 192),
+            nn.Linear(latent_dim, 96),  # 32 → 96 (3×)
+            nn.GELU(),
+            nn.LayerNorm(96),
+            nn.Linear(96, 192),  # 96 → 192 (2×)
             nn.GELU(),
             nn.LayerNorm(192),
-            nn.Linear(192, 384),
+            nn.Linear(192, 384),  # 192 → 384 (2×)
             nn.GELU(),
             nn.LayerNorm(384),
-            nn.Linear(384, input_dim),
+            nn.Linear(384, input_dim),  # 384 → 768 (2×)
         )
 
         # Initialize weights for stable training
@@ -285,27 +293,26 @@ class InstructionVAE(nn.Module):
         # KL = -0.5 * sum(1 + log_var - mu^2 - var)
         kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1).mean()
 
+        # Total loss starts with recon + KL
+        total_loss = recon_loss + beta * kl_loss
+
         # Cycle consistency loss: z ≈ encode_mu(decode(z))
-        # This prevents "holes" in latent space where different z's decode to similar x
-        # but encode back to completely different z's
-        cycle_loss = torch.tensor(0.0, device=x.device)
+        # Only compute if gamma > 0 (skip expensive encode_mu call otherwise)
+        cycle_loss_val = 0.0
         cycle_cosine = 0.0
         if gamma > 0 and z is not None:
-            # Re-encode the reconstructed embedding
             z_recon = self.encode_mu(x_recon)
-            # Use cosine similarity for consistency with other losses
             z_cosine = F.cosine_similarity(z, z_recon, dim=-1)
             cycle_loss = (1 - z_cosine).mean()
+            cycle_loss_val = cycle_loss.item()
             cycle_cosine = z_cosine.mean().item()
-
-        # Total loss
-        total_loss = recon_loss + beta * kl_loss + gamma * cycle_loss
+            total_loss = total_loss + gamma * cycle_loss
 
         loss_dict = {
             "total": total_loss.item(),
             "recon": recon_loss.item(),
             "kl": kl_loss.item(),
-            "cycle": cycle_loss.item() if gamma > 0 else 0.0,
+            "cycle": cycle_loss_val,
             "cosine_mean": cosine_sim.mean().item(),
             "cycle_cosine": cycle_cosine,
         }
