@@ -22,6 +22,7 @@ from lipo.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
 from lipo.gp import GPWithEI
 from lipo.hyperband import LIPOHyperband
 from lipo.instruction import InstructionOnlyPrompt
+from lipo.quality_kpi import compute_vae_quality
 
 
 class APEGenerator:
@@ -637,12 +638,93 @@ class LIPOHyperbandTrainer:
         if verbose:
             print(f"  VAE training complete (epochs={epoch + 1}, final cosine={avg_cosine:.4f})")
 
-        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
+        # Compute and log VAE quality KPIs
+        vae_kpis = compute_vae_quality(self.vae, embeddings, device=self.device)
+        self.vae_quality_kpis = vae_kpis  # Store for later access
+
+        if verbose:
+            print(f"\n--- VAE Quality KPIs ---")
+            print(f"  Cosine Mean: {vae_kpis['cosine_mean']:.4f} (std: {vae_kpis['cosine_std']:.4f})")
+            print(f"  Percentile 10: {vae_kpis['percentile_10']:.4f} (target: >0.90)")
+            print(f"  Below 90%: {vae_kpis['below_90_count']} samples ({vae_kpis['below_90_pct']:.1f}%)")
+            print(f"  Quality Tier: {vae_kpis['quality_tier']}")
+
+            if vae_kpis['percentile_10'] < 0.90:
+                print(f"  WARNING: VAE Q10 below threshold! Consider increasing beta or epochs.")
+
+        # Create VAEWithAdapter (frozen VAE wrapper, no adapter)
         self.vae_with_adapter = VAEWithAdapter(
-            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+            self.vae, self.config.latent_dim
         ).to(self.device)
 
+        # Run round-trip validation if configured
+        if hasattr(self.config, 'roundtrip_validation_threshold'):
+            self._validate_vae_roundtrip(verbose=verbose)
+
         return self.vae
+
+    def _validate_vae_roundtrip(self, verbose: bool = True) -> bool:
+        """Validate VAE + Vec2Text round-trip quality.
+
+        Tests that the pipeline: instruction → GTR → VAE → decode → Vec2Text
+        produces embeddings with high cosine similarity to originals.
+
+        If similarity is below threshold, warns that optimization may not work.
+
+        Returns:
+            True if quality is acceptable (mean_sim >= threshold)
+        """
+        from lipo.inference import validate_roundtrip_quality, Vec2TextInverter
+
+        threshold = getattr(self.config, 'roundtrip_validation_threshold', 0.90)
+        n_samples = getattr(self.config, 'roundtrip_validation_samples', 20)
+
+        if verbose:
+            print("\n--- Round-Trip Validation ---")
+
+        # Get test instructions from grid data (task-relevant)
+        if hasattr(self, 'grid_data') and self.grid_data:
+            test_instructions = [
+                d["instruction_text"]
+                for d in self.grid_data[:n_samples]
+            ]
+        elif self.instructions:
+            test_instructions = self.instructions[:n_samples]
+        else:
+            if verbose:
+                print("  Skipping: no instructions loaded for validation")
+            return True
+
+        try:
+            inverter = Vec2TextInverter(
+                device=str(self.device),
+                model_type=getattr(self.config, 'vec2text_model', "gtr-base"),
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  Skipping: Vec2Text init failed: {e}")
+            return True
+
+        results = validate_roundtrip_quality(
+            vae=self.vae,
+            gtr=self.gtr,
+            inverter=inverter,
+            instructions=test_instructions,
+            n_samples=len(test_instructions),
+            verbose=verbose,
+        )
+
+        if results["mean_sim"] < threshold:
+            print(f"WARNING: VAE round-trip quality below threshold!")
+            print(f"  Mean similarity: {results['mean_sim']:.4f} < {threshold}")
+            print(f"  Poor samples: {results['poor_count']}/{results['n_samples']}")
+            print(f"  Optimization may not improve results.")
+            return False
+
+        if verbose:
+            print(f"  Round-trip validation PASSED (mean_sim={results['mean_sim']:.4f} >= {threshold})")
+
+        return True
 
     def run_hyperband(
         self,
@@ -781,9 +863,9 @@ class LIPOHyperbandTrainer:
         ).to(self.device)
         self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
-        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
+        # Create VAEWithAdapter (frozen VAE wrapper, no adapter)
         self.vae_with_adapter = VAEWithAdapter(
-            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+            self.vae, self.config.latent_dim
         ).to(self.device)
 
         print(f"Models loaded from {save_dir}")
@@ -1300,13 +1382,12 @@ class LIPOHyperbandTrainer:
             print(f"  Error range: [{error_rates.min():.4f}, {error_rates.max():.4f}]")
             print(f"  Fidelity range: [{fidelities.min():.0f}, {fidelities.max():.0f}]")
 
-        # Create and train GP
+        # Create and train GP (works directly on 32D VAE latent, no adapter)
         self.gp = GPWithEI(
             device=str(self.device),
-            latent_dim=self.config.gp_latent_dim,  # Adapter output dim (10D)
         )
 
-        # Set VAEWithAdapter (frozen VAE + trainable adapter)
+        # Set VAEWithAdapter (frozen VAE wrapper for encoding)
         self.gp.vae_with_adapter = self.vae_with_adapter
 
         # Set training data with fidelities for heteroscedastic noise

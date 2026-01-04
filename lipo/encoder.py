@@ -89,12 +89,13 @@ class InstructionVAE(nn.Module):
     Provides smooth latent space via KL regularization to N(0,1).
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
-    Architecture:
+    Architecture (default 32D latent):
         Encoder: 768D → 384 → 192 → 2*32 (mu + log_var)
         Decoder: 32D → 192 → 384 → 768D (L2 normalized)
 
     Loss:
-        L = recon_loss + beta * KL(q(z|x) || N(0,1)) + gamma * cycle_loss
+        L = recon_loss + beta * KL(q(z|x) || N(0,1))
+        (cycle_loss disabled by default with gamma=0)
 
     The KL regularization ensures:
         - Smooth latent space (gradual transitions)
@@ -107,16 +108,16 @@ class InstructionVAE(nn.Module):
         self,
         input_dim: int = 768,
         latent_dim: int = 32,
-        beta: float = 0.001,
-        gamma: float = 10.0,
+        beta: float = 0.01,
+        gamma: float = 0.0,
     ):
         """Initialize VAE.
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Latent space dimension (32 by default, matches config.latent_dim)
-            beta: KL regularization weight (low for 32D to preserve details)
-            gamma: Cycle consistency weight (ensures z ≈ encode(decode(z)))
+            latent_dim: Latent space dimension (32 by default, 24x compression)
+            beta: KL regularization weight (0.01 for tight latent space)
+            gamma: Cycle consistency weight (disabled by default)
         """
         super().__init__()
         self.input_dim = input_dim
@@ -129,7 +130,7 @@ class InstructionVAE(nn.Module):
         # - Stability with batch_size=1
         # - Consistent behavior in train/eval modes
         # Architecture: 768 → 384 → 192 → 2*latent_dim
-        # Layer before latent (192) is 3× larger than latent (64) for feature mixing
+        # Layer before latent (192) is 6× larger than latent (32) for feature mixing
         # GELU activation for smoother gradients (used in transformers)
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 384),
@@ -358,20 +359,28 @@ class InstructionVAE(nn.Module):
 
 
 class VAEWithAdapter(nn.Module):
-    """Wrapper combining frozen VAE encoder with trainable adapter.
+    """Wrapper for frozen VAE encoder (no adapter compression).
 
     Architecture for optimization:
-        z (32D) → Adapter → z_gp (10D) → GP → qLogEI
+        x (768D) → VAE encoder → z (32D) → GP → qLogEI
 
-    The adapter compresses VAE latent for efficient GP modeling while
-    optimization happens in the full 32D space with gradients flowing
-    through the adapter.
+    GP operates directly on 32D VAE latent space - no adapter bottleneck.
+    This simplifies the architecture and avoids overfitting the adapter
+    with limited training data.
 
     For decoding after optimization:
         z (32D) → VAE decoder → embedding (768D)
+
+    Note: Named "VAEWithAdapter" for API compatibility but adapter is removed.
     """
 
-    def __init__(self, vae: nn.Module, vae_latent_dim: int = 32, gp_latent_dim: int = 10):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 32):
+        """Initialize frozen VAE wrapper.
+
+        Args:
+            vae: Trained InstructionVAE to wrap (will be frozen)
+            vae_latent_dim: VAE latent dimension (32 by default, matches config.latent_dim)
+        """
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -380,45 +389,46 @@ class VAEWithAdapter(nn.Module):
             param.requires_grad = False
 
         self.vae_latent_dim = vae_latent_dim
-        self.gp_latent_dim = gp_latent_dim
-
-        # Trainable adapter: compresses VAE latents (32D) to GP latents (10D)
-        # Intermediate dimension scales with input: ~half of vae_latent_dim
-        intermediate_dim = max(vae_latent_dim // 2, gp_latent_dim * 2)
-        self.adapter = nn.Sequential(
-            nn.Linear(vae_latent_dim, intermediate_dim),  # 32 → 16
-            nn.ReLU(),
-            nn.LayerNorm(intermediate_dim),
-            nn.Linear(intermediate_dim, gp_latent_dim),  # 16 → 10
-        )
+        # No adapter - GP works directly on 32D VAE latent
 
     def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
         """Encode embedding to VAE latent (deterministic mu).
 
-        Use this for getting latent for optimization bounds.
+        Args:
+            x: Input embedding (batch, 768) or (768,)
+
+        Returns:
+            VAE latent (batch, 32) or (32,)
         """
         return self._vae.encode_mu(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode embedding to 10D GP latent (through adapter).
+        """Encode embedding to VAE latent for GP.
 
-        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
+        Pipeline: x (768D) → VAE encoder → z (32D)
 
-        This is used for GP training.
+        No adapter compression - GP works on full 32D latent.
+
+        Args:
+            x: Input embedding (batch, 768)
+
+        Returns:
+            VAE latent (batch, 32) for GP training
         """
-        z = self._vae.encode_mu(x)
-        return self.adapter(z)
+        return self._vae.encode_mu(x)
 
     def adapt(self, z: torch.Tensor) -> torch.Tensor:
-        """Apply adapter to VAE latent.
+        """Identity function (no adapter).
+
+        For API compatibility. Returns input unchanged since there's no adapter.
 
         Args:
             z: VAE latent tensor of shape (..., 32)
 
         Returns:
-            GP latent tensor of shape (..., 10)
+            Same tensor unchanged (..., 32)
         """
-        return self.adapter(z)
+        return z
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """Decode VAE latent to 768D embedding.
@@ -430,3 +440,29 @@ class VAEWithAdapter(nn.Module):
             Embedding tensor of shape (..., 768)
         """
         return self._vae.decode(z)
+
+    @property
+    def device(self) -> torch.device:
+        """Get device where the underlying VAE is located."""
+        return next(self._vae.parameters()).device
+
+    def to(self, device):
+        """Move to device, including the internal VAE.
+
+        Overrides nn.Module.to() because _vae is stored via object.__setattr__
+        to avoid double registration, so it won't be moved automatically.
+        """
+        # Move internal VAE first
+        self._vae.to(device)
+        # Then call parent to() for any other registered modules
+        return super().to(device)
+
+    def cpu(self):
+        """Move to CPU, including the internal VAE."""
+        return self.to(torch.device('cpu'))
+
+    def cuda(self, device=None):
+        """Move to CUDA, including the internal VAE."""
+        if device is None:
+            device = torch.device('cuda')
+        return self.to(device)

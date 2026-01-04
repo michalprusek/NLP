@@ -265,8 +265,8 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.001,
-        help="VAE KL regularization weight (low for 32D to preserve details)"
+        "--vae-beta", type=float, default=0.01,
+        help="VAE KL regularization weight (higher for 32D to ensure tight latent space)"
     )
     parser.add_argument(
         "--vae-epochs", type=int, default=20000,
@@ -277,8 +277,8 @@ def main():
         help="VAE KL annealing epochs"
     )
     parser.add_argument(
-        "--vae-gamma", type=float, default=10.0,
-        help="VAE cycle consistency weight (ensures z ≈ encode(decode(z)))"
+        "--vae-gamma", type=float, default=0.0,
+        help="VAE cycle consistency weight (disabled, compensated by higher beta)"
     )
 
     # Hyperband
@@ -822,6 +822,7 @@ def _save_results(
 
             # VAE hyperparameters
             "vae_beta": args.vae_beta,
+            "vae_gamma": args.vae_gamma,
             "vae_epochs": args.vae_epochs,
             "vae_annealing": args.vae_annealing,
             "vae_latent_dim": trainer.config.latent_dim,
@@ -895,6 +896,17 @@ def _save_results(
                 for r in inference.iteration_history
             ],
         }
+
+        # Add quality KPIs from inference
+        inference_kpis = inference.compute_inference_kpis()
+        result["quality_kpis"] = {
+            "gp_spearman": inference_kpis["gp_quality"],
+            "system_gap": inference_kpis["system_gap"],
+        }
+
+        # Add VAE quality KPIs if available from trainer
+        if hasattr(trainer, 'vae_quality_kpis'):
+            result["quality_kpis"]["vae_quality"] = trainer.vae_quality_kpis
 
     with open(result_path, "w") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)

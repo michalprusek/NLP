@@ -22,6 +22,7 @@ from lipo.turbo import (
     create_turbo_manager,
     create_pas_selector,
 )
+from lipo.quality_kpi import compute_gp_spearman, compute_system_gap, format_kpi_report
 
 
 @dataclass
@@ -52,9 +53,9 @@ class IterationRecord:
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
     # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
-    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (64D)
+    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (32D)
     z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
-    z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
+    z_opt_z_real_gp_cosine: float = 0.0  # Same as z_opt_z_real_cosine (no adapter, GP on 32D)
     predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
     # TuRBO trust region state
     trust_region_length: float = 0.0  # Current trust region side length
@@ -287,14 +288,16 @@ def validate_roundtrip_quality(
     samples = random.sample(instructions, n)
 
     vae.eval()
+    vae_dev = next(vae.parameters()).device
     sims = []
     sample_results = []
 
     for i, instruction in enumerate(samples):
-        # Full pipeline
+        # Full pipeline - ensure device consistency
         emb_original = gtr.encode_tensor(instruction)
         with torch.no_grad():
-            mu, _ = vae.encode(emb_original)
+            emb_for_vae = emb_original.to(vae_dev)
+            mu, _ = vae.encode(emb_for_vae)
             decoded = vae.decode(mu)
 
         reconstructed = inverter.invert(decoded)
@@ -450,12 +453,13 @@ class ZSInvertRefiner:
         try:
             # Compute FIXED target = original decoder output
             # This is what we're trying to match with GTR(text)
+            vae_dev = self.vae.device
             with torch.no_grad():
                 z_unnorm = initial_z.to(self.device) * x_range + X_min_dev
-                fixed_target = self.vae.decode(z_unnorm)
+                fixed_target = self.vae.decode(z_unnorm.to(vae_dev))
 
             # Compute initial similarity: cosine(GTR(initial_text), fixed_target)
-            initial_gtr = self.gtr.encode_tensor(initial_text)
+            initial_gtr = self.gtr.encode_tensor(initial_text).to(vae_dev)
             initial_sim = F.cosine_similarity(
                 initial_gtr.unsqueeze(0),
                 fixed_target.unsqueeze(0)
@@ -469,7 +473,7 @@ class ZSInvertRefiner:
             for iteration in range(self.n_iterations):
                 # 1. Get current best text embedding as optimization target
                 # (we optimize z so decode(z) → GTR(best_text))
-                current_target = self.gtr.encode_tensor(best_text)
+                current_target = self.gtr.encode_tensor(best_text).to(vae_dev)
 
                 # 2. Gradient-based refinement of z toward current_target
                 z_opt = z.clone().requires_grad_(True)
@@ -478,7 +482,7 @@ class ZSInvertRefiner:
                 for step in range(self.n_steps):
                     optimizer.zero_grad()
                     z_unnorm = z_opt * x_range + X_min_dev
-                    decoded = self.vae.decode(z_unnorm)
+                    decoded = self.vae.decode(z_unnorm.to(vae_dev))
                     loss = 1 - F.cosine_similarity(
                         decoded.unsqueeze(0),
                         current_target.unsqueeze(0)
@@ -494,14 +498,14 @@ class ZSInvertRefiner:
                 z = z_opt.detach()
                 with torch.no_grad():
                     z_unnorm = z * x_range + X_min_dev
-                    new_emb = self.vae.decode(z_unnorm)
+                    new_emb = self.vae.decode(z_unnorm.to(vae_dev))
 
                 new_text = self.inverter.invert(new_emb.clone())
 
                 # 4. Evaluate improvement against FIXED target
                 # Measure: cosine(GTR(new_text), fixed_target)
                 # This is consistent - we always compare to the same goal
-                new_gtr = self.gtr.encode_tensor(new_text)
+                new_gtr = self.gtr.encode_tensor(new_text).to(vae_dev)
                 new_sim = F.cosine_similarity(
                     new_gtr.unsqueeze(0),
                     fixed_target.unsqueeze(0)
@@ -543,13 +547,14 @@ class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 64D VAE latent space using LogEI acquisition
-           (GP uses adapter: 64D → 10D for kernel computation)
+        1. Optimize in 32D VAE latent space using LogEI acquisition
+           (GP operates directly on 32D latent with ARD kernel)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
 
     Uses 512_tokens Vec2Text model for longer instruction generation.
+    Includes KPI tracking for GP quality and optimization gap monitoring.
     """
 
     def __init__(
@@ -578,7 +583,7 @@ class LIPOHyperbandInference:
         self.gp = gp
         self.vae = vae
         self.config = config
-        # VAEWithAdapter for decoding (64D -> 768D)
+        # VAEWithAdapter for decoding (32D -> 768D)
         self.vae_with_adapter = gp.vae_with_adapter
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.evaluator = evaluator
@@ -599,6 +604,11 @@ class LIPOHyperbandInference:
         self.best_instruction: Optional[str] = None
         self._consecutive_retrain_failures: int = 0  # Track consecutive GP retrain failures
         self._total_retrain_failures: int = 0  # Track total GP retrain failures (never resets)
+
+        # KPI tracking lists for periodic quality reporting
+        self._predicted_errors: List[float] = []
+        self._actual_errors: List[float] = []
+        self._z_gaps: List[float] = []
 
         # Initialize best from Hyperband results or GP
         if initial_best_instruction is not None and initial_best_error is not None:
@@ -622,8 +632,15 @@ class LIPOHyperbandInference:
         else:
             self.anchor_selector = None
 
-        # Initialize ZSInvert refiner (runs after Vec2Text for iterative refinement)
-        self.use_zsinvert = getattr(config, 'zsinvert_enabled', True)
+        # Initialize ZSInvert refiner (only for 512_tokens Vec2Text model)
+        # ZSInvert is disabled for 32_tokens model as it's not beneficial
+        zsinvert_enabled = getattr(config, 'zsinvert_enabled', True)
+        vec2text_model = getattr(config, 'vec2text_model', '512_tokens')
+        self.use_zsinvert = zsinvert_enabled and vec2text_model == '512_tokens'
+
+        if zsinvert_enabled and not self.use_zsinvert:
+            print("  ZSInvert disabled: only supported with 512_tokens Vec2Text model")
+
         if self.use_zsinvert:
             self.zsinvert_refiner = ZSInvertRefiner(
                 vae_with_adapter=self.vae_with_adapter,
@@ -671,13 +688,11 @@ class LIPOHyperbandInference:
     ) -> Tuple[torch.Tensor, float]:
         """Optimize VAE latent using BoTorch qLogExpectedImprovement.
 
-        Uses multi-start L-BFGS-B with proper gradient flow through:
-            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
+        Uses multi-start L-BFGS-B with proper gradient flow:
+            z (32D VAE latent) -> GP posterior -> qLogEI
 
-        This is the recommended optimization method as it:
-        1. Optimizes in 64D VAE latent space
-        2. Uses adapter to compress to 10D for efficient GP
-        3. Gradients flow through adapter for latent optimization
+        GP operates directly on 32D VAE latent (no adapter compression).
+        ARD lengthscales allow the kernel to learn which dimensions matter.
 
         Args:
             num_restarts: Number of L-BFGS-B restarts (default: 64)
@@ -694,56 +709,28 @@ class LIPOHyperbandInference:
         from lipo.botorch_acq import (
             LatentSpaceAcquisition,
             get_latent_bounds,
-            get_anchor_constrained_bounds,
         )
 
         if verbose:
             print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
 
-        # Get latent bounds (use provided bounds or compute)
+        # Get latent bounds (use provided bounds or compute global bounds)
         if bounds is None:
-            use_anchor_bounds = getattr(self.config, 'anchor_bounds_enabled', False)
+            bounds = get_latent_bounds(
+                encoder=self.gp.vae_with_adapter,
+                X_train=self.gp.X_train,
+                X_min=self.gp.X_min,
+                X_max=self.gp.X_max,
+                margin=self.config.latent_margin,
+            )
 
-            if use_anchor_bounds:
-                # Anchor-constrained bounds: tighter region around best points
-                bounds = get_anchor_constrained_bounds(
-                    X_train=self.gp.X_train,
-                    y_train=self.gp.y_train,
-                    X_min=self.gp.X_min,
-                    X_max=self.gp.X_max,
-                    top_k=getattr(self.config, 'anchor_top_k', 15),
-                    margin=getattr(self.config, 'anchor_margin', 0.4),
-                )
-            else:
-                # Standard global bounds with margin
-                bounds = get_latent_bounds(
-                    encoder=self.gp.vae_with_adapter,
-                    X_train=self.gp.X_train,
-                    X_min=self.gp.X_min,
-                    X_max=self.gp.X_max,
-                    margin=self.config.latent_margin,
-                )
-
-        # Prepare normalized training data for distance penalty
-        use_distance_penalty = getattr(self.config, 'distance_penalty_enabled', True)
-        if use_distance_penalty:
-            # Normalize training data to match optimization space
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            X_train_norm = (self.gp.X_train - self.gp.X_min) / denom
-        else:
-            X_train_norm = None
-
-        # Create acquisition optimizer with distance penalty
-        # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
-        # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
+        # Create acquisition optimizer
+        # Optimization path: z (32D) → GP → kernel (32D ARD) → qLogEI
+        # TuRBO trust region constrains search (bounds parameter)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
             device=self.device,
-            X_train=X_train_norm,
-            distance_weight=getattr(self.config, 'distance_weight', 2.0),
-            distance_threshold=getattr(self.config, 'distance_threshold', 0.3),
         )
 
         # best_f is the best observed GP target value (-min_error).
@@ -791,12 +778,16 @@ class LIPOHyperbandInference:
         # Get target embedding from text
         target_emb = self.gtr.encode_tensor(text)
 
-        # Warm start: encode target embedding to VAE latent (64D)
+        # Warm start: encode target embedding to VAE latent (32D)
         encoder = self.gp.vae_with_adapter
         encoder.eval()
 
+        # Ensure target_emb is on VAE device for gradient computation
+        vae_device = self.vae_with_adapter.device
+        target_emb = target_emb.to(vae_device)
+
         with torch.no_grad():
-            # Encode 768D embedding to 64D VAE latent (unnormalized)
+            # Encode 768D embedding to 32D VAE latent (unnormalized)
             z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
 
             # Normalize to GP input space
@@ -819,9 +810,9 @@ class LIPOHyperbandInference:
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Denormalize z to VAE latent space (64D), then decode to 768D embedding
+            # Denormalize z to VAE latent space (32D), then decode to 768D embedding
             z_vae = z * x_range + self.gp.X_min
-            decoded = self.vae_with_adapter.decode(z_vae)
+            decoded = self.vae_with_adapter.decode(z_vae.to(self.vae_with_adapter.device))
 
             # Cosine loss to target
             loss = 1 - F.cosine_similarity(
@@ -847,8 +838,9 @@ class LIPOHyperbandInference:
             self.vae_with_adapter.eval()
             z_vae_original = z_original * x_range + self.gp.X_min
             z_vae_inv = z_inv * x_range + self.gp.X_min
-            emb_original = self.vae_with_adapter.decode(z_vae_original)
-            emb_inv = self.vae_with_adapter.decode(z_vae_inv)
+            vae_dev = self.vae_with_adapter.device
+            emb_original = self.vae_with_adapter.decode(z_vae_original.to(vae_dev))
+            emb_inv = self.vae_with_adapter.decode(z_vae_inv.to(vae_dev))
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
@@ -915,6 +907,26 @@ GENERATION QUALITY:
 GP Status:
   Training Samples:   {record.gp_samples}
 ═══════════════════════════════════════════════════════════════""")
+
+    def compute_inference_kpis(self) -> dict:
+        """Compute GP Spearman and System Gap KPIs from tracked data.
+
+        Returns:
+            Dictionary with:
+            - gp_quality: GP prediction quality metrics
+            - system_gap: Optimization gap metrics
+        """
+        gp_kpi = compute_gp_spearman(self._predicted_errors, self._actual_errors)
+        gap_kpi = compute_system_gap(self._z_gaps)
+        return {"gp_quality": gp_kpi, "system_gap": gap_kpi}
+
+    def _log_kpi_report(self, iteration: int) -> None:
+        """Log periodic KPI report.
+
+        Called every 10 iterations to monitor optimization quality.
+        """
+        kpis = self.compute_inference_kpis()
+        print(f"\n{format_kpi_report(kpis, iteration)}\n")
 
     def run_iteration(
         self,
@@ -1008,8 +1020,7 @@ GP Status:
                 anchor_idx = best_idx
 
             # Get ARD lengthscales from GP kernel for LOL-BO style scaling
-            # Note: lengthscales are in 10D adapter space, bounds are in 64D VAE space
-            # get_ard_bounds() handles dimension mismatch by falling back to uniform scaling
+            # Lengthscales are in 32D VAE space (no adapter) - each dimension gets its own lengthscale
             lengthscales = None
             try:
                 if hasattr(self.gp.gp_model, 'covar_module'):
@@ -1057,9 +1068,11 @@ GP Status:
             # Save original z_opt for optimization gap measurement
             z_opt_original = z_opt.clone()
 
+            # Decode to embedding
             self.vae_with_adapter.eval()
             with torch.no_grad():
-                embedding = self.vae_with_adapter.decode(z_unnorm)
+                z_decode = z_unnorm.to(self.vae_with_adapter.device)
+                embedding = self.vae_with_adapter.decode(z_decode)
 
             # Invert to text
             instruction = self.inverter.invert(embedding.clone())
@@ -1096,7 +1109,8 @@ GP Status:
                     z_opt = inv_result.z_inv
                     z_unnorm = z_opt * x_range + self.gp.X_min
                     with torch.no_grad():
-                        embedding = self.vae_with_adapter.decode(z_unnorm)
+                        z_decode = z_unnorm.to(self.vae_with_adapter.device)
+                        embedding = self.vae_with_adapter.decode(z_decode)
                     instruction = self.inverter.invert(embedding.clone())
                     inv_iters += 1
 
@@ -1119,7 +1133,8 @@ GP Status:
                     # Re-decode to get updated embedding
                     z_unnorm = z_opt * x_range + self.gp.X_min
                     with torch.no_grad():
-                        embedding = self.vae_with_adapter.decode(z_unnorm)
+                        z_decode = z_unnorm.to(self.vae_with_adapter.device)
+                        embedding = self.vae_with_adapter.decode(z_decode)
 
                 if verbose:
                     print(f"  ZSInvert: {zsinvert_metrics['iterations']} iters, "
@@ -1166,17 +1181,14 @@ GP Status:
             denom[denom == 0] = 1.0
             z_real_norm = (z_real - self.gp.X_min) / denom
 
-            # Gap metrics in VAE latent space (64D)
+            # Gap metrics in VAE latent space (32D) - this is also GP space (no adapter)
             z_opt_z_real_cosine = F.cosine_similarity(
                 z_opt_original.unsqueeze(0), z_real_norm.unsqueeze(0)
             ).item()
             z_opt_z_real_euclidean = torch.dist(z_opt_original, z_real_norm).item()
 
-            # Gap metrics in GP adapter space (10D)
-            z_opt_unnorm = z_opt_original * x_range + self.gp.X_min
-            z_opt_gp = self.vae_with_adapter.adapter(z_opt_unnorm.unsqueeze(0))
-            z_real_gp = self.vae_with_adapter.adapter(z_real.unsqueeze(0))
-            z_opt_z_real_gp_cosine = F.cosine_similarity(z_opt_gp, z_real_gp).item()
+            # GP space is now same as VAE latent space (no adapter compression)
+            z_opt_z_real_gp_cosine = z_opt_z_real_cosine  # Same metric, no adapter
 
             # GP prediction at z_real (actual text) vs at z_opt (dream)
             # This shows if GP was "fooled" by holes in latent space
@@ -1284,9 +1296,18 @@ GP Status:
 
         self.iteration_history.append(record)
 
+        # Track KPI data
+        self._predicted_errors.append(pred_error)
+        self._actual_errors.append(actual_error)
+        self._z_gaps.append(z_opt_z_real_euclidean)
+
         # Print consolidated iteration summary
         if verbose:
             self._log_iteration_summary(record, pred_std=pred_std)
+
+        # Periodic KPI report every 10 iterations
+        if iteration % 10 == 0 and iteration > 0:
+            self._log_kpi_report(iteration)
 
         return record
 
@@ -1366,9 +1387,12 @@ GP Status:
         emb_original = self.gtr.encode_tensor(instruction)
 
         # VAE encode -> decode (full round-trip through latent space)
+        # Ensure device consistency for cross-device scenarios
         self.vae_with_adapter.eval()
+        vae_dev = self.vae_with_adapter.device
         with torch.no_grad():
-            z = self.vae_with_adapter.encode_vae(emb_original.unsqueeze(0))
+            emb_for_vae = emb_original.to(vae_dev)
+            z = self.vae_with_adapter.encode_vae(emb_for_vae.unsqueeze(0))
             emb_decoded = self.vae_with_adapter.decode(z.squeeze(0))
 
         # Vec2Text inversion (embedding -> text)

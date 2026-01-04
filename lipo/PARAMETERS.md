@@ -1,0 +1,476 @@
+# LIPO Parameters Reference
+
+Complete reference for all configurable hyperparameters in the LIPO (Latent Instruction Prompt Optimization) pipeline.
+
+**Single Source of Truth**: All parameters are defined in `config.py` with CLI overrides available in `run.py`.
+
+---
+
+## Table of Contents
+
+1. [APE Generation](#1-ape-generation)
+2. [VAE Training](#2-vae-training)
+3. [Latent Dimensions](#3-latent-dimensions)
+4. [Round-Trip Validation](#4-round-trip-validation)
+5. [Hyperband Multi-Fidelity](#5-hyperband-multi-fidelity)
+6. [GP Training](#6-gp-training)
+7. [GP Retrain During Inference](#7-gp-retrain-during-inference)
+8. [Inference / BoTorch Optimization](#8-inference--botorch-optimization)
+9. [Vec2Text Settings](#9-vec2text-settings)
+10. [TuRBO Trust Region](#10-turbo-trust-region)
+11. [PAS (Potential-Aware Anchor Selection)](#11-pas-potential-aware-anchor-selection)
+12. [Inversion Optimization](#12-inversion-optimization)
+13. [ZSInvert Refinement](#13-zsinvert-refinement)
+14. [Device & Paths](#14-device--paths)
+15. [CLI-Only Arguments](#15-cli-only-arguments)
+16. [Architecture Details](#architecture-details)
+17. [Critical Thresholds Summary](#critical-thresholds-summary)
+
+---
+
+## 1. APE Generation
+
+Automatic Prompt Enumeration (APE) generates diverse instruction candidates for VAE training.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `ape_num_instructions` | 2000 | int | `--ape-instructions` | Number of instructions to generate |
+| `ape_model` | "Qwen/Qwen2.5-7B-Instruct" | str | `--ape-model` | LLM model for APE generation |
+| `ape_backend` | "vllm" | str | - | Backend for APE (vllm/openai/deepinfra) |
+| `ape_cache_path` | "lipo/data/ape_instructions.json" | str | `--ape-cache` | Cache path for generated instructions |
+| `ape_batch_size` | 10 | int | - | Batch size for LLM generation |
+| `ape_max_tokens` | 100 | int | - | Max tokens per generated instruction |
+| `ape_max_length` | 500 | int | - | Max character length for valid instructions |
+
+**Purpose**: APE creates a diverse pool of instruction candidates using 8 different style templates (minimalist, direct command, methodical, chain-of-thought, socratic, formal academic, conversational, structured). This diversity ensures the VAE learns a smooth latent space covering different instruction styles.
+
+**Impact**: More instructions (higher `ape_num_instructions`) lead to better VAE generalization but longer training time. The style templates ensure latent space coverage of different prompting approaches.
+
+---
+
+## 2. VAE Training
+
+Variational Autoencoder training parameters for learning the instruction latent space.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `vae_beta` | 0.01 | float | `--vae-beta` | KL regularization weight |
+| `vae_gamma` | 0.0 | float | `--vae-gamma` | Cycle consistency weight (disabled) |
+| `vae_epochs` | 20000 | int | `--vae-epochs` | Maximum training epochs |
+| `vae_annealing_epochs` | 500 | int | `--vae-annealing` | KL annealing warmup period |
+| `vae_patience` | 500 | int | - | Early stopping patience (after annealing) |
+| `vae_lr` | 0.0006 | float | - | AdamW learning rate |
+| `vae_batch_size` | 64 | int | - | Training batch size |
+| `vae_grad_clip` | 1.0 | float | - | Gradient clipping threshold |
+| `vae_eta_min` | 1e-4 | float | - | Minimum LR for cosine scheduler |
+
+**Purpose**: The VAE compresses 768D GTR embeddings to a 32D latent space while maintaining reconstruction quality. The beta parameter controls the trade-off between reconstruction fidelity and latent space regularity.
+
+**Impact**:
+- **Higher `vae_beta`** (e.g., 0.1): Tighter, more regular latent space but potentially worse reconstruction. Better for interpolation and optimization.
+- **Lower `vae_beta`** (e.g., 0.001): Better reconstruction but more irregular latent space. May cause optimization difficulties.
+- **KL Annealing**: Linear warmup from 0 to `vae_beta` over `vae_annealing_epochs` prevents posterior collapse. Early stopping resets after annealing completes.
+
+**Loss Function**:
+```
+total_loss = cosine_recon_loss + beta * kl_loss + gamma * cycle_loss
+```
+
+---
+
+## 3. Latent Dimensions
+
+Core dimensionality settings for the embedding and latent spaces.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `embedding_dim` | 768 | int | GTR-T5-Base embedding dimension (fixed) |
+| `latent_dim` | 32 | int | VAE latent space dimension |
+
+**Purpose**: Defines the compression ratio of the VAE. The 768D GTR embeddings are compressed to 32D latent vectors (24x compression).
+
+**Impact**:
+- **Higher `latent_dim`** (e.g., 64): More expressive but harder to optimize with GP, risk of overfitting
+- **Lower `latent_dim`** (e.g., 16): Easier optimization but may lose instruction nuances
+
+**Architecture Flow**:
+```
+Encoder: 768D → 384 → 192 → 2×32 (mu + log_var)
+Decoder: 32D → 192 → 384 → 768D (L2 normalized)
+```
+
+---
+
+## 4. Round-Trip Validation
+
+Quality checks for VAE → Vec2Text → GTR round-trip reconstruction.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `roundtrip_validation_threshold` | 0.90 | float | Minimum acceptable cosine similarity |
+| `roundtrip_validation_samples` | 20 | int | Number of samples for validation |
+
+**Purpose**: Validates that the full pipeline (VAE decode → Vec2Text invert → GTR encode) maintains semantic fidelity. Run after VAE training to ensure the system can generate meaningful instructions.
+
+**Impact**: Lower threshold allows more diverse but potentially lower-quality outputs. Higher threshold ensures quality but may reject valid variations.
+
+---
+
+## 5. Hyperband Multi-Fidelity
+
+Multi-fidelity Bayesian optimization using Hyperband scheduling.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `bmin` | 10 | int | `--bmin` | Minimum fidelity (validation samples) |
+| `eta` | 2.0 | float | `--eta` | Downsampling/acceleration rate |
+| `random_interleaving_prob` | 0.1 | float | - | Probability of random selection in BO |
+| `min_fidelity_pct` | 0.75 | float | - | Min fidelity percentage for GP training |
+
+**Purpose**: Hyperband efficiently allocates evaluation budget across instruction candidates. Low-fidelity evaluations (few samples) quickly eliminate bad candidates; promising ones get full evaluation.
+
+**Impact**:
+- **Higher `eta`** (e.g., 3.0): More aggressive elimination, faster but may miss good candidates
+- **Lower `eta`** (e.g., 1.5): More conservative, thorough but slower
+- **`random_interleaving_prob`**: Controls exploration vs exploitation in BO proposals
+- **`min_fidelity_pct`**: GP only trains on high-fidelity observations (top 25% by default)
+
+**Schedule Computation**:
+```
+smax = floor(log_eta(nvalid/bmin))
+B = (smax + 1) * nvalid  # Total budget
+n = ceil((B/nvalid) * (eta^s) / (s+1))  # Prompts per bracket
+b = nvalid * (eta^(-s))  # Initial fidelity per bracket
+```
+
+---
+
+## 6. GP Training
+
+Gaussian Process model training parameters for initial fitting.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `gp_epochs` | 10000 | int | `--gp-epochs` | Maximum training epochs |
+| `gp_lr` | 0.01 | float | `--gp-lr` | AdamW learning rate |
+| `gp_patience` | 100 | int | `--gp-patience` | Early stopping patience |
+
+**Purpose**: Trains the GP surrogate model on evaluated instructions. The GP models the relationship between 32D VAE latents and instruction accuracy.
+
+**Impact**:
+- **Higher `gp_epochs`**: Better convergence but longer training
+- **Lower `gp_lr`**: More stable but slower convergence
+- Learning rate is automatically scaled by 0.25x for 32D latent (line 446 in gp.py)
+
+**GP Configuration**:
+- Kernel: Matern 5/2 with ARD (32 lengthscales)
+- Mean: ZeroMean
+- Priors: GammaPrior(3.0, 6.0) for lengthscales, GammaPrior(2.0, 0.15) for outputscale
+- Noise: FixedNoiseGaussianLikelihood with Bernoulli variance from fidelity
+
+---
+
+## 7. GP Retrain During Inference
+
+Parameters for retraining GP after each new observation during optimization.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `gp_retrain_epochs` | 1000 | int | Epochs for GP retraining |
+| `gp_retrain_lr` | 0.001 | float | Learning rate (lower for fine-tuning) |
+| `gp_retrain_patience` | 50 | int | Early stopping patience |
+
+**Purpose**: After evaluating a new instruction, the GP is retrained to incorporate the new observation. This keeps the surrogate model accurate as optimization progresses.
+
+**Impact**: Lower epochs/patience for faster iteration cycles. The smaller learning rate prevents catastrophic forgetting of previous observations.
+
+---
+
+## 8. Inference / BoTorch Optimization
+
+Parameters for the BoTorch-based acquisition function optimization.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `num_restarts` | 64 | int | `--num-restarts` | L-BFGS-B multi-start restarts |
+| `raw_samples` | 1024 | int | `--raw-samples` | Initial random samples for seeding |
+| `use_inversion` | True | bool | - | Enable InvBO inversion loop |
+| `max_inversion_iters` | 3 | int | `--max-inversion-iters` | Max inversion iterations per step |
+| `gap_threshold` | 0.08 | float | `--gap-threshold` | Gap threshold for re-inversion |
+| `cosine_sim_threshold` | 0.93 | float | - | Min cosine similarity for acceptance |
+| `max_rejection_attempts` | 10 | int | - | Max rejection attempts before forced accept |
+
+**Purpose**: Controls the inner optimization loop that finds the best latent point according to the GP acquisition function (qLogEI).
+
+**Impact**:
+- **Higher `num_restarts`**: More likely to find global optimum but slower
+- **Higher `raw_samples`**: Better initialization coverage
+- **Lower `gap_threshold`**: Stricter alignment between optimized and inverted embeddings
+- **Higher `cosine_sim_threshold`**: Rejects more candidates, ensuring quality but may slow convergence
+
+**Inversion Loop**:
+```
+z_opt → VAE decode → Vec2Text → GTR encode → z_real
+if cosine_distance(z_opt, z_real) > gap_threshold:
+    Re-optimize from z_real (up to max_inversion_iters times)
+```
+
+---
+
+## 9. Vec2Text Settings
+
+Text inversion model configuration for converting embeddings back to text.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `vec2text_model` | "512_tokens" | str | `--vec2text-model` | Model variant |
+| `vec2text_beam` | 8 | int | `--vec2text-beam` | Beam search width |
+| `vec2text_max_length` | 128 | int | `--vec2text-max-length` | Max output tokens |
+
+**Purpose**: Vec2Text inverts GTR embeddings back to text. The "512_tokens" variant supports longer sequences than "32_tokens" but is slower.
+
+**Impact**:
+- **Higher `vec2text_beam`**: Better quality but slower generation
+- **"512_tokens" model**: Enables ZSInvert refinement, better for longer instructions
+- **"32_tokens" model**: Faster but limited to short instructions, ZSInvert disabled
+
+**Model Variants**:
+- `"32_tokens"`: ielabgroup/vec2text-small (fast, short sequences)
+- `"512_tokens"`: vec2text official (slower, longer sequences, supports ZSInvert)
+
+---
+
+## 10. TuRBO Trust Region
+
+Trust Region Bayesian Optimization for focused local search.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `turbo_enabled` | True | bool | Enable TuRBO trust region optimization |
+| `turbo_L_init` | 0.4 | float | Initial trust region side length |
+| `turbo_L_max` | 0.8 | float | Maximum trust region side length |
+| `turbo_L_min` | 0.0078 | float | Minimum side length (0.5^7, triggers restart) |
+| `turbo_tau_succ` | 3 | int | Consecutive successes to expand (double L) |
+| `turbo_tau_fail` | 25 | int | Consecutive failures to shrink (halve L) |
+
+**Purpose**: TuRBO maintains a local trust region around the best observed point. It expands when optimization succeeds and shrinks when it fails, balancing exploration and exploitation.
+
+**Impact**:
+- **Larger `turbo_L_init`**: More exploration initially
+- **Smaller `turbo_L_min`**: Allows finer local search before restart
+- **Higher `turbo_tau_fail`**: More patient before shrinking (slower adaptation)
+- **Lower `turbo_tau_succ`**: Faster expansion when succeeding
+
+**Trust Region Dynamics**:
+```
+If success_count >= tau_succ: L = min(2*L, L_max), reset counters
+If fail_count >= tau_fail: L = L/2, reset counters
+If L < L_min: Restart from best observed point
+```
+
+---
+
+## 11. PAS (Potential-Aware Anchor Selection)
+
+Thompson Sampling-based anchor selection for trust region initialization.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `pas_enabled` | True | bool | Enable PAS for anchor selection |
+| `pas_n_candidates` | 100 | int | Candidates per anchor for Thompson Sampling |
+
+**Purpose**: Instead of always centering the trust region on the best observed point, PAS samples from the GP posterior to potentially find better anchor points that haven't been fully explored.
+
+**Impact**:
+- **Enabled**: More exploration, may find better regions
+- **Higher `pas_n_candidates`**: Better sampling coverage but slower
+
+**Algorithm**:
+1. Sample GP posterior at `pas_n_candidates` random points
+2. Select point with best sampled value as new anchor
+3. Center trust region around selected anchor
+
+---
+
+## 12. Inversion Optimization
+
+Parameters for the latent space refinement during inversion.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `inversion_n_steps` | 100 | int | Adam optimization steps |
+| `inversion_lr` | 0.1 | float | Adam learning rate |
+| `inversion_convergence_threshold` | 0.01 | float | Early stop if change < threshold |
+| `latent_margin` | 0.2 | float | Margin for expanding latent bounds |
+
+**Purpose**: After Vec2Text generates text from a target embedding, the latent refinement step adjusts the latent point to better match the actual GTR embedding of the generated text.
+
+**Impact**:
+- **Higher `inversion_n_steps`**: Better alignment but slower
+- **Higher `inversion_lr`**: Faster convergence but may overshoot
+- **`latent_margin`**: Expands bounds by 20% each side to prevent edge effects
+
+---
+
+## 13. ZSInvert Refinement
+
+Iterative refinement for 512_tokens Vec2Text model.
+
+| Parameter | Default | Type | Description |
+|-----------|---------|------|-------------|
+| `zsinvert_enabled` | True | bool | Enable ZSInvert (auto-disabled for 32_tokens) |
+| `zsinvert_iterations` | 25 | int | Maximum refinement iterations |
+| `zsinvert_lr` | 0.1 | float | Learning rate for gradient refinement |
+| `zsinvert_steps_per_iter` | 50 | int | Optimization steps per iteration |
+| `zsinvert_improvement_threshold` | 0.005 | float | Min improvement to continue |
+| `zsinvert_patience` | 8 | int | Iterations without improvement before stop |
+
+**Purpose**: ZSInvert iteratively refines the target embedding to improve Vec2Text output quality. Each iteration: generate text → encode → optimize embedding → repeat.
+
+**Impact**:
+- **Higher `zsinvert_iterations`**: Potentially better alignment but slower
+- **Higher `zsinvert_patience`**: More attempts before giving up
+- **Lower `zsinvert_improvement_threshold`**: Continues refinement for smaller gains
+
+**Algorithm**:
+```
+for iter in range(zsinvert_iterations):
+    text = vec2text(target_embedding)
+    actual_embedding = gtr_encode(text)
+    cosine_sim = similarity(target_embedding, actual_embedding)
+    if improvement < threshold for patience iterations:
+        break
+    target_embedding = gradient_optimize(target_embedding, actual_embedding)
+```
+
+---
+
+## 14. Device & Paths
+
+Device configuration and file paths.
+
+| Parameter | Default | Type | CLI Flag | Description |
+|-----------|---------|------|----------|-------------|
+| `device` | "cuda" | str | `--device` | Device: "cuda", "cpu", "mps", "auto" |
+| `validation_path` | "hbbops_improved_2/data/validation.json" | str | `--validation-path` | Validation dataset path |
+| `seed` | 42 | int | - | Random seed for reproducibility |
+
+**Purpose**: Basic configuration for hardware and data locations.
+
+---
+
+## 15. CLI-Only Arguments
+
+Arguments available only via command line, not in config.py.
+
+| Argument | Default | Type | Description |
+|----------|---------|------|-------------|
+| `--iterations` | 10 | int | Number of InvBO inference iterations |
+| `--skip-hbbops` | False | bool | Load pre-evaluated results, skip Hyperband |
+| `--hyperband-evals-path` | "lipo/data/hbbops_results_*.json" | str | Path to pre-evaluated results |
+| `--load-grid` | None | str | Path to pre-evaluated grid JSONL |
+| `--top-k` | 25 | int | Number of top instructions from grid |
+| `--skip-ape` | False | bool | Skip APE generation, use cached |
+| `--force-regenerate-ape` | False | bool | Force APE regeneration |
+| `--no-ape-augment` | False | bool | Disable APE augmentation |
+| `--hyperband-only` | False | bool | Run only HbBoPs, skip inference |
+| `--skip-eval` | False | bool | Skip LLM evaluation, use GP predictions |
+| `--validate-hyperband` | False | bool | Validate HbBoPs ranking vs grid |
+| `--eval-model` | "Qwen/Qwen2.5-7B-Instruct" | str | Model for prompt evaluation |
+| `--eval-backend` | "vllm" | str | Backend for evaluation |
+| `--output-dir` | "lipo/results" | str | Output directory |
+| `--debug` | False | bool | Debug mode (reduced epochs) |
+| `--diverse-instructions` | None | str | Path to diverse instructions for VAE |
+| `--instructions-path` | None | str | Path to instructions text file |
+
+---
+
+## Architecture Details
+
+### VAE Architecture
+```
+Input: 768D GTR embedding (L2 normalized)
+
+Encoder:
+  Linear(768 → 384) → GELU → LayerNorm
+  Linear(384 → 192) → GELU → LayerNorm
+  Linear(192 → 64) → Split into mu (32D) + log_var (32D)
+
+Reparameterization: z = mu + exp(0.5 * log_var) * epsilon
+
+Decoder:
+  Linear(32 → 192) → GELU → LayerNorm
+  Linear(192 → 384) → GELU → LayerNorm
+  Linear(384 → 768) → L2 Normalize
+```
+
+### GP Architecture
+```
+Model: ExactGP with FixedNoiseGaussianLikelihood
+
+Mean: ZeroMean()
+
+Kernel: ScaleKernel(
+    MaternKernel(nu=2.5, ard_num_dims=32)
+) with Gamma priors
+
+Noise: Heteroscedastic from Bernoulli variance
+  variance = (y * (1-y)) / fidelity
+  Clamped to [1e-6, 0.1]
+
+Output: Error rates are negated for BoTorch maximization
+  y_train = -error_rates (so max(-error) = min(error))
+```
+
+### Acquisition Function
+```
+qLogExpectedImprovement:
+  acq_value = log_expected_improvement(model, best_f, x)
+
+  TuRBO constrains optimization to trust region bounds
+  (no separate distance penalty - TuRBO handles exploration/exploitation)
+```
+
+---
+
+## Critical Thresholds Summary
+
+Quick reference for the most important thresholds:
+
+| Threshold | Value | Impact |
+|-----------|-------|--------|
+| `cosine_sim_threshold` | 0.93 | Rejects Vec2Text outputs with low fidelity |
+| `gap_threshold` | 0.08 | Controls embedding-text alignment strictness |
+| `vae_beta` | 0.01 | KL regularization (10x baseline for tight latent) |
+| `turbo_L_min` | 0.0078 | Triggers trust region restart |
+| `turbo_L_init` | 0.4 | Initial trust region size |
+| `roundtrip_validation_threshold` | 0.90 | Min quality for full pipeline |
+| `zsinvert_improvement_threshold` | 0.005 | Min refinement improvement |
+| GP noise constraint | [0.001, 0.1] | Balances confidence vs overfitting |
+| Lengthscale prior | Gamma(3.0, 6.0) | Inductive bias toward moderate scales |
+
+---
+
+## Parameter Tuning Guidelines
+
+### For Better Exploration
+- Increase `turbo_L_init` and `turbo_L_max`
+- Increase `random_interleaving_prob`
+- Enable PAS with higher `pas_n_candidates`
+
+### For Better Exploitation
+- Decrease `turbo_L_max`
+- Lower `turbo_tau_succ` (expand faster when succeeding)
+- Increase `turbo_tau_fail` (slower shrinking)
+
+### For Faster Inference
+- Decrease `num_restarts` and `raw_samples`
+- Decrease `zsinvert_iterations` and `zsinvert_patience`
+- Decrease `max_inversion_iters`
+- Use "32_tokens" Vec2Text model (disables ZSInvert)
+
+### For Better Quality
+- Increase `cosine_sim_threshold`
+- Decrease `gap_threshold`
+- Increase `zsinvert_iterations` and `zsinvert_patience`
+- Increase `vec2text_beam`

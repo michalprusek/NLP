@@ -53,8 +53,8 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.001  # KL regularization weight (lower for 32D to preserve details)
-    vae_gamma: float = 10.0  # Cycle consistency weight: ensures z ≈ encode(decode(z))
+    vae_beta: float = 0.01  # KL regularization weight (10x higher for tighter latent space)
+    vae_gamma: float = 0.0  # Cycle consistency disabled (compensated by higher beta)
     vae_epochs: int = 20000  # Increased for better convergence with higher beta
     vae_annealing_epochs: int = 500
     vae_patience: int = 500
@@ -65,8 +65,12 @@ class Config:
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 32  # VAE latent dimension (768/32 = 24x compression)
-    gp_latent_dim: int = 10  # Adapter output dimension for GP
+    latent_dim: int = 32  # VAE latent dimension (768/32 = 24x compression, denser GP coverage)
+    # Note: No adapter - GP works directly on 32D VAE latent with ARD kernel
+
+    # === Round-Trip Validation ===
+    roundtrip_validation_threshold: float = 0.90  # Min cosine sim for VAE quality
+    roundtrip_validation_samples: int = 20  # Number of samples to test
 
     # === Hyperband ===
     bmin: int = 10  # Minimum fidelity (samples)
@@ -102,18 +106,9 @@ class Config:
     turbo_tau_fail: int = 25  # Consecutive failures to halve L (faster shrinking)
 
     # === PAS (Potential-Aware Anchor Selection) ===
+    # From InvBO paper - Thompson Sampling based anchor selection
     pas_enabled: bool = True  # Enable potential-aware anchor selection
     pas_n_candidates: int = 100  # Candidates per anchor for Thompson Sampling
-
-    # === Distance Penalty (keeps optimization near training data) ===
-    distance_penalty_enabled: bool = True  # Enable distance penalty in acquisition
-    distance_weight: float = 2.0  # Penalty weight (higher = stronger penalty)
-    distance_threshold: float = 0.3  # Min distance before penalty kicks in
-
-    # === Anchor-Constrained Bounds (optional, stricter than distance penalty) ===
-    anchor_bounds_enabled: bool = False  # Enable anchor-constrained bounds (off by default)
-    anchor_top_k: int = 15  # Number of best points to use as anchors
-    anchor_margin: float = 0.4  # Margin around anchors for exploration
 
     # === Inversion Optimization ===
     inversion_n_steps: int = 100  # Adam optimization steps
@@ -121,8 +116,8 @@ class Config:
     inversion_convergence_threshold: float = 0.01  # Early stop threshold
     latent_margin: float = 0.2  # Margin for latent bounds expansion
 
-    # === ZSInvert Refinement ===
-    zsinvert_enabled: bool = True  # Enable ZSInvert refinement after Vec2Text
+    # === ZSInvert Refinement (only enabled for 512_tokens Vec2Text model) ===
+    zsinvert_enabled: bool = True  # Enable ZSInvert (auto-disabled for 32_tokens model)
     zsinvert_iterations: int = 25  # Max refinement iterations (increased for better convergence)
     zsinvert_lr: float = 0.1  # Learning rate for gradient refinement
     zsinvert_steps_per_iter: int = 50  # Optimization steps per iteration

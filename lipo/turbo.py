@@ -60,7 +60,7 @@ class TrustRegionManager:
         """Initialize trust region manager.
 
         Args:
-            dim: Dimensionality of latent space (64 for VAE latent, matches config.latent_dim)
+            dim: Dimensionality of latent space (32 for VAE latent, matches config.latent_dim)
             device: Torch device
             L_init: Initial side length (fraction of unit cube)
             L_max: Maximum side length
@@ -170,9 +170,7 @@ class TrustRegionManager:
                 import warnings
                 warnings.warn(
                     f"ARD lengthscales dimension ({lengthscales.shape[0]}) does not match "
-                    f"bounds dimension ({dim}). Using uniform trust region scaling. "
-                    f"This is expected when GP operates in adapter space (10D) "
-                    f"but bounds are in VAE latent space ({dim}D)."
+                    f"bounds dimension ({dim}). Using uniform trust region scaling."
                 )
             per_dim_half_L = torch.full((dim,), L / 2, device=global_bounds.device)
 
@@ -411,7 +409,7 @@ class PotentialAwareAnchorSelector:
             )
 
             # Thompson Sampling on normalized candidates
-            # GP model expects normalized [0,1] inputs (applies Kumaraswamy warping internally)
+            # GP model expects normalized [0,1] inputs
             ts_values = self._thompson_sample(gp_model, candidates)
             potentials[i] = ts_values.max()
 
@@ -458,7 +456,7 @@ def create_turbo_manager(config, device: torch.device) -> TrustRegionManager:
         Configured TrustRegionManager
     """
     return TrustRegionManager(
-        dim=config.latent_dim,  # 64D VAE latent (config.latent_dim)
+        dim=config.latent_dim,  # 32D VAE latent (config.latent_dim)
         device=device,
         L_init=config.turbo_L_init,
         L_max=config.turbo_L_max,
