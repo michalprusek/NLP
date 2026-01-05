@@ -105,6 +105,9 @@ class IterationRecord:
     trust_region_length: float = 0.0  # Current trust region side length
     trust_region_action: str = ""  # Action taken: "none", "expand", "shrink", "restart"
     anchor_idx: int = -1  # Index of selected anchor in training data
+    # Adaptive UCB and noise injection
+    ucb_beta: float = 0.0  # UCB beta used for this iteration
+    noise_applied: bool = False  # Whether latent noise was applied
 
 
 class Vec2TextInverter:
@@ -112,6 +115,8 @@ class Vec2TextInverter:
 
     Uses 512_tokens model (vec2text/gtr-512-noise-0.00001) by default.
     This model supports longer sequences (up to 512 tokens vs 32 tokens).
+
+    Supports fine-tuned models via finetuned_path parameter.
     """
 
     def __init__(
@@ -121,6 +126,8 @@ class Vec2TextInverter:
         max_length: int = 128,
         device: str = "auto",
         model_type: str = "512_tokens",
+        finetuned_path: str = "",
+        finetuned_inverter_path: str = "",
     ):
         """Initialize inverter.
 
@@ -130,6 +137,8 @@ class Vec2TextInverter:
             max_length: Maximum output length
             device: Device to use
             model_type: "32_tokens" or "512_tokens" (default)
+            finetuned_path: Path to fine-tuned corrector model (empty = use pre-trained)
+            finetuned_inverter_path: Path to fine-tuned InversionModel (empty = use pre-trained)
         """
         if model_type not in ("32_tokens", "512_tokens"):
             raise ValueError(f"model_type must be '32_tokens' or '512_tokens'")
@@ -139,16 +148,109 @@ class Vec2TextInverter:
         self.max_length = max_length
         self.device = get_device(device)
         self.model_type = model_type
+        self.finetuned_path = finetuned_path
+        self.finetuned_inverter_path = finetuned_inverter_path
         self._corrector = None
         self._inversion_model = None
+        self._finetuned_model = None  # Fine-tuned T5 model
+        self._finetuned_tokenizer = None
+        self._finetuned_inverter = None  # Fine-tuned InversionModel
         self._pre_reload_callback = None  # Called before reload to free GPU memory
 
     def _load_model(self):
-        """Lazy load Vec2Text model."""
-        if self.model_type == "32_tokens":
+        """Lazy load Vec2Text model.
+
+        Priority:
+        1. Fine-tuned InversionModel (best, trained on instructions)
+        2. Fine-tuned Corrector (original hypothesis + T5 correction)
+        3. Pre-trained 32_tokens or 512_tokens model
+        """
+        # Check if fine-tuned InversionModel should be loaded (highest priority)
+        if self.finetuned_inverter_path:
+            self._load_finetuned_inverter()
+        # Check if fine-tuned corrector model should be loaded
+        elif self.finetuned_path:
+            self._load_finetuned()
+        elif self.model_type == "32_tokens":
             self._load_32_tokens()
         else:
             self._load_512_tokens()
+
+    def _load_finetuned(self):
+        """Load fine-tuned T5 corrector model."""
+        if self._finetuned_model is not None:
+            return
+
+        from pathlib import Path
+        from transformers import T5ForConditionalGeneration, T5Tokenizer
+
+        finetuned_path = Path(self.finetuned_path)
+        if not finetuned_path.exists():
+            raise ValueError(f"Fine-tuned model path does not exist: {finetuned_path}")
+
+        print(f"Loading fine-tuned Vec2Text corrector from {finetuned_path}...")
+
+        self._finetuned_model = T5ForConditionalGeneration.from_pretrained(
+            str(finetuned_path)
+        )
+        self._finetuned_tokenizer = T5Tokenizer.from_pretrained(str(finetuned_path))
+
+        self._finetuned_model = self._finetuned_model.to(self.device).eval()
+        print(f"  Fine-tuned Vec2Text loaded on {self.device}")
+
+        # Also load the original inversion model for generating initial hypotheses
+        self._load_32_tokens_inversion_only()
+
+    def _load_finetuned_inverter(self):
+        """Load fine-tuned InversionModel.
+
+        The fine-tuned InversionModel directly maps embeddings to text,
+        without needing a corrector stage. This provides best results
+        when fine-tuned on instruction data.
+        """
+        if self._finetuned_inverter is not None:
+            return
+
+        from pathlib import Path
+        import torch
+        from vec2text.models.config import InversionConfig
+        from vec2text.models.inversion import InversionModel
+        from huggingface_hub import hf_hub_download
+
+        finetuned_path = Path(self.finetuned_inverter_path)
+        if not finetuned_path.exists():
+            raise ValueError(f"Fine-tuned InversionModel path does not exist: {finetuned_path}")
+
+        print(f"Loading fine-tuned Vec2Text InversionModel from {finetuned_path}...")
+
+        # Load config from pre-trained (fine-tuning doesn't change architecture)
+        inv_config = InversionConfig.from_pretrained(
+            "ielabgroup/vec2text_gtr-base-st_inversion"
+        )
+
+        # Create model and load fine-tuned weights
+        self._finetuned_inverter = InversionModel(inv_config)
+
+        # Load weights from pytorch_model.bin
+        weights_path = finetuned_path / "pytorch_model.bin"
+        if weights_path.exists():
+            state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+            self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+        else:
+            # Try safetensors format
+            from safetensors.torch import load_file
+            safetensors_path = finetuned_path / "model.safetensors"
+            if safetensors_path.exists():
+                state_dict = load_file(str(safetensors_path))
+                self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+            else:
+                raise ValueError(
+                    f"No weights found at {finetuned_path}. "
+                    f"Expected pytorch_model.bin or model.safetensors"
+                )
+
+        self._finetuned_inverter = self._finetuned_inverter.to(self.device).eval()
+        print(f"  Fine-tuned InversionModel loaded on {self.device}")
 
     def _load_32_tokens(self):
         """Load ielabgroup Vec2Text with corrector (32 token limit)."""
@@ -186,6 +288,29 @@ class Vec2TextInverter:
 
         self._corrector = vec2text.load_corrector(inversion_model, corrector_model)
         print(f"  Vec2Text (32_tokens) loaded on {self.device}")
+
+    def _load_32_tokens_inversion_only(self):
+        """Load only the inversion model (for generating hypotheses for fine-tuned corrector)."""
+        if self._inversion_model is not None:
+            return
+
+        from safetensors.torch import load_file
+        from huggingface_hub import hf_hub_download
+        from vec2text.models.config import InversionConfig
+        from vec2text.models.inversion import InversionModel
+
+        print("Loading InversionModel for hypothesis generation...")
+
+        inv_weights = hf_hub_download(
+            "ielabgroup/vec2text_gtr-base-st_inversion", "model.safetensors"
+        )
+        inv_config = InversionConfig.from_pretrained(
+            "ielabgroup/vec2text_gtr-base-st_inversion"
+        )
+        self._inversion_model = InversionModel(inv_config)
+        self._inversion_model.load_state_dict(load_file(inv_weights), strict=False)
+        self._inversion_model = self._inversion_model.to(self.device).eval()
+        print(f"  InversionModel loaded on {self.device}")
 
     def _load_512_tokens(self):
         """Load Vec2Text InversionModel (512 token limit)."""
@@ -264,6 +389,24 @@ class Vec2TextInverter:
                 except StopIteration:
                     pass
 
+        if self._finetuned_model is not None:
+            # Check if fine-tuned model needs to be moved to GPU
+            try:
+                param = next(self._finetuned_model.parameters())
+                if param.device.type == 'cpu' and target_type == 'cuda':
+                    needs_reload = True
+            except StopIteration:
+                pass
+
+        if self._finetuned_inverter is not None:
+            # Check if fine-tuned Inverter needs to be moved to GPU
+            try:
+                param = next(self._finetuned_inverter.parameters())
+                if param.device.type == 'cpu' and target_type == 'cuda':
+                    needs_reload = True
+            except StopIteration:
+                pass
+
         if needs_reload:
             if pre_reload_callback is not None:
                 pre_reload_callback()
@@ -296,7 +439,12 @@ class Vec2TextInverter:
             embedding = embedding.unsqueeze(0)
         embedding = embedding.to(self.device)
 
-        if self.model_type == "32_tokens":
+        # Use fine-tuned models if available (priority order)
+        if self.finetuned_inverter_path and self._finetuned_inverter is not None:
+            return self._invert_finetuned_inverter(embedding)
+        elif self.finetuned_path and self._finetuned_model is not None:
+            return self._invert_finetuned(embedding)
+        elif self.model_type == "32_tokens":
             return self._invert_32_tokens(embedding)
         else:
             return self._invert_512_tokens(embedding)
@@ -332,6 +480,303 @@ class Vec2TextInverter:
         result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         return result.strip()
 
+    def _invert_finetuned_inverter(self, embedding: torch.Tensor) -> str:
+        """Invert using fine-tuned InversionModel.
+
+        Direct inversion without corrector stage - the fine-tuned model
+        learned to directly produce high-quality text from embeddings.
+
+        Args:
+            embedding: 768D GTR embedding (batch of 1)
+
+        Returns:
+            Instruction text
+        """
+        gen_kwargs = {
+            "num_beams": self.beam_width,
+            "max_length": self.max_length,
+            "no_repeat_ngram_size": 3,
+            "repetition_penalty": 1.2,
+        }
+
+        with torch.no_grad():
+            output_ids = self._finetuned_inverter.generate(
+                inputs={"frozen_embeddings": embedding},
+                generation_kwargs=gen_kwargs,
+            )
+
+        tokenizer = self._finetuned_inverter.tokenizer
+        result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        return result.strip()
+
+    def _invert_finetuned(self, embedding: torch.Tensor) -> str:
+        """Invert using fine-tuned T5 corrector model.
+
+        Pipeline:
+        1. InversionModel generates initial hypothesis from embedding
+        2. Fine-tuned T5 model corrects the hypothesis
+
+        Args:
+            embedding: 768D GTR embedding (batch of 1)
+
+        Returns:
+            Corrected instruction text
+        """
+        # Step 1: Generate initial hypothesis using InversionModel
+        with torch.no_grad():
+            gen_kwargs = {
+                "num_beams": 4,
+                "max_length": 64,
+                "no_repeat_ngram_size": 3,
+            }
+            output_ids = self._inversion_model.generate(
+                inputs={"frozen_embeddings": embedding},
+                generation_kwargs=gen_kwargs,
+            )
+
+        tokenizer = self._inversion_model.tokenizer
+        hypothesis = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+
+        # Step 2: Correct hypothesis using fine-tuned T5 model
+        input_text = f"Correct: {hypothesis}"
+        inputs = self._finetuned_tokenizer(
+            input_text,
+            return_tensors="pt",
+            max_length=self.max_length,
+            truncation=True,
+        )
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self._finetuned_model.generate(
+                **inputs,
+                max_length=self.max_length,
+                num_beams=self.beam_width,
+                no_repeat_ngram_size=3,
+                early_stopping=True,
+            )
+
+        result = self._finetuned_tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return result.strip()
+
+    def invert_with_adaptive_correction(
+        self,
+        embedding: torch.Tensor,
+        gtr_encoder: "GTRInstructionEncoder",
+        max_corrections: int = 100,
+        cosine_threshold: float = 0.98,
+        verbose: bool = False,
+    ) -> Tuple[str, dict]:
+        """Invert embedding to text with adaptive iterative correction.
+
+        Uses early stopping based on cosine similarity to target embedding.
+        Instead of running a fixed number of corrector steps, stops when
+        the reconstructed text's embedding is close enough to the target.
+
+        This is task-agnostic and VAE-agnostic - it only looks at how well
+        the current text matches the target embedding in GTR space.
+
+        Pipeline:
+            1. Inverter generates initial hypothesis (uses fine-tuned if available)
+            2. Loop until cosine >= threshold or max_corrections reached:
+               a. Encode current text with GTR
+               b. Check cosine similarity to target embedding
+               c. If good enough, stop
+               d. Otherwise, run one corrector step (pre-trained corrector)
+
+        Args:
+            embedding: Target 768D GTR embedding to invert
+            gtr_encoder: GTR encoder for re-encoding intermediate results
+            max_corrections: Maximum correction iterations (default: 100)
+            cosine_threshold: Stop when cosine >= this value (default: 0.98)
+            verbose: Print progress during correction
+
+        Returns:
+            Tuple of (reconstructed_text, stats_dict) where stats_dict contains:
+            - iterations: Number of correction steps used
+            - final_cosine: Final cosine similarity achieved
+            - early_stopped: Whether stopped before max_corrections
+            - cosine_history: List of cosine similarities at each step
+        """
+        self._load_model()
+        self._ensure_on_device(self._pre_reload_callback)
+
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+        embedding = embedding.to(self.device)
+
+        # Need the 32_tokens corrector model for iterative correction
+        if self._corrector is None:
+            self._load_32_tokens()
+
+        corrector = self._corrector
+        tokenizer = corrector.tokenizer
+
+        # Step 1: Generate initial hypothesis
+        # Use fine-tuned inverter if available (trained on noisy data = more robust)
+        # Otherwise fall back to pre-trained inverter from corrector
+        if self._finetuned_inverter is not None:
+            if verbose:
+                print("  Using fine-tuned InversionModel for initial hypothesis")
+            with torch.no_grad():
+                gen_kwargs = {
+                    "num_beams": self.beam_width,
+                    "max_length": self.max_length,
+                    "no_repeat_ngram_size": 3,
+                }
+                hypothesis_input_ids = self._finetuned_inverter.generate(
+                    inputs={"frozen_embeddings": embedding},
+                    generation_kwargs=gen_kwargs,
+                )
+            # Need to embed using corrector's embedder for compatibility
+            hypothesis_embedding = corrector.embed_generated_hypothesis(
+                input_ids=hypothesis_input_ids
+            )
+            hypothesis_attention_mask = (
+                hypothesis_input_ids != corrector.model.encoder_decoder.config.pad_token_id
+            ).int()
+            frozen_embeddings = embedding
+        else:
+            if verbose:
+                print("  Using pre-trained InversionModel for initial hypothesis")
+            # Use corrector's internal method for pre-trained inverter
+            with torch.no_grad():
+                (
+                    frozen_embeddings,
+                    hypothesis_input_ids,
+                    hypothesis_attention_mask,
+                    hypothesis_embedding,
+                ) = corrector._get_hypothesis_uncached(inputs={"frozen_embeddings": embedding})
+
+        current_text = tokenizer.decode(hypothesis_input_ids[0], skip_special_tokens=True).strip()
+
+        # Check initial quality using external GTR (for task-agnostic evaluation)
+        current_emb = gtr_encoder.encode_tensor(current_text).to(self.device)
+        initial_cosine = F.cosine_similarity(
+            embedding, current_emb.unsqueeze(0)
+        ).item()
+
+        cosine_history = [initial_cosine]
+
+        if verbose:
+            print(f"  Initial inversion cosine: {initial_cosine:.4f}")
+
+        # Early stop if already good enough
+        if initial_cosine >= cosine_threshold:
+            return current_text, {
+                "iterations": 0,
+                "final_cosine": initial_cosine,
+                "early_stopped": True,
+                "cosine_history": cosine_history,
+            }
+
+        # Step 2: Iterative correction with early stopping
+        corrector_model = corrector.model
+
+        gen_kwargs = {
+            "num_beams": self.beam_width,
+            "max_length": self.max_length,
+            "no_repeat_ngram_size": 3,
+            "early_stopping": False,
+            "do_sample": False,
+        }
+
+        # Track best result (corrector can oscillate/degrade)
+        best_text = current_text
+        best_cosine = initial_cosine
+        best_step = 0
+        plateau_count = 0
+        plateau_threshold = 0.001  # Consider plateau if change < this
+        max_plateau_steps = 20  # Stop if no improvement for this many steps
+
+        for step in range(max_corrections):
+            # Run one corrector step
+            # The corrector needs: target embedding + hypothesis tokens + hypothesis embedding
+            with torch.no_grad():
+                corrector_output = corrector_model.generate(
+                    inputs={
+                        "frozen_embeddings": frozen_embeddings,
+                        "hypothesis_input_ids": hypothesis_input_ids,
+                        "hypothesis_attention_mask": hypothesis_attention_mask,
+                        "hypothesis_embedding": hypothesis_embedding,
+                    },
+                    generation_kwargs=gen_kwargs,
+                )
+
+            # Update hypothesis for next iteration
+            hypothesis_input_ids = corrector_output
+            hypothesis_attention_mask = (
+                hypothesis_input_ids != corrector_model.encoder_decoder.config.pad_token_id
+            ).int()
+
+            # Re-embed hypothesis using corrector's internal embedder
+            hypothesis_embedding = corrector.embed_generated_hypothesis(
+                input_ids=hypothesis_input_ids
+            )
+
+            new_text = tokenizer.decode(corrector_output[0], skip_special_tokens=True).strip()
+
+            # Re-encode with external GTR and check similarity to target
+            new_emb = gtr_encoder.encode_tensor(new_text).to(self.device)
+            new_cosine = F.cosine_similarity(
+                embedding, new_emb.unsqueeze(0)
+            ).item()
+
+            cosine_history.append(new_cosine)
+
+            # Track best result
+            if new_cosine > best_cosine:
+                best_cosine = new_cosine
+                best_text = new_text
+                best_step = step + 1
+                plateau_count = 0  # Reset plateau counter on improvement
+            else:
+                plateau_count += 1
+
+            if verbose and (step + 1) % 10 == 0:
+                print(f"  Step {step + 1}: cosine = {new_cosine:.4f}, best = {best_cosine:.4f} @ step {best_step}")
+
+            # Check for early stopping - threshold reached
+            if new_cosine >= cosine_threshold:
+                if verbose:
+                    print(f"  Early stop at step {step + 1}: cosine {new_cosine:.4f} >= {cosine_threshold}")
+                return new_text, {
+                    "iterations": step + 1,
+                    "final_cosine": new_cosine,
+                    "early_stopped": True,
+                    "cosine_history": cosine_history,
+                    "best_cosine": best_cosine,
+                    "best_step": best_step,
+                }
+
+            # Check for plateau - no improvement for many steps
+            if plateau_count >= max_plateau_steps:
+                if verbose:
+                    print(f"  Early stop at step {step + 1}: no improvement for {max_plateau_steps} steps")
+                    print(f"  Returning best result from step {best_step} (cosine = {best_cosine:.4f})")
+                return best_text, {
+                    "iterations": step + 1,
+                    "final_cosine": new_cosine,
+                    "early_stopped": True,
+                    "cosine_history": cosine_history,
+                    "best_cosine": best_cosine,
+                    "best_step": best_step,
+                    "plateau_stopped": True,
+                }
+
+        # Reached max corrections - return best result (not final!)
+        if verbose:
+            print(f"  Max corrections reached. Returning best from step {best_step} (cosine = {best_cosine:.4f})")
+
+        return best_text, {
+            "iterations": max_corrections,
+            "final_cosine": cosine_history[-1],
+            "early_stopped": False,
+            "cosine_history": cosine_history,
+            "best_cosine": best_cosine,
+            "best_step": best_step,
+        }
+
     def offload(self):
         """Move Vec2Text model to CPU and clear CUDA cache.
 
@@ -351,9 +796,19 @@ class Vec2TextInverter:
             print("  Vec2Text (32_tokens) offloaded to CPU")
 
         if self._inversion_model is not None:
-            # 512_tokens model - move to CPU
+            # 512_tokens model or inversion-only - move to CPU
             self._inversion_model = self._inversion_model.to('cpu')
-            print("  Vec2Text (512_tokens) offloaded to CPU")
+            print("  Vec2Text (inversion model) offloaded to CPU")
+
+        if self._finetuned_model is not None:
+            # Fine-tuned T5 model - move to CPU
+            self._finetuned_model = self._finetuned_model.to('cpu')
+            print("  Vec2Text (fine-tuned corrector) offloaded to CPU")
+
+        if self._finetuned_inverter is not None:
+            # Fine-tuned InversionModel - move to CPU
+            self._finetuned_inverter = self._finetuned_inverter.to('cpu')
+            print("  Vec2Text (fine-tuned inverter) offloaded to CPU")
 
         # Clear CUDA cache
         gc.collect()
@@ -373,7 +828,15 @@ class Vec2TextInverter:
 
         if self._inversion_model is not None:
             self._inversion_model = self._inversion_model.to(self.device)
-            print(f"  Vec2Text (512_tokens) reloaded to {self.device}")
+            print(f"  Vec2Text (inversion model) reloaded to {self.device}")
+
+        if self._finetuned_model is not None:
+            self._finetuned_model = self._finetuned_model.to(self.device)
+            print(f"  Vec2Text (fine-tuned corrector) reloaded to {self.device}")
+
+        if self._finetuned_inverter is not None:
+            self._finetuned_inverter = self._finetuned_inverter.to(self.device)
+            print(f"  Vec2Text (fine-tuned inverter) reloaded to {self.device}")
 
 
 def validate_roundtrip_quality(
@@ -530,6 +993,8 @@ class LIPOHyperbandInference:
             device=str(self.device),
             model_type=config.vec2text_model,
             max_length=config.vec2text_max_length,
+            finetuned_path=config.vec2text_finetuned_path,
+            finetuned_inverter_path=config.vec2text_finetuned_inverter_path,
         )
 
         # History
@@ -782,6 +1247,9 @@ GP Status:
         raw_samples: int = 1024,
         skip_eval: bool = False,
         verbose: bool = True,
+        total_iterations: int = 50,
+        ucb_beta_override: Optional[float] = None,
+        noise_scale: float = 0.0,
     ) -> IterationRecord:
         """Run a single optimization iteration using BoTorch qLogEI.
 
@@ -801,6 +1269,9 @@ GP Status:
             raw_samples: Raw samples for initialization seeding
             skip_eval: Skip LLM evaluation (use GP prediction)
             verbose: Print progress
+            total_iterations: Total iterations for adaptive UCB beta
+            ucb_beta_override: Override UCB beta (for adaptive scheduling)
+            noise_scale: Scale for latent noise injection (0 = disabled)
 
         Returns:
             IterationRecord with results including rejection_attempts and low_quality_accepted
@@ -899,9 +1370,20 @@ GP Status:
                 verbose=verbose and (attempt == 0),  # Only verbose on first attempt
                 seed=attempt_seed,
                 bounds=bounds,
+                ucb_beta=ucb_beta_override,  # Use adaptive UCB beta if provided
             )
 
-            # Denormalize and decode to embedding (16D latent -> 768D embedding)
+            # Noise injection for diversity (after optimization)
+            # Adds small perturbation to encourage exploration of nearby regions
+            if noise_scale > 0:
+                noise = torch.randn_like(z_opt) * noise_scale
+                z_opt = z_opt + noise
+                # Clip to valid bounds
+                z_opt = torch.clamp(z_opt, bounds[0], bounds[1])
+                if verbose and attempt == 0:
+                    print(f"  Applied latent noise (scale={noise_scale:.3f})")
+
+            # Denormalize and decode to embedding (32D latent -> 768D embedding)
             # z_opt is normalized [0,1], need to convert back to VAE latent space
             x_range = self.gp.X_max - self.gp.X_min
             z_unnorm = z_opt * x_range + self.gp.X_min
@@ -1088,6 +1570,9 @@ GP Status:
             trust_region_length=trust_region_length,
             trust_region_action=turbo_action,
             anchor_idx=anchor_idx,
+            # Adaptive UCB and noise
+            ucb_beta=ucb_beta_override if ucb_beta_override is not None else self.config.ucb_beta,
+            noise_applied=noise_scale > 0,
         )
 
         self.iteration_history.append(record)
@@ -1127,6 +1612,12 @@ GP Status:
         Returns:
             List of IterationRecords
         """
+        # Check for adaptive UCB beta
+        use_adaptive_beta = getattr(self.config, 'ucb_beta_adaptive', True)
+        beta_init = self.config.ucb_beta
+        beta_final = getattr(self.config, 'ucb_beta_final', 2.0)
+        noise_scale = getattr(self.config, 'latent_noise_scale', 0.05)
+
         if verbose:
             print("\n" + "=" * 60)
             print("Starting LIPO Inference (BoTorch qLogEI)")
@@ -1134,14 +1625,28 @@ GP Status:
             print(f"  Initial best error: {self.best_error:.4f}")
             print(f"  GP samples: {self.gp.get_training_size()}")
             print(f"  BoTorch: {num_restarts} restarts, {raw_samples} raw samples")
+            if use_adaptive_beta and self.config.acquisition_type == "ucb":
+                print(f"  Adaptive UCB β: {beta_init:.1f} → {beta_final:.1f} over {iterations} iterations")
+            if noise_scale > 0:
+                print(f"  Latent noise injection: scale={noise_scale:.3f}")
 
         for i in range(iterations):
+            # Compute adaptive UCB beta (linear decay)
+            if use_adaptive_beta:
+                progress = i / max(iterations - 1, 1)
+                current_ucb_beta = beta_init * (1 - progress) + beta_final * progress
+            else:
+                current_ucb_beta = beta_init
+
             self.run_iteration(
                 iteration=i + 1,
                 num_restarts=num_restarts,
                 raw_samples=raw_samples,
                 skip_eval=skip_eval,
                 verbose=verbose,
+                total_iterations=iterations,
+                ucb_beta_override=current_ucb_beta,
+                noise_scale=noise_scale,
             )
 
         if verbose:

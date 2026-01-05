@@ -26,14 +26,16 @@ FÁZE 1: GENEROVÁNÍ INSTRUKCÍ
 │ - GTR Encoding (768D, L2-normalized)                     │
 └──────────────────────────────────────────────────────────┘
                     ↓
-FÁZE 2: VAE TRÉNINK
+FÁZE 2: VAE TRÉNINK (IMPROVED v2.0)
 ┌──────────────────────────────────────────────────────────┐
-│ InstructionVAE                                           │
-│ - Encoder: 768D → 256 → 128 → 2×32 (mu + log_var)       │
-│ - Decoder: 32D → 128 → 256 → 768D + L2 norm             │
+│ InstructionVAE (vylepšená architektura)                  │
+│ - Encoder: 768D → 512 → 256 → 128 → 2×32 (mu + log_var) │
+│ - Decoder: 32D → 128 → 256 → 512 → 768D + L2 norm       │
 │ - Aktivace: GELU + LayerNorm + Dropout(0.1)              │
-│ - Loss: recon + β·KL (β=0.01 s annealing)               │
-│ - KL annealing: β=0 → 0.01 přes 2500 epoch              │
+│ - Loss: (1-mse_w)·cosine + mse_w·MSE + β·KL             │
+│ - MSE weight: 0.2 (20% MSE + 80% cosine)                │
+│ - KL annealing: β=0 → 0.005 přes 2500 epoch             │
+│ - Curriculum learning: 30% → 100% přes 5000 epoch       │
 │ - Early stopping: patience=1000 (po annealing)           │
 │ - Max epochs: 50000                                      │
 └──────────────────────────────────────────────────────────┘
@@ -48,20 +50,23 @@ FÁZE 3: HYPERBAND EVALUACE
 │ - Empirical Bayes prior: α, β fitted from data           │
 └──────────────────────────────────────────────────────────┘
                     ↓
-FÁZE 4: InvBO INFERENCE
+FÁZE 4: InvBO INFERENCE (IMPROVED v2.0)
 ┌──────────────────────────────────────────────────────────┐
-│ UCB Acquisition (default)                                │
-│ - UCB = μ + β·σ (β=8.0)                                  │
+│ UCB Acquisition with Adaptive β + Noise Injection        │
+│ - UCB = μ + β·σ                                          │
+│ - Adaptive β: 8.0 → 2.0 lineárně přes iterace           │
+│   (více explorace na začátku, více exploitace na konci) │
+│ - Noise injection: scale=0.05 pro diverzitu             │
 │ - 64 restarts, 4096 raw samples                          │
-│ - Distance penalty VYPNUTA pro UCB                       │
 │ - GP přímo na 32D VAE latent (ARD kernel)               │
 └──────────────────────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────────────────────┐
 │ Text Generation (Vec2Text)                               │
-│ - z_opt (32D) → VAE decoder → embedding (768D)           │
+│ - z_opt (32D) + noise → VAE decoder → embedding (768D)   │
 │ - embedding → Vec2Text (32_tokens) → instruction text    │
 │ - Garbage filtering: reject unicode artifacts            │
+│ - 32_tokens model (doporučeno, bez unicode issues)       │
 └──────────────────────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────────────────────┐
@@ -89,14 +94,14 @@ normalize = True  # L2 normalizace (kritické pro Vec2Text)
 - `encode_tensor(text) -> torch.Tensor[768]` - single text na device
 - `encode_batch(texts, batch_size=32) -> np.ndarray[N, 768]`
 
-### InstructionVAE (`encoder.py:86-359`)
+### InstructionVAE (`encoder.py:86-359`) - IMPROVED v2.0
 
-**Architektura:**
+**Vylepšená Architektura (větší kapacita):**
 ```
-Encoder: 768D → 256 (3×) → 128 (2×) → 64 (2×, mu+log_var)
-         GELU + LayerNorm + Dropout(0.1)
+Encoder: 768D → 512 (1.5×) → 256 (2×) → 128 (2×) → 64 (2×, mu+log_var)
+         GELU + LayerNorm + Dropout(0.1) mezi vrstvami
 
-Decoder: 32D → 128 (4×) → 256 (2×) → 768D (3×)
+Decoder: 32D → 128 (4×) → 256 (2×) → 512 (2×) → 768D (1.5×)
          GELU + LayerNorm + Dropout(0.1)
          + L2 normalizace na výstupu (kritické pro GTR)
 ```
@@ -106,14 +111,17 @@ Decoder: 32D → 128 (4×) → 256 (2×) → 768D (3×)
 |----------|---------|-------|
 | `input_dim` | 768 | GTR embedding dimension |
 | `latent_dim` | 32 | VAE latent dimension (24× komprese) |
-| `beta` | 0.01 | KL regularization weight |
+| `beta` | 0.005 | KL regularization weight (sníženo z 0.01) |
 | `gamma` | 0.0 | Cycle consistency (vypnuto) |
+| `mse_weight` | 0.2 | MSE složka v recon loss (20% MSE + 80% cosine) |
 
-**Loss Function:**
+**Loss Function (IMPROVED):**
 ```python
-# Reconstruction loss (cosine-based)
+# Reconstruction loss (kombinace cosine + MSE)
 cosine_sim = F.cosine_similarity(x, x_recon, dim=-1)
-recon_loss = (1 - cosine_sim).mean()
+cosine_loss = (1 - cosine_sim).mean()
+mse_loss = F.mse_loss(x, x_recon)
+recon_loss = (1 - mse_weight) * cosine_loss + mse_weight * mse_loss
 
 # KL divergence to N(0,1)
 kl_loss = -0.5 * (1 + log_var - mu² - exp(log_var)).sum(dim=-1).mean()
@@ -131,6 +139,26 @@ else:
     current_beta = target_beta
 
 # Early stopping se resetuje po annealing warmup
+```
+
+**Curriculum Learning (NEW):**
+```python
+# Postupně zvyšuje komplexitu trénovacích dat
+# Instrukce jsou seřazeny podle délky (kratší = jednodušší)
+
+if epoch < curriculum_epochs:
+    # Lineární progress: 30% → 100%
+    progress = epoch / curriculum_epochs
+    current_pct = start_pct + (1.0 - start_pct) * progress
+    n_embeddings = int(len(embeddings) * current_pct)
+    curr_embeddings = embeddings[:n_embeddings]  # Kratší instrukce první
+else:
+    curr_embeddings = embeddings  # 100% dat
+
+# Parametry:
+# vae_curriculum = True
+# vae_curriculum_start_pct = 0.3  # 30%
+# vae_curriculum_epochs = 5000
 ```
 
 ### VAEWithAdapter (`encoder.py:362-469`)
@@ -219,13 +247,14 @@ noise_standardized = noise / y_std²
 | `ape_max_tokens` | 100 | Max tokens per instruction |
 | `ape_max_length` | 500 | Max character length |
 
-### VAE Trénink
+### VAE Trénink (IMPROVED v2.0)
 | Parametr | Default | Popis |
 |----------|---------|-------|
 | `embedding_dim` | 768 | GTR embedding dimension |
 | `latent_dim` | 32 | VAE latent dimension (24× komprese) |
-| `vae_beta` | 0.01 | KL regularization weight |
+| `vae_beta` | **0.005** | KL regularization weight (sníženo z 0.01) |
 | `vae_gamma` | 0.0 | Cycle consistency (vypnuto) |
+| `vae_mse_weight` | **0.2** | MSE složka v recon loss (NEW) |
 | `vae_epochs` | 50000 | Max training epochs |
 | `vae_annealing_epochs` | 2500 | KL annealing warmup period |
 | `vae_patience` | 1000 | Early stopping patience |
@@ -233,6 +262,9 @@ noise_standardized = noise / y_std²
 | `vae_batch_size` | 64 | Training batch size |
 | `vae_grad_clip` | 1.0 | Gradient clipping threshold |
 | `vae_eta_min` | 1e-4 | Cosine annealing minimum LR |
+| `vae_curriculum` | **True** | Curriculum learning (NEW) |
+| `vae_curriculum_start_pct` | **0.3** | Start s 30% dat |
+| `vae_curriculum_epochs` | **5000** | Epochs pro ramp-up na 100% |
 
 ### Round-Trip Validation
 | Parametr | Default | Popis |
@@ -255,11 +287,14 @@ noise_standardized = noise / y_std²
 | `gp_lr` | 0.0025 | Learning rate (scaled for 32D) |
 | `gp_patience` | 100 | Early stopping patience |
 
-### Inference (Acquisition)
+### Inference (Acquisition) - IMPROVED v2.0
 | Parametr | Default | Popis |
 |----------|---------|-------|
 | `acquisition_type` | "ucb" | "ucb" nebo "logei" |
-| `ucb_beta` | 8.0 | UCB exploration (vyšší = více explorace) |
+| `ucb_beta` | 8.0 | UCB exploration (počáteční hodnota) |
+| `ucb_beta_adaptive` | **True** | Adaptive UCB β scheduling (NEW) |
+| `ucb_beta_final` | **2.0** | Koncová hodnota β (NEW) |
+| `latent_noise_scale` | **0.05** | Noise injection pro diverzitu (NEW) |
 | `num_restarts` | 64 | L-BFGS-B restarts |
 | `raw_samples` | 4096 | Inicializační vzorky |
 | `cosine_sim_threshold` | 0.90 | Min cosine pro akceptaci kandidáta |
@@ -320,11 +355,19 @@ noise_standardized = noise / y_std²
 
 ## Acquisition Functions (`botorch_acq.py`)
 
-### UCB (Upper Confidence Bound)
+### UCB (Upper Confidence Bound) - IMPROVED v2.0
 ```python
 UCB(x) = μ(x) + β·σ(x)
-# β=8.0: Velmi agresivní explorace
-# β=2.0: Balancovanější
+
+# Adaptive β scheduling (NEW):
+# β lineárně klesá z 8.0 na 2.0 přes všechny iterace
+# progress = iteration / total_iterations
+# β = 8.0 * (1 - progress) + 2.0 * progress
+
+# Noise injection (NEW):
+# Po optimalizaci se přidá malý noise k z_opt pro diverzitu
+# z_noisy = z_opt + N(0, 0.05²)
+# z_clipped = clamp(z_noisy, bounds)
 ```
 
 ### LogEI (Log Expected Improvement)
@@ -421,12 +464,17 @@ uv run python -m lipo.run --vae-beta 0.02 --vae-epochs 30000 --vae-annealing 200
 
 ---
 
-## Shrnutí parametrů
+## Shrnutí parametrů (IMPROVED v2.0)
 
 | Komponenta | Parametr | Default | Poznámka |
 |------------|----------|---------|----------|
 | **VAE** | latent_dim | 32 | 24× komprese |
-| | beta | 0.01 | KL weight |
+| | architecture | 768→512→256→128→32 | **Větší kapacita** |
+| | beta | **0.005** | KL weight (sníženo) |
+| | mse_weight | **0.2** | MSE v recon loss (NEW) |
+| | curriculum | **True** | Curriculum learning (NEW) |
+| | curriculum_start_pct | **0.3** | 30% dat na začátku |
+| | curriculum_epochs | **5000** | Ramp-up period |
 | | annealing_epochs | 2500 | Warmup |
 | | epochs | 50000 | Max |
 | | patience | 1000 | Early stop |
@@ -436,11 +484,27 @@ uv run python -m lipo.run --vae-beta 0.02 --vae-epochs 30000 --vae-annealing 200
 | | patience | 100 | |
 | | kernel | Matern 5/2 | ARD (32 lengthscales) |
 | **Inference** | acquisition_type | ucb | ucb/logei |
-| | ucb_beta | 8.0 | Exploration |
+| | ucb_beta | 8.0 | Počáteční exploration |
+| | ucb_beta_adaptive | **True** | Adaptive scheduling (NEW) |
+| | ucb_beta_final | **2.0** | Koncová hodnota |
+| | latent_noise_scale | **0.05** | Noise pro diverzitu (NEW) |
 | | num_restarts | 64 | L-BFGS-B |
 | | raw_samples | 4096 | Initialization |
-| **Vec2Text** | model | 32_tokens | Více diverzity |
+| **Vec2Text** | model | 32_tokens | Doporučeno (bez unicode issues) |
 | **Candidate** | cosine_threshold | 0.90 | Candidate acceptance |
 | | garbage_filter | enabled | Reject unicode artifacts |
 | **TuRBO** | enabled | False | Use UCB instead |
 | **Distance** | enabled | True | Auto-disabled for UCB |
+
+---
+
+## Changelog
+
+### v2.0 (2025-01-05)
+- **VAE Architecture**: Zvětšena kapacita encoderu/decoderu (přidána 512D vrstva)
+- **VAE Loss**: Přidána MSE složka (20%) k cosine loss pro lepší rekonstrukci
+- **VAE Beta**: Sníženo z 0.01 na 0.005 pro lepší rekonstrukci
+- **Curriculum Learning**: Trénink začíná s kratšími (jednoduššími) instrukcemi
+- **Adaptive UCB β**: Lineární decay z 8.0 na 2.0 (explorace → exploitace)
+- **Noise Injection**: Malý noise (0.05) k z_opt pro diverzitu generovaných kandidátů
+- **Vec2Text**: Default změněn na 32_tokens (512_tokens má unicode issues)
