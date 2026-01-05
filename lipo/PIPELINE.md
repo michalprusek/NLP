@@ -58,13 +58,10 @@ FÁZE 4: InvBO INFERENCE
 └──────────────────────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────────────────────┐
-│ InvBO Inversion Loop                                     │
+│ Text Generation (Vec2Text)                               │
 │ - z_opt (32D) → VAE decoder → embedding (768D)           │
 │ - embedding → Vec2Text (32_tokens) → instruction text    │
-│ - text → GTR → z_real                                    │
 │ - Garbage filtering: reject unicode artifacts            │
-│ - Gap check: ||z_opt - z_real|| < threshold              │
-│ - Max 3 inversion iterací                                │
 └──────────────────────────────────────────────────────────┘
                     ↓
 ┌──────────────────────────────────────────────────────────┐
@@ -265,9 +262,6 @@ noise_standardized = noise / y_std²
 | `ucb_beta` | 8.0 | UCB exploration (vyšší = více explorace) |
 | `num_restarts` | 64 | L-BFGS-B restarts |
 | `raw_samples` | 4096 | Inicializační vzorky |
-| `use_inversion` | True | Použít InvBO inversion loop |
-| `max_inversion_iters` | 3 | Max inversion iterací per step |
-| `gap_threshold` | 0.08 | Re-inversion threshold |
 | `cosine_sim_threshold` | 0.90 | Min cosine pro akceptaci kandidáta |
 | `max_rejection_attempts` | 10 | Max pokusů před forced acceptance |
 
@@ -303,13 +297,10 @@ noise_standardized = noise / y_std²
 
 **DŮLEŽITÉ:** Distance penalty se aplikuje pouze pro **LogEI**, ne pro **UCB** (UCB už exploruje přes σ člen).
 
-### Inversion Optimization
+### Latent Space
 | Parametr | Default | Popis |
 |----------|---------|-------|
-| `inversion_n_steps` | 100 | Adam optimization steps |
-| `inversion_lr` | 0.1 | Adam learning rate |
-| `inversion_convergence_threshold` | 0.01 | Early stop threshold |
-| `latent_margin` | 0.2 | Margin pro latent bounds expansion |
+| `latent_margin` | 0.2 | Margin pro latent bounds expansion (20% each side) |
 
 ### GP Retrain (during inference)
 | Parametr | Default | Popis |
@@ -338,10 +329,10 @@ UCB(x) = μ(x) + β·σ(x)
 
 ### LogEI (Log Expected Improvement)
 ```python
-# Numericky stabilní pro velmi malé improvement hodnoty
-LogEI(x) = log_h(z) + log(σ)
-# kde z = (best - μ(x) - ξ) / σ(x)
-# ξ = 0.01 (exploration-exploitation trade-off)
+# Numericky stabilní implementace přes BoTorch qLogExpectedImprovement
+# EI(x) = (best - μ(x))·Φ(z) + σ(x)·φ(z)
+# LogEI = log(EI) - stabilní i pro velmi malé hodnoty
+# kde z = (best - μ(x)) / σ(x)
 ```
 
 ### DistancePenalizedLogEI
@@ -449,9 +440,7 @@ uv run python -m lipo.run --vae-beta 0.02 --vae-epochs 30000 --vae-annealing 200
 | | num_restarts | 64 | L-BFGS-B |
 | | raw_samples | 4096 | Initialization |
 | **Vec2Text** | model | 32_tokens | Více diverzity |
-| **Inversion** | max_iters | 3 | Per step |
-| | gap_threshold | 0.08 | Re-inversion |
-| | cosine_threshold | 0.90 | Candidate acceptance |
+| **Candidate** | cosine_threshold | 0.90 | Candidate acceptance |
 | | garbage_filter | enabled | Reject unicode artifacts |
 | **TuRBO** | enabled | False | Use UCB instead |
 | **Distance** | enabled | True | Auto-disabled for UCB |

@@ -388,14 +388,6 @@ def main():
         help="UCB exploration parameter (higher = more exploration) (default: 8.0)"
     )
     parser.add_argument(
-        "--max-inversion-iters", type=int, default=3,
-        help="Maximum inversion iterations per step (default: 3)"
-    )
-    parser.add_argument(
-        "--gap-threshold", type=float, default=0.08,
-        help="Gap threshold for re-inversion (cosine distance) (default: 0.08)"
-    )
-    parser.add_argument(
         "--vec2text-beam", type=int, default=8,
         help="Beam width for Vec2Text generation (default: 8)"
     )
@@ -528,8 +520,6 @@ def main():
         raw_samples=args.raw_samples,
         acquisition_type=args.acquisition_type,
         ucb_beta=args.ucb_beta,
-        max_inversion_iters=args.max_inversion_iters,
-        gap_threshold=args.gap_threshold,
         vec2text_beam=args.vec2text_beam,
         vec2text_model=args.vec2text_model,
         vec2text_max_length=args.vec2text_max_length,
@@ -779,9 +769,6 @@ def main():
         iterations=args.iterations,
         num_restarts=config.num_restarts,
         raw_samples=config.raw_samples,
-        use_inversion=config.use_inversion,
-        max_inversion_iters=config.max_inversion_iters,
-        gap_threshold=config.gap_threshold,
         skip_eval=args.skip_eval,
         verbose=True,
     )
@@ -901,7 +888,6 @@ def _save_results(
             "iterations": len(inference.iteration_history),
             "llm_calls": inference.total_llm_calls,
             "improvement": best_error - inference.best_error,
-            "use_inversion": True,
             "use_botorch": True,
             "history": [
                 {
@@ -913,8 +899,6 @@ def _save_results(
                     "best_so_far": r.best_error_so_far,
                     "cosine_similarity": r.cosine_similarity,
                     "log_ei": r.log_ei,
-                    "gap": r.gap,
-                    "inversion_iters": r.inversion_iters,
                     "rejection_attempts": r.rejection_attempts,
                     "low_quality_accepted": r.low_quality_accepted,
                     "gp_samples": r.gp_samples,

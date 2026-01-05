@@ -19,7 +19,7 @@ Complete reference for all configurable hyperparameters in the LIPO (Latent Inst
 9. [Vec2Text Settings](#9-vec2text-settings)
 10. [TuRBO Trust Region](#10-turbo-trust-region)
 11. [PAS (Potential-Aware Anchor Selection)](#11-pas-potential-aware-anchor-selection)
-12. [Inversion Optimization](#12-inversion-optimization)
+12. [Latent Space](#12-latent-space)
 13. [Device & Paths](#13-device--paths)
 14. [CLI-Only Arguments](#14-cli-only-arguments)
 16. [Architecture Details](#architecture-details)
@@ -195,9 +195,6 @@ Parameters for the BoTorch-based acquisition function optimization.
 | `ucb_beta` | 8.0 | float | `--ucb-beta` | UCB exploration parameter (higher = more exploration) |
 | `num_restarts` | 64 | int | `--num-restarts` | L-BFGS-B multi-start restarts |
 | `raw_samples` | 4096 | int | `--raw-samples` | Initial random samples for seeding (higher for better coverage in high-D) |
-| `use_inversion` | True | bool | - | Enable InvBO inversion loop |
-| `max_inversion_iters` | 3 | int | `--max-inversion-iters` | Max inversion iterations per step |
-| `gap_threshold` | 0.08 | float | `--gap-threshold` | Gap threshold for re-inversion |
 | `cosine_sim_threshold` | 0.90 | float | - | Min cosine similarity for acceptance |
 | `max_rejection_attempts` | 10 | int | - | Max rejection attempts before forced accept |
 
@@ -214,15 +211,7 @@ Parameters for the BoTorch-based acquisition function optimization.
 - **Higher `ucb_beta`**: More exploration, less exploitation
 - **Higher `num_restarts`**: More likely to find global optimum but slower
 - **Higher `raw_samples`**: Better initialization coverage (important in high-D without TuRBO)
-- **Lower `gap_threshold`**: Stricter alignment between optimized and inverted embeddings
 - **Higher `cosine_sim_threshold`**: Rejects more candidates, ensuring quality but may slow convergence
-
-**Inversion Loop**:
-```
-z_opt → VAE decode → Vec2Text → GTR encode → z_real
-if cosine_distance(z_opt, z_real) > gap_threshold:
-    Re-optimize from z_real (up to max_inversion_iters times)
-```
 
 ---
 
@@ -301,23 +290,15 @@ Thompson Sampling-based anchor selection for trust region initialization.
 
 ---
 
-## 12. Inversion Optimization
+## 12. Latent Space
 
-Parameters for the latent space refinement during inversion.
+Parameters for latent space bounds.
 
 | Parameter | Default | Type | Description |
 |-----------|---------|------|-------------|
-| `inversion_n_steps` | 100 | int | Adam optimization steps |
-| `inversion_lr` | 0.1 | float | Adam learning rate |
-| `inversion_convergence_threshold` | 0.01 | float | Early stop if change < threshold |
-| `latent_margin` | 0.2 | float | Margin for expanding latent bounds |
+| `latent_margin` | 0.2 | float | Margin for expanding latent bounds (20% each side) |
 
-**Purpose**: After Vec2Text generates text from a target embedding, the latent refinement step adjusts the latent point to better match the actual GTR embedding of the generated text.
-
-**Impact**:
-- **Higher `inversion_n_steps`**: Better alignment but slower
-- **Higher `inversion_lr`**: Faster convergence but may overshoot
-- **`latent_margin`**: Expands bounds by 20% each side to prevent edge effects
+**Purpose**: Expands optimization bounds beyond observed data range to prevent edge effects.
 
 ---
 
@@ -416,7 +397,6 @@ Quick reference for the most important thresholds:
 | Threshold | Value | Impact |
 |-----------|-------|--------|
 | `cosine_sim_threshold` | 0.90 | Rejects Vec2Text outputs with low fidelity |
-| `gap_threshold` | 0.08 | Controls embedding-text alignment strictness |
 | `vae_beta` | 0.01 | KL regularization (10x baseline for tight latent) |
 | `latent_dim` | 32 | VAE latent dimension (24x compression from 768D) |
 | `vec2text_model` | 32_tokens | Recommended model (512_tokens has unicode issues) |
@@ -442,10 +422,8 @@ Quick reference for the most important thresholds:
 
 ### For Faster Inference
 - Decrease `num_restarts` and `raw_samples`
-- Decrease `max_inversion_iters`
-- Use "32_tokens" Vec2Text model (faster inversion)
+- Use "32_tokens" Vec2Text model (faster generation)
 
 ### For Better Quality
 - Increase `cosine_sim_threshold`
-- Decrease `gap_threshold`
 - Increase `vec2text_beam`
