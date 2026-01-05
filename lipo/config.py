@@ -53,11 +53,11 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.01  # KL regularization weight (10x higher for tighter latent space)
+    vae_beta: float = 0.01  # KL regularization weight
     vae_gamma: float = 0.0  # Cycle consistency disabled (compensated by higher beta)
-    vae_epochs: int = 20000  # Increased for better convergence with higher beta
-    vae_annealing_epochs: int = 500
-    vae_patience: int = 500
+    vae_epochs: int = 50000  # Increased for better reconstruction with 32D latent
+    vae_annealing_epochs: int = 2500  # 5% of epochs for KL warmup
+    vae_patience: int = 1000  # More patience for longer training
     vae_lr: float = 0.0006
     vae_batch_size: int = 64
     vae_grad_clip: float = 1.0
@@ -65,7 +65,7 @@ class Config:
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 32  # VAE latent dimension (768/32 = 24x compression, denser GP coverage)
+    latent_dim: int = 32  # VAE latent dimension (768/32 = 24x compression, balance between fidelity and smoothness)
     # Note: No adapter - GP works directly on 32D VAE latent with ARD kernel
 
     # === Round-Trip Validation ===
@@ -80,12 +80,14 @@ class Config:
 
     # === GP Training ===
     gp_epochs: int = 10000
-    gp_lr: float = 0.01
+    gp_lr: float = 0.0025  # Scaled down for 32D latent (0.01 * 0.25 per gp.py:446)
     gp_patience: int = 100
 
     # === Inference ===
     num_restarts: int = 64  # L-BFGS-B restarts for BoTorch optimization
-    raw_samples: int = 1024  # Raw samples for initialization seeding
+    raw_samples: int = 4096  # Raw samples for initialization (higher for better coverage in high-D)
+    acquisition_type: str = "ucb"  # Acquisition function: "ucb" or "logei"
+    ucb_beta: float = 8.0  # UCB exploration parameter (higher = more exploration)
     use_inversion: bool = True  # Use InvBO inversion loop
     max_inversion_iters: int = 3  # Maximum inversion iterations per step
     gap_threshold: float = 0.08  # Gap threshold for re-inversion (stricter to reduce optimization gap)
@@ -94,12 +96,12 @@ class Config:
 
     # === Vec2Text ===
     vec2text_beam: int = 8  # Beam width for Vec2Text generation
-    vec2text_model: str = "512_tokens"  # "32_tokens" or "512_tokens"
+    vec2text_model: str = "32_tokens"  # "32_tokens" (faster, more diverse) or "512_tokens" (longer but unicode issues)
     vec2text_max_length: int = 128  # Maximum output tokens for Vec2Text
 
     # === TuRBO (Trust Region) ===
     # Parameters from Eriksson et al. "Scalable Global Optimization via Local BO" (NeurIPS 2019)
-    turbo_enabled: bool = True  # Enable trust region optimization
+    turbo_enabled: bool = False  # Disabled for global exploration (use distance penalty instead)
     turbo_L_init: float = 0.8  # Initial side length (paper default)
     turbo_L_max: float = 1.6  # Maximum side length (paper default)
     turbo_L_min: float = 0.0078  # Minimum side length (2^-7, triggers restart)
@@ -110,6 +112,12 @@ class Config:
     # From InvBO paper - Thompson Sampling based anchor selection
     pas_enabled: bool = True  # Enable potential-aware anchor selection
     pas_n_candidates: int = 100  # Candidates per anchor for Thompson Sampling
+
+    # === Distance Penalty (when TuRBO disabled) ===
+    # Penalizes candidates far from training data to prevent GP optimization in empty space
+    distance_penalty_enabled: bool = True  # Enable when turbo_enabled=False
+    distance_weight: float = 2.0  # Penalty strength (higher = stronger constraint)
+    distance_threshold: float = 0.3  # Min distance before penalty kicks in (normalized space)
 
     # === Inversion Optimization ===
     inversion_n_steps: int = 100  # Adam optimization steps

@@ -284,6 +284,11 @@ class GPWithEI:
         # Best observed value (for EI)
         self.y_best: Optional[float] = None
 
+        # Empirical Bayes prior parameters (set from training data)
+        # Default to Beta(1,1) = uniform prior (equivalent to Laplace smoothing)
+        self.beta_alpha: float = 1.0
+        self.beta_beta: float = 1.0
+
         # Training stats (populated after train())
         self.training_stats: Dict[str, Any] = {}
 
@@ -292,6 +297,8 @@ class GPWithEI:
         embeddings: torch.Tensor,
         error_rates: torch.Tensor,
         fidelities: Optional[torch.Tensor] = None,
+        beta_alpha: float = 1.0,
+        beta_beta: float = 1.0,
     ):
         """Set training data for GP.
 
@@ -310,7 +317,12 @@ class GPWithEI:
             embeddings: Instruction embeddings (N, 768)
             error_rates: Error rates (N,) in [0, 1] - will be negated internally
             fidelities: Sample counts for each observation (N,) - used for heteroscedastic noise
+            beta_alpha: Empirical Bayes prior alpha (default 1.0 = uniform prior)
+            beta_beta: Empirical Bayes prior beta (default 1.0 = uniform prior)
         """
+        # Store Empirical Bayes prior parameters for noise computation
+        self.beta_alpha = beta_alpha
+        self.beta_beta = beta_beta
         if self.vae_with_adapter is None:
             raise RuntimeError("vae_with_adapter must be set before setting training data.")
 
@@ -361,18 +373,18 @@ class GPWithEI:
             )
 
     def _compute_observation_noise(self, y: torch.Tensor, fidelity: torch.Tensor) -> torch.Tensor:
-        """Compute observation noise variance using Beta posterior.
+        """Compute observation noise variance using Beta posterior with Empirical Bayes prior.
 
-        Uses Beta(1,1) prior (uniform) with n observations.
+        Uses Empirical Bayes prior Beta(α, β) learned from data.
         For error_rate p measured on n samples:
-        - Posterior: Beta(α=1+errors, β=1+successes)
-        - Posterior mean: α/(α+β) = (1+errors)/(n+2)  [same as Laplace]
-        - Posterior variance: αβ/((α+β)²(α+β+1)) = p(1-p)/(n+3)
+        - Posterior: Beta(α+errors, β+successes)
+        - Posterior mean: (errors + α) / (n + α + β)
+        - Posterior variance: p(1-p) / (n + α + β + 1)
 
-        This is more principled than Bernoulli variance p(1-p)/n because:
-        - Naturally handles p=0 or p=1 (no zero variance)
-        - Consistent Bayesian treatment (mean and variance from same posterior)
-        - Slightly more conservative for small n
+        With Empirical Bayes:
+        - Prior is centered at actual data mean (not 50%)
+        - More accurate uncertainty for low-fidelity samples
+        - Falls back to Beta(1,1) if prior not set
 
         Args:
             y: Beta posterior mean of error rates (N,) - already smoothed
@@ -381,10 +393,14 @@ class GPWithEI:
         Returns:
             Beta posterior variance for each point (N,)
         """
-        # Beta posterior variance: p(1-p)/(n+3)
+        # Get Empirical Bayes prior parameters
+        alpha = self.beta_alpha
+        beta = self.beta_beta
+
+        # Beta posterior variance: p(1-p) / (n + α + β + 1)
         # where p = posterior mean, n = fidelity
         # This naturally handles p=0 or p=1 (no zero variance problem)
-        variance = (y * (1 - y)) / (fidelity + 3)
+        variance = (y * (1 - y)) / (fidelity + alpha + beta + 1)
 
         # Minimal clamp for numerical stability only
         # Beta posterior already provides reasonable variance even for extreme p
@@ -875,7 +891,7 @@ class GPWithEI:
 
         NOTE: Does NOT retrain - call train() after adding observations.
 
-        Error rate is converted to Beta(1,1) posterior mean and negated internally
+        Error rate is converted to Empirical Bayes posterior mean and negated internally
         for consistency with training data and BoTorch compatibility.
 
         Args:
@@ -918,11 +934,11 @@ class GPWithEI:
         # Move result back to GP device for training data storage
         new_z = new_z.to(self.device)
 
-        # Beta(1,1) posterior mean for consistency with training data
-        # Formula: (errors + 1) / (n + 2) - Bayesian regularization for small samples
+        # Empirical Bayes posterior mean for consistency with training data
+        # Formula: (errors + α) / (n + α + β) - data-driven prior instead of uniform
         # This matches the posterior mean applied in training.py:load_from_hyperband_evaluations()
         num_errors = error_rate * fidelity
-        posterior_mean = (num_errors + 1) / (fidelity + 2)
+        posterior_mean = (num_errors + self.beta_alpha) / (fidelity + self.beta_alpha + self.beta_beta)
 
         # Store posterior mean for noise computation (Beta posterior variance)
         new_error_original = torch.tensor([posterior_mean], dtype=torch.float32, device=self.device)

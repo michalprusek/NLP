@@ -7,10 +7,56 @@ Provides:
 Self-contained within lipo package. Uses external libs: vec2text, safetensors, huggingface_hub.
 """
 
+import re
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
+
+
+def is_valid_instruction(text: str, min_length: int = 10) -> bool:
+    """Validate instruction text quality.
+
+    Rejects instructions with:
+    - Unicode garbage characters (common Vec2Text artifacts)
+    - Too short length (< min_length characters)
+    - Excessive whitespace (> 50% whitespace)
+    - Repetitive patterns (same word 4+ times in a row)
+
+    Args:
+        text: Instruction text to validate
+        min_length: Minimum acceptable length (default: 10 chars)
+
+    Returns:
+        True if instruction passes all quality checks
+    """
+    if not text:
+        return False
+
+    # Reject unicode garbage (common Vec2Text artifacts from 512_tokens model)
+    # These characters indicate encoding issues in the inversion
+    unicode_garbage = r'[»«â€¢™®©†‡°±²³µ¶·¹º¼½¾¿×÷]'
+    if re.search(unicode_garbage, text):
+        return False
+
+    # Reject too short
+    stripped = text.strip()
+    if len(stripped) < min_length:
+        return False
+
+    # Reject mostly whitespace (> 50% whitespace)
+    non_whitespace = len(stripped.replace(' ', '').replace('\t', '').replace('\n', ''))
+    if non_whitespace < len(stripped) * 0.5:
+        return False
+
+    # Reject repetitive patterns (same word 4+ times consecutively)
+    words = stripped.lower().split()
+    if len(words) >= 4:
+        for i in range(len(words) - 3):
+            if words[i] == words[i+1] == words[i+2] == words[i+3]:
+                return False
+
+    return True
 
 from lipo.config import Config, get_device
 from lipo.encoder import GTRInstructionEncoder, InstructionVAE
@@ -533,6 +579,11 @@ class LIPOHyperbandInference:
         else:
             self.anchor_selector = None
 
+        # Distance penalty settings (used when TuRBO disabled)
+        self.distance_penalty_enabled = getattr(config, 'distance_penalty_enabled', True)
+        self.distance_weight = getattr(config, 'distance_weight', 2.0)
+        self.distance_threshold = getattr(config, 'distance_threshold', 0.3)
+
         # Cache global bounds (computed on first iteration)
         self._global_bounds: Optional[torch.Tensor] = None
 
@@ -558,38 +609,66 @@ class LIPOHyperbandInference:
     def optimize_latent_botorch(
         self,
         num_restarts: int = 64,
-        raw_samples: int = 1024,
+        raw_samples: int = 4096,
         verbose: bool = True,
         seed: Optional[int] = None,
         bounds: Optional[torch.Tensor] = None,
+        acquisition_type: Optional[str] = None,
+        ucb_beta: Optional[float] = None,
     ) -> Tuple[torch.Tensor, float]:
-        """Optimize VAE latent using BoTorch qLogExpectedImprovement.
+        """Optimize VAE latent using BoTorch acquisition function.
+
+        Supports both UCB (exploration-focused) and LogEI (exploitation-focused).
 
         Uses multi-start L-BFGS-B with proper gradient flow:
-            z (32D VAE latent) -> GP posterior -> qLogEI
+            z (latent_dim VAE latent) -> GP posterior -> Acquisition
 
-        GP operates directly on 32D VAE latent (no adapter compression).
+        GP operates directly on VAE latent (no adapter compression).
         ARD lengthscales allow the kernel to learn which dimensions matter.
 
         Args:
             num_restarts: Number of L-BFGS-B restarts (default: 64)
-            raw_samples: Raw samples for initialization seeding (default: 1024)
+            raw_samples: Raw samples for initialization seeding (default: 4096)
             verbose: Print progress
             seed: Optional random seed for reproducibility
             bounds: Optional custom bounds (e.g., trust region bounds). If None, uses global bounds.
+            acquisition_type: "ucb" or "logei" (default: from config)
+            ucb_beta: UCB exploration parameter (default: from config)
 
         Returns:
-            (optimal_latent, log_ei) tuple where:
+            (optimal_latent, acq_value) tuple where:
             - optimal_latent: Best VAE latent tensor, shape (latent_dim,)
-            - log_ei: Log expected improvement value at optimal point
+            - acq_value: Acquisition function value at optimal point
         """
         from lipo.botorch_acq import (
             LatentSpaceAcquisition,
             get_latent_bounds,
         )
 
+        # Use config defaults if not provided
+        if acquisition_type is None:
+            acquisition_type = self.config.acquisition_type
+        if ucb_beta is None:
+            ucb_beta = self.config.ucb_beta
+
+        # Determine if distance penalty should be active
+        # UCB already explores via σ term, so disable distance penalty for UCB
+        use_distance_penalty = (
+            self.distance_penalty_enabled
+            and not self.use_turbo
+            and acquisition_type != "ucb"
+        )
+
         if verbose:
-            print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
+            if acquisition_type == "ucb":
+                acq_name = f"UCB (β={ucb_beta})"
+            else:
+                acq_name = "LogEI"
+            if use_distance_penalty:
+                acq_name = f"DistancePenalized{acq_name}"
+            print(f"Optimizing with BoTorch {acq_name} ({num_restarts} restarts, {raw_samples} raw samples)...")
+            if use_distance_penalty:
+                print(f"  Distance penalty: weight={self.distance_weight}, threshold={self.distance_threshold}")
 
         # Get latent bounds (use provided bounds or compute global bounds)
         if bounds is None:
@@ -601,19 +680,31 @@ class LIPOHyperbandInference:
                 margin=self.config.latent_margin,
             )
 
+        # Compute normalized training data for distance penalty
+        X_train_normalized = None
+        if use_distance_penalty:
+            denom = self.gp.X_max - self.gp.X_min
+            denom[denom == 0] = 1.0
+            X_train_normalized = (self.gp.X_train - self.gp.X_min) / denom
+
         # Create acquisition optimizer
-        # Optimization path: z (32D) → GP → kernel (32D ARD) → qLogEI
-        # TuRBO trust region constrains search (bounds parameter)
+        # Optimization path: z (latent_dim) → GP → kernel (ARD) → Acquisition (+ distance penalty)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
             device=self.device,
+            X_train_normalized=X_train_normalized,
+            distance_penalty_enabled=use_distance_penalty,
+            distance_weight=self.distance_weight,
+            distance_threshold=self.distance_threshold,
+            acquisition_type=acquisition_type,
+            ucb_beta=ucb_beta,
         )
 
         # best_f is the best observed GP target value (-min_error).
         # Since GP predicts -error_rate, qLogEI maximizes (finds lower error).
         best_f = self.gp.y_best
-        z_opt, log_ei = acq_optimizer.optimize(
+        z_opt, acq_value = acq_optimizer.optimize(
             best_f=best_f,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
@@ -621,10 +712,11 @@ class LIPOHyperbandInference:
         )
 
         if verbose:
-            print(f"  BoTorch LogEI: {log_ei.item():.4f}")
+            acq_label = "UCB" if acquisition_type == "ucb" else "LogEI"
+            print(f"  BoTorch {acq_label}: {acq_value.item():.4f}")
 
         # Return as 1D tensor
-        return z_opt.squeeze(), log_ei.item()
+        return z_opt.squeeze(), acq_value.item()
 
     def inversion_step(
         self,
@@ -926,7 +1018,7 @@ GP Status:
 
         # Main loop with rejection for low cosine similarity
         for attempt in range(max_rejection_attempts):
-            # Optimize latent using BoTorch qLogEI (within trust region if enabled)
+            # Optimize latent using BoTorch acquisition (UCB or LogEI)
             # Use different seed for each attempt to get different candidates
             attempt_seed = iteration * max_rejection_attempts + attempt
             z_opt, log_ei = self.optimize_latent_botorch(
@@ -1000,6 +1092,20 @@ GP Status:
             cosine_sim = F.cosine_similarity(
                 embedding.unsqueeze(0), reencoded.unsqueeze(0)
             ).item()
+
+            # Check instruction text quality (garbage filtering)
+            if not is_valid_instruction(instruction):
+                if attempt < max_rejection_attempts - 1:
+                    if verbose:
+                        print(f"  REJECTED: Invalid instruction (garbage/too short), "
+                              f"retrying ({attempt + 1}/{max_rejection_attempts})")
+                    continue  # Skip cosine check, go to next attempt
+                else:
+                    print(f"WARNING: Accepting invalid instruction after {max_rejection_attempts} attempts")
+                    print(f"  Instruction: {instruction[:80]}...")
+                    rejection_attempts = attempt
+                    low_quality_accepted = True
+                    break  # Accept despite garbage
 
             # Check cosine similarity threshold
             if cosine_sim >= cosine_sim_threshold:

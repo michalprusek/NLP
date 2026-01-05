@@ -55,9 +55,9 @@ Variational Autoencoder training parameters for learning the instruction latent 
 |-----------|---------|------|----------|-------------|
 | `vae_beta` | 0.01 | float | `--vae-beta` | KL regularization weight |
 | `vae_gamma` | 0.0 | float | `--vae-gamma` | Cycle consistency weight (disabled) |
-| `vae_epochs` | 20000 | int | `--vae-epochs` | Maximum training epochs |
-| `vae_annealing_epochs` | 500 | int | `--vae-annealing` | KL annealing warmup period |
-| `vae_patience` | 500 | int | - | Early stopping patience (after annealing) |
+| `vae_epochs` | 50000 | int | `--vae-epochs` | Maximum training epochs |
+| `vae_annealing_epochs` | 2500 | int | `--vae-annealing` | KL annealing warmup period (5% of epochs) |
+| `vae_patience` | 1000 | int | - | Early stopping patience (after annealing) |
 | `vae_lr` | 0.0006 | float | - | AdamW learning rate |
 | `vae_batch_size` | 64 | int | - | Training batch size |
 | `vae_grad_clip` | 1.0 | float | - | Gradient clipping threshold |
@@ -84,18 +84,18 @@ Core dimensionality settings for the embedding and latent spaces.
 | Parameter | Default | Type | Description |
 |-----------|---------|------|-------------|
 | `embedding_dim` | 768 | int | GTR-T5-Base embedding dimension (fixed) |
-| `latent_dim` | 32 | int | VAE latent space dimension |
+| `latent_dim` | 32 | int | VAE latent space dimension (24x compression) |
 
 **Purpose**: Defines the compression ratio of the VAE. The 768D GTR embeddings are compressed to 32D latent vectors (24x compression).
 
 **Impact**:
 - **Higher `latent_dim`** (e.g., 64): More expressive but harder to optimize with GP, risk of overfitting
-- **Lower `latent_dim`** (e.g., 16): Easier optimization but may lose instruction nuances
+- **Lower `latent_dim`** (e.g., 16): Easier optimization but worse reconstruction quality (48x compression loses nuances)
 
 **Architecture Flow**:
 ```
-Encoder: 768D → 384 → 192 → 2×32 (mu + log_var)
-Decoder: 32D → 192 → 384 → 768D (L2 normalized)
+Encoder: 768D → 256 → 128 → 2×32 (mu + log_var)
+Decoder: 32D → 128 → 256 → 768D (L2 normalized)
 ```
 
 ---
@@ -191,19 +191,29 @@ Parameters for the BoTorch-based acquisition function optimization.
 
 | Parameter | Default | Type | CLI Flag | Description |
 |-----------|---------|------|----------|-------------|
+| `acquisition_type` | "ucb" | str | `--acquisition-type` | Acquisition function: "ucb" or "logei" |
+| `ucb_beta` | 8.0 | float | `--ucb-beta` | UCB exploration parameter (higher = more exploration) |
 | `num_restarts` | 64 | int | `--num-restarts` | L-BFGS-B multi-start restarts |
-| `raw_samples` | 1024 | int | `--raw-samples` | Initial random samples for seeding |
+| `raw_samples` | 4096 | int | `--raw-samples` | Initial random samples for seeding (higher for better coverage in high-D) |
 | `use_inversion` | True | bool | - | Enable InvBO inversion loop |
 | `max_inversion_iters` | 3 | int | `--max-inversion-iters` | Max inversion iterations per step |
 | `gap_threshold` | 0.08 | float | `--gap-threshold` | Gap threshold for re-inversion |
 | `cosine_sim_threshold` | 0.90 | float | - | Min cosine similarity for acceptance |
 | `max_rejection_attempts` | 10 | int | - | Max rejection attempts before forced accept |
 
-**Purpose**: Controls the inner optimization loop that finds the best latent point according to the GP acquisition function (qLogEI).
+**Purpose**: Controls the inner optimization loop that finds the best latent point according to the GP acquisition function.
+
+**Acquisition Functions**:
+- **UCB (Upper Confidence Bound)**: `μ(x) + β·σ(x)` - prefers regions with high uncertainty
+  - β=8.0 (default): Very aggressive exploration, forces GP to try unexplored regions
+  - Distance penalty is automatically DISABLED for UCB
+- **LogEI**: Numerically stable Expected Improvement - more balanced but may get stuck in local optima
+  - Distance penalty is applied when using LogEI
 
 **Impact**:
+- **Higher `ucb_beta`**: More exploration, less exploitation
 - **Higher `num_restarts`**: More likely to find global optimum but slower
-- **Higher `raw_samples`**: Better initialization coverage
+- **Higher `raw_samples`**: Better initialization coverage (important in high-D without TuRBO)
 - **Lower `gap_threshold`**: Stricter alignment between optimized and inverted embeddings
 - **Higher `cosine_sim_threshold`**: Rejects more candidates, ensuring quality but may slow convergence
 
@@ -222,20 +232,20 @@ Text inversion model configuration for converting embeddings back to text.
 
 | Parameter | Default | Type | CLI Flag | Description |
 |-----------|---------|------|----------|-------------|
-| `vec2text_model` | "512_tokens" | str | `--vec2text-model` | Model variant |
+| `vec2text_model` | "32_tokens" | str | `--vec2text-model` | Model variant (32_tokens preferred) |
 | `vec2text_beam` | 8 | int | `--vec2text-beam` | Beam search width |
 | `vec2text_max_length` | 128 | int | `--vec2text-max-length` | Max output tokens |
 
-**Purpose**: Vec2Text inverts GTR embeddings back to text. The "512_tokens" variant supports longer sequences than "32_tokens" but is slower.
+**Purpose**: Vec2Text inverts GTR embeddings back to text.
 
 **Impact**:
 - **Higher `vec2text_beam`**: Better quality but slower generation
-- **"512_tokens" model**: Better for longer instructions
-- **"32_tokens" model**: Faster but limited to short instructions
+- **"32_tokens" model**: Faster, more diverse outputs, **recommended**
+- **"512_tokens" model**: Longer sequences but has unicode garbage issues (»â€ artifacts)
 
 **Model Variants**:
-- `"32_tokens"`: ielabgroup/vec2text-small (fast, short sequences)
-- `"512_tokens"`: vec2text official (slower, longer sequences)
+- `"32_tokens"`: ielabgroup/vec2text with corrector (fast, more diverse, **recommended**)
+- `"512_tokens"`: vec2text official (longer sequences but produces unicode artifacts)
 
 ---
 
@@ -358,16 +368,16 @@ Arguments available only via command line, not in config.py.
 Input: 768D GTR embedding (L2 normalized)
 
 Encoder:
-  Linear(768 → 384) → GELU → LayerNorm
-  Linear(384 → 192) → GELU → LayerNorm
-  Linear(192 → 64) → Split into mu (32D) + log_var (32D)
+  Linear(768 → 256) → GELU → LayerNorm → Dropout(0.1)
+  Linear(256 → 128) → GELU → LayerNorm
+  Linear(128 → 64) → Split into mu (32D) + log_var (32D)
 
 Reparameterization: z = mu + exp(0.5 * log_var) * epsilon
 
 Decoder:
-  Linear(32 → 192) → GELU → LayerNorm
-  Linear(192 → 384) → GELU → LayerNorm
-  Linear(384 → 768) → L2 Normalize
+  Linear(32 → 128) → GELU → LayerNorm
+  Linear(128 → 256) → GELU → LayerNorm → Dropout(0.1)
+  Linear(256 → 768) → L2 Normalize
 ```
 
 ### GP Architecture
@@ -408,6 +418,8 @@ Quick reference for the most important thresholds:
 | `cosine_sim_threshold` | 0.90 | Rejects Vec2Text outputs with low fidelity |
 | `gap_threshold` | 0.08 | Controls embedding-text alignment strictness |
 | `vae_beta` | 0.01 | KL regularization (10x baseline for tight latent) |
+| `latent_dim` | 32 | VAE latent dimension (24x compression from 768D) |
+| `vec2text_model` | 32_tokens | Recommended model (512_tokens has unicode issues) |
 | `turbo_L_min` | 0.0078 | Triggers trust region restart |
 | `turbo_L_init` | 0.8 | Initial trust region size (paper default) |
 | `roundtrip_validation_threshold` | 0.90 | Min quality for full pipeline |

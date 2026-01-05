@@ -89,11 +89,11 @@ class InstructionVAE(nn.Module):
     Provides smooth latent space via KL regularization to N(0,1).
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
-    Architecture (default 32D latent):
-        Encoder: 768D → 384 → 192 → 96 → 2*32 (mu + log_var)
-        Decoder: 32D → 96 → 192 → 384 → 768D (L2 normalized)
+    Architecture (32D latent):
+        Encoder: 768D → 256 → 128 → 2*32 (mu + log_var)
+        Decoder: 32D → 128 → 256 → 768D (L2 normalized)
 
-    Compression ratios per layer: 2× → 2× → 2× → 3× (gradual, max 3×)
+    Compression ratios per layer: 3× → 2× → 2× (gradual)
 
     Loss:
         L = recon_loss + beta * KL(q(z|x) || N(0,1))
@@ -118,7 +118,7 @@ class InstructionVAE(nn.Module):
         Args:
             input_dim: Input embedding dimension (768 for GTR)
             latent_dim: Latent space dimension (32 by default, 24x compression)
-            beta: KL regularization weight (0.01 for tight latent space)
+            beta: KL regularization weight
             gamma: Cycle consistency weight (disabled by default)
         """
         super().__init__()
@@ -127,38 +127,32 @@ class InstructionVAE(nn.Module):
         self.beta = beta
         self.gamma = gamma
 
-        # Encoder: 768 -> mu, log_var
-        # Using LayerNorm instead of BatchNorm for:
-        # - Stability with batch_size=1
-        # - Consistent behavior in train/eval modes
-        # Architecture: 768 → 384 → 192 → 96 → 2*latent_dim
-        # Gradual compression: 2× → 2× → 3× (max 3× per layer)
-        # GELU activation for smoother gradients (used in transformers)
+        # Encoder: 768 → 256 → 128 → 2*latent_dim (mu + logvar)
+        # Gradual compression: 3× → 2× → 2×
+        # Dropout for regularization
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 384),  # 768 → 384 (2×)
+            nn.Linear(input_dim, 256),  # 768 → 256 (3×)
             nn.GELU(),
-            nn.LayerNorm(384),
-            nn.Linear(384, 192),  # 384 → 192 (2×)
+            nn.LayerNorm(256),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),  # 256 → 128 (2×)
             nn.GELU(),
-            nn.LayerNorm(192),
-            nn.Linear(192, 96),  # 192 → 96 (2×)
-            nn.GELU(),
-            nn.LayerNorm(96),
-            nn.Linear(96, latent_dim * 2),  # 96 → 32 (3×) mu + log_var
+            nn.LayerNorm(128),
+            nn.Linear(128, latent_dim * 2),  # 128 → 64 (2×) mu + log_var
         )
 
-        # Decoder: latent -> 768 (symmetric architecture)
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 96),  # 32 → 96 (3×)
+        # Decoder: latent → 128 → 256 → 768
+        # Symmetric architecture with Dropout
+        # L2 normalization on output (critical for GTR embeddings)
+        self.decoder_layers = nn.Sequential(
+            nn.Linear(latent_dim, 128),  # 32 → 128 (4×)
             nn.GELU(),
-            nn.LayerNorm(96),
-            nn.Linear(96, 192),  # 96 → 192 (2×)
+            nn.LayerNorm(128),
+            nn.Linear(128, 256),  # 128 → 256 (2×)
             nn.GELU(),
-            nn.LayerNorm(192),
-            nn.Linear(192, 384),  # 192 → 384 (2×)
-            nn.GELU(),
-            nn.LayerNorm(384),
-            nn.Linear(384, input_dim),  # 384 → 768 (2×)
+            nn.LayerNorm(256),
+            nn.Dropout(0.1),
+            nn.Linear(256, input_dim),  # 256 → 768 (3×)
         )
 
         # Initialize weights for stable training
@@ -226,8 +220,8 @@ class InstructionVAE(nn.Module):
         if was_1d:
             z = z.unsqueeze(0)
 
-        x_recon = self.decoder(z)
-        x_recon = F.normalize(x_recon, p=2, dim=-1)
+        x_recon = self.decoder_layers(z)
+        x_recon = F.normalize(x_recon, p=2, dim=-1)  # L2 normalizace (kritické pro GTR)
 
         if was_1d:
             x_recon = x_recon.squeeze(0)

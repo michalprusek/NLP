@@ -25,6 +25,64 @@ from lipo.instruction import InstructionOnlyPrompt
 from lipo.quality_kpi import compute_vae_quality
 
 
+def fit_beta_prior(raw_error_rates: List[float]) -> Tuple[float, float]:
+    """Estimate Beta prior parameters from existing data (Empirical Bayes).
+
+    Uses Method of Moments for fast, robust estimation.
+    This replaces the fixed Beta(1,1) prior (equivalent to Laplace smoothing)
+    with a data-driven prior that better reflects the actual error rate distribution.
+
+    For prompt optimization where error rates are typically 10-20%,
+    Beta(1,1) pulling toward 50% is too pessimistic.
+
+    Args:
+        raw_error_rates: List of observed error rates (before smoothing)
+
+    Returns:
+        (alpha, beta) tuple for Beta prior
+
+    Example:
+        If mean error rate is 0.15 with some variance, might return (2, 11)
+        giving a prior centered at 0.15 instead of 0.50.
+    """
+    import numpy as np
+
+    if len(raw_error_rates) < 2:
+        # Not enough data for fitting - fall back to weakly informative prior
+        return (1.0, 1.0)
+
+    # Clip extremes to avoid numerical issues
+    data = np.clip(raw_error_rates, 1e-4, 1 - 1e-4)
+
+    # Method of Moments estimation
+    mean = np.mean(data)
+    var = np.var(data)
+
+    # Avoid division by zero if variance is tiny
+    if var < 1e-8:
+        # Near-constant data - use weak prior centered at mean
+        return (1.0, (1.0 - mean) / mean if mean > 0.01 else 1.0)
+
+    # Solve for alpha, beta from mean and variance
+    # mean = α / (α + β)
+    # var = αβ / ((α+β)² (α+β+1))
+    # Rearranging: common = mean*(1-mean)/var - 1
+    common = mean * (1 - mean) / var - 1
+
+    if common <= 0:
+        # Variance too high for Beta - fall back to weak prior
+        return (1.0, 1.0)
+
+    alpha = mean * common
+    beta = (1 - mean) * common
+
+    # Clamp to reasonable range to avoid extreme priors
+    alpha = max(0.5, min(alpha, 10.0))
+    beta = max(0.5, min(beta, 50.0))
+
+    return alpha, beta
+
+
 class APEGenerator:
     """Simple APE instruction generator (self-contained).
 
@@ -407,6 +465,12 @@ class LIPOHyperbandTrainer:
         # Grid data (for load_from_grid mode)
         self.grid_data: Optional[List[dict]] = None
         self.grid_error_rates: List[float] = []
+        self.fidelities: List[int] = []
+
+        # Empirical Bayes prior parameters (set by load_from_hyperband_evaluations)
+        # Default to Beta(1,1) = uniform prior (equivalent to Laplace smoothing)
+        self.beta_alpha: float = 1.0
+        self.beta_beta: float = 1.0
 
         # LLM call counters
         self.total_llm_calls: int = 0  # Hyperband LLM calls
@@ -537,6 +601,17 @@ class LIPOHyperbandTrainer:
             latent_dim=self.config.latent_dim,
             beta=self.config.vae_beta,
         ).to(self.device)
+
+        if verbose:
+            print(f"\n  VAE Architecture:")
+            print(f"    Input dim: {self.config.embedding_dim}D (GTR embedding)")
+            print(f"    Latent dim: {self.config.latent_dim}D ({self.config.embedding_dim}/{self.config.latent_dim} = {self.config.embedding_dim // self.config.latent_dim}x compression)")
+            print(f"    Beta (KL weight): {self.config.vae_beta}")
+            print(f"    Encoder: {self.config.embedding_dim} → 256 → 64 → {self.config.latent_dim * 2} (mu+logvar)")
+            print(f"    Decoder: {self.config.latent_dim} → 64 → 256 → {self.config.embedding_dim} + L2 norm")
+            print(f"    Dropout: 0.1 (encoder layer 1, decoder layer 2)")
+            total_params = sum(p.numel() for p in self.vae.parameters())
+            print(f"    Total parameters: {total_params:,}")
 
         # Optimizer
         optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
@@ -1113,9 +1188,10 @@ class LIPOHyperbandTrainer:
 
         # Build lists of ALL evaluated instructions with their error rates and fidelities
         # FixedNoiseGaussianLikelihood will weight by fidelity (Beta posterior variance)
-        evaluated_instructions = []
-        error_rates = []
-        fidelities = []
+
+        # First pass: collect raw error rates for Empirical Bayes prior fitting
+        raw_error_rates = []
+        instruction_data = []  # (instruction, raw_error, fidelity)
 
         for idx_str, result in results.items():
             idx = int(idx_str)
@@ -1137,20 +1213,38 @@ class LIPOHyperbandTrainer:
                 if instruction is None:
                     continue
 
+            raw_error = result["error_rate"]
+            raw_error_rates.append(raw_error)
+            instruction_data.append((instruction, raw_error, fidelity))
+
+        # Fit Empirical Bayes prior from data
+        # This replaces fixed Beta(1,1) with data-driven prior
+        alpha, beta = fit_beta_prior(raw_error_rates)
+        self.beta_alpha = alpha
+        self.beta_beta = beta
+
+        if verbose:
+            prior_mean = alpha / (alpha + beta)
+            print(f"  Empirical Bayes prior: Alpha={alpha:.2f}, Beta={beta:.2f}")
+            print(f"  Prior mean error rate: {prior_mean:.2%}")
+
+        # Second pass: apply smoothing with learned prior
+        evaluated_instructions = []
+        error_rates = []
+        fidelities = []
+
+        for instruction, raw_error, fidelity in instruction_data:
             evaluated_instructions.append(instruction)
 
-            # Beta(1,1) posterior mean: (errors + 1) / (n + 2)
-            # Bayesian estimate that regularizes extreme values on small samples:
-            # - 0/10 → 1/12 = 0.083 (regularized from 0.0)
-            # - 0/1319 → 1/1321 = 0.00076 (nearly unchanged)
-            raw_error = result["error_rate"]
+            # Empirical Bayes posterior mean: (errors + α) / (n + α + β)
+            # This pulls toward the data-driven prior mean instead of 50%
             num_errors = raw_error * fidelity
-            posterior_mean = (num_errors + 1) / (fidelity + 2)
+            posterior_mean = (num_errors + alpha) / (fidelity + alpha + beta)
             error_rates.append(posterior_mean)
             fidelities.append(fidelity)
 
         if verbose:
-            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Beta posterior)")
+            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Empirical Bayes)")
             errors = sorted(error_rates)
             print(f"  Smoothed error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
             print(f"  Best 5 smoothed errors: {[f'{e:.4f}' for e in errors[:5]]}")
@@ -1390,8 +1484,12 @@ class LIPOHyperbandTrainer:
         # Set VAEWithAdapter (frozen VAE wrapper for encoding)
         self.gp.vae_with_adapter = self.vae_with_adapter
 
-        # Set training data with fidelities for heteroscedastic noise
-        self.gp.set_training_data(embeddings, error_rates, fidelities)
+        # Set training data with fidelities and Empirical Bayes prior for heteroscedastic noise
+        self.gp.set_training_data(
+            embeddings, error_rates, fidelities,
+            beta_alpha=self.beta_alpha,
+            beta_beta=self.beta_beta,
+        )
 
         # Train GP
         train_success = self.gp.train(

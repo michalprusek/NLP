@@ -283,15 +283,15 @@ def main():
     # VAE training
     parser.add_argument(
         "--vae-beta", type=float, default=0.01,
-        help="VAE KL regularization weight (higher for 32D to ensure tight latent space)"
+        help="VAE KL regularization weight"
     )
     parser.add_argument(
-        "--vae-epochs", type=int, default=20000,
-        help="VAE training epochs"
+        "--vae-epochs", type=int, default=50000,
+        help="VAE training epochs (default: 50000 for 32D latent)"
     )
     parser.add_argument(
-        "--vae-annealing", type=int, default=500,
-        help="VAE KL annealing epochs"
+        "--vae-annealing", type=int, default=2500,
+        help="VAE KL annealing epochs (default: 2500, 5%% of epochs)"
     )
     parser.add_argument(
         "--vae-gamma", type=float, default=0.0,
@@ -367,17 +367,25 @@ def main():
         help="Skip LLM evaluation during inference (use GP predictions)"
     )
     parser.add_argument(
-        "--vec2text-model", type=str, default="512_tokens",
+        "--vec2text-model", type=str, default="32_tokens",
         choices=["32_tokens", "512_tokens"],
-        help="Vec2Text model type (default: 512_tokens)"
+        help="Vec2Text model type (default: 32_tokens, recommended for diversity)"
     )
     parser.add_argument(
         "--num-restarts", type=int, default=64,
         help="L-BFGS-B restarts for BoTorch optimization (default: 64)"
     )
     parser.add_argument(
-        "--raw-samples", type=int, default=1024,
-        help="Raw samples for initialization seeding (default: 1024)"
+        "--raw-samples", type=int, default=4096,
+        help="Raw samples for initialization seeding (default: 4096)"
+    )
+    parser.add_argument(
+        "--acquisition-type", type=str, default="ucb", choices=["ucb", "logei"],
+        help="Acquisition function: 'ucb' (exploration) or 'logei' (exploitation) (default: ucb)"
+    )
+    parser.add_argument(
+        "--ucb-beta", type=float, default=8.0,
+        help="UCB exploration parameter (higher = more exploration) (default: 8.0)"
     )
     parser.add_argument(
         "--max-inversion-iters", type=int, default=3,
@@ -518,6 +526,8 @@ def main():
         # Inference
         num_restarts=args.num_restarts,
         raw_samples=args.raw_samples,
+        acquisition_type=args.acquisition_type,
+        ucb_beta=args.ucb_beta,
         max_inversion_iters=args.max_inversion_iters,
         gap_threshold=args.gap_threshold,
         vec2text_beam=args.vec2text_beam,
@@ -858,6 +868,10 @@ def _save_results(
             # Inference settings
             "iterations": args.iterations,
             "vec2text_model": args.vec2text_model,
+            "acquisition_type": args.acquisition_type,
+            "ucb_beta": args.ucb_beta,
+            "raw_samples": args.raw_samples,
+            "num_restarts": args.num_restarts,
 
             # Evaluation settings
             "eval_model": args.eval_model,
