@@ -151,7 +151,7 @@ Gaussian Process model training parameters for initial fitting.
 | Parameter | Default | Type | CLI Flag | Description |
 |-----------|---------|------|----------|-------------|
 | `gp_epochs` | 10000 | int | `--gp-epochs` | Maximum training epochs |
-| `gp_lr` | 0.01 | float | `--gp-lr` | AdamW learning rate |
+| `gp_lr` | 0.0025 | float | `--gp-lr` | AdamW learning rate (scaled for 32D) |
 | `gp_patience` | 100 | int | `--gp-patience` | Early stopping patience |
 
 **Purpose**: Trains the GP surrogate model on evaluated instructions. The GP models the relationship between 32D VAE latents and instruction accuracy.
@@ -164,7 +164,7 @@ Gaussian Process model training parameters for initial fitting.
 **GP Configuration**:
 - Kernel: Matern 5/2 with ARD (32 lengthscales)
 - Mean: ZeroMean
-- Priors: GammaPrior(3.0, 6.0) for lengthscales, GammaPrior(2.0, 0.15) for outputscale
+- Priors: Data-driven Gamma prior for lengthscales (mean=median pairwise distance), GammaPrior(2.0, 2.0) for outputscale
 - Noise: FixedNoiseGaussianLikelihood with Beta posterior variance from fidelity
 
 ---
@@ -255,7 +255,7 @@ Trust Region Bayesian Optimization for focused local search (Eriksson et al., Ne
 
 | Parameter | Default | Type | Description |
 |-----------|---------|------|-------------|
-| `turbo_enabled` | True | bool | Enable TuRBO trust region optimization |
+| `turbo_enabled` | False | bool | TuRBO disabled by default (use distance penalty instead) |
 | `turbo_L_init` | 0.8 | float | Initial trust region side length (paper default) |
 | `turbo_L_max` | 1.6 | float | Maximum trust region side length (paper default) |
 | `turbo_L_min` | 0.0078 | float | Minimum side length (2^-7, triggers restart) |

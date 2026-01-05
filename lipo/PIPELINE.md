@@ -127,7 +127,7 @@ total_loss = recon_loss + beta * kl_loss
 
 **KL Annealing:**
 ```python
-# Beta warmup přes prvních 1000 epoch
+# Beta warmup přes prvních 2500 epoch (vae_annealing_epochs)
 if epoch < annealing_epochs:
     current_beta = target_beta * (epoch / annealing_epochs)
 else:

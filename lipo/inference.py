@@ -580,9 +580,9 @@ class LIPOHyperbandInference:
             self.anchor_selector = None
 
         # Distance penalty settings (used when TuRBO disabled)
-        self.distance_penalty_enabled = getattr(config, 'distance_penalty_enabled', True)
-        self.distance_weight = getattr(config, 'distance_weight', 2.0)
-        self.distance_threshold = getattr(config, 'distance_threshold', 0.3)
+        self.distance_penalty_enabled = config.distance_penalty_enabled
+        self.distance_weight = config.distance_weight
+        self.distance_threshold = config.distance_threshold
 
         # Cache global bounds (computed on first iteration)
         self._global_bounds: Optional[torch.Tensor] = None
@@ -996,7 +996,8 @@ GP Status:
                     base_kernel = self.gp.gp_model.covar_module.base_kernel
                     if hasattr(base_kernel, 'lengthscale'):
                         lengthscales = base_kernel.lengthscale.detach().squeeze()
-            except Exception as e:
+            except AttributeError as e:
+                # Only catch AttributeError - other exceptions (CUDA, memory) should propagate
                 import warnings
                 warnings.warn(
                     f"Could not extract ARD lengthscales from GP kernel: {e}. "
@@ -1101,8 +1102,9 @@ GP Status:
                               f"retrying ({attempt + 1}/{max_rejection_attempts})")
                     continue  # Skip cosine check, go to next attempt
                 else:
+                    # Log full instruction per CLAUDE.md (never truncate prompts)
                     print(f"WARNING: Accepting invalid instruction after {max_rejection_attempts} attempts")
-                    print(f"  Instruction: {instruction[:80]}...")
+                    print(f"  Full instruction:\n{instruction}")
                     rejection_attempts = attempt
                     low_quality_accepted = True
                     break  # Accept despite garbage

@@ -332,14 +332,14 @@ Output format:
                 if len(cleaned) > 5 and cleaned != instruction:
                     variations.append(cleaned)
             return variations[:3]
-        except (TimeoutError, ConnectionError) as e:
-            # Transient network errors - log briefly and continue
+        except (TimeoutError, ConnectionError):
+            # Transient network errors - continue silently
             return []
-        except Exception as e:
-            # Unexpected error - log with context for debugging
-            print(f"WARNING: APE augmentation failed for instruction: {instruction[:50]}...")
-            print(f"  Error type: {type(e).__name__}, Error: {e}")
+        except (ValueError, KeyError, IndexError) as e:
+            # Parsing errors in response - log and continue
+            print(f"WARNING: APE augmentation parsing failed: {type(e).__name__}: {e}")
             return []
+        # Note: AuthenticationError, RateLimitError, etc. propagate to caller
 
     def _add_noise(self, text: str, prob: float = 0.1) -> str:
         """Randomly drop or swap words for denoising VAE training.
@@ -607,8 +607,8 @@ class LIPOHyperbandTrainer:
             print(f"    Input dim: {self.config.embedding_dim}D (GTR embedding)")
             print(f"    Latent dim: {self.config.latent_dim}D ({self.config.embedding_dim}/{self.config.latent_dim} = {self.config.embedding_dim // self.config.latent_dim}x compression)")
             print(f"    Beta (KL weight): {self.config.vae_beta}")
-            print(f"    Encoder: {self.config.embedding_dim} → 256 → 64 → {self.config.latent_dim * 2} (mu+logvar)")
-            print(f"    Decoder: {self.config.latent_dim} → 64 → 256 → {self.config.embedding_dim} + L2 norm")
+            print(f"    Encoder: {self.config.embedding_dim} → 256 → 128 → {self.config.latent_dim * 2} (mu+logvar)")
+            print(f"    Decoder: {self.config.latent_dim} → 128 → 256 → {self.config.embedding_dim} + L2 norm")
             print(f"    Dropout: 0.1 (encoder layer 1, decoder layer 2)")
             total_params = sum(p.numel() for p in self.vae.parameters())
             print(f"    Total parameters: {total_params:,}")

@@ -349,7 +349,7 @@ class GPWithEI:
                 f"got {vae_latents.shape[-1]}. Check VAE configuration."
             )
 
-        self.X_train = vae_latents  # (N, 16)
+        self.X_train = vae_latents  # (N, 32) - VAE latent dimension
 
         # Store original error rates for noise computation (needs positive values)
         self._error_rates_original = error_rates.to(self.device)

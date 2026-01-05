@@ -4,9 +4,9 @@ This module provides BoTorch-based acquisition function optimization
 for the LIPO pipeline. Uses qLogExpectedImprovement which is
 numerically stable even when improvement values are extremely small.
 
-Pipeline: z (16D VAE latent) -> GP (ARD Matern kernel) -> qLogEI
+Pipeline: z (32D VAE latent) -> GP (ARD Matern kernel) -> qLogEI
 
-After optimization: z_opt (16D) -> VAE decoder -> embedding (768D) -> Vec2Text
+After optimization: z_opt (32D) -> VAE decoder -> embedding (768D) -> Vec2Text
 
 Key design (research-backed):
 - Distance penalty prevents GP from exploring empty latent space regions
