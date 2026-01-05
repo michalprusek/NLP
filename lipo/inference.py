@@ -94,8 +94,6 @@ class IterationRecord:
     best_error_so_far: float
     gp_samples: int
     log_ei: Optional[float] = None
-    gap: float = 0.0
-    inversion_iters: int = 1
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
     # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
@@ -107,16 +105,6 @@ class IterationRecord:
     trust_region_length: float = 0.0  # Current trust region side length
     trust_region_action: str = ""  # Action taken: "none", "expand", "shrink", "restart"
     anchor_idx: int = -1  # Index of selected anchor in training data
-
-
-@dataclass
-class InversionStepResult:
-    """Result of InvBO inversion step."""
-    z_inv: torch.Tensor  # Inverted latent
-    z_original: torch.Tensor  # Original latent before inversion
-    gap: float  # Cosine distance (1 - cosine_similarity) between embeddings
-    final_loss: float  # Final cosine loss
-    converged: bool  # Whether optimization converged
 
 
 class Vec2TextInverter:
@@ -718,114 +706,6 @@ class LIPOHyperbandInference:
         # Return as 1D tensor
         return z_opt.squeeze(), acq_value.item()
 
-    def inversion_step(
-        self,
-        text: str,
-        n_steps: int = 100,
-        lr: float = 0.1,
-        convergence_threshold: float = 0.01,
-        verbose: bool = False,
-    ) -> InversionStepResult:
-        """InvBO-style inversion: find latent that reconstructs given text.
-
-        Given text from Vec2Text, find z_inv such that:
-            z_inv = argmin ||decoder(z) - GTR(text)||²
-
-        This closes the loop and eliminates misalignment between decoder
-        output and what Vec2Text can actually reconstruct.
-
-        Args:
-            text: Text to invert (from Vec2Text)
-            n_steps: Maximum optimization steps
-            lr: Learning rate for Adam
-            convergence_threshold: Stop if loss < threshold
-            verbose: Print progress
-
-        Returns:
-            InversionStepResult with inverted latent and metrics
-        """
-        # Get target embedding from text
-        target_emb = self.gtr.encode_tensor(text)
-
-        # Warm start: encode target embedding to VAE latent (32D)
-        encoder = self.gp.vae_with_adapter
-        encoder.eval()
-
-        # Ensure target_emb is on VAE device for gradient computation
-        vae_device = self.vae_with_adapter.device
-        target_emb = target_emb.to(vae_device)
-
-        with torch.no_grad():
-            # Encode 768D embedding to 32D VAE latent (unnormalized)
-            z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
-
-            # Normalize to GP input space
-            denom = self.gp.X_max - self.gp.X_min
-            denom[denom == 0] = 1.0
-            z_init = (z_vae - self.gp.X_min) / denom
-
-        # Clone for optimization
-        z = z_init.clone().requires_grad_(True)
-        z_original = z_init.clone()
-
-        optimizer = torch.optim.Adam([z], lr=lr)
-
-        final_loss = float("inf")
-        converged = False
-
-        # Precompute denormalization constants for gradient flow
-        x_range = self.gp.X_max - self.gp.X_min
-
-        for step in range(n_steps):
-            optimizer.zero_grad()
-
-            # Denormalize z to VAE latent space (32D), then decode to 768D embedding
-            z_vae = z * x_range + self.gp.X_min
-            decoded = self.vae_with_adapter.decode(z_vae.to(self.vae_with_adapter.device))
-
-            # Cosine loss to target
-            loss = 1 - F.cosine_similarity(
-                decoded.unsqueeze(0), target_emb.unsqueeze(0)
-            )
-
-            loss.backward()
-            optimizer.step()
-
-            final_loss = loss.item()
-
-            if verbose and (step + 1) % 20 == 0:
-                print(f"    Inversion step {step + 1}: loss = {final_loss:.4f}")
-
-            if final_loss < convergence_threshold:
-                converged = True
-                break
-
-        z_inv = z.detach()
-
-        # Gap as cosine distance in embedding space (more stable than L2 in latent)
-        with torch.no_grad():
-            self.vae_with_adapter.eval()
-            z_vae_original = z_original * x_range + self.gp.X_min
-            z_vae_inv = z_inv * x_range + self.gp.X_min
-            vae_dev = self.vae_with_adapter.device
-            emb_original = self.vae_with_adapter.decode(z_vae_original.to(vae_dev))
-            emb_inv = self.vae_with_adapter.decode(z_vae_inv.to(vae_dev))
-        cosine_gap = 1 - F.cosine_similarity(
-            emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
-        ).item()
-        gap = cosine_gap
-
-        if verbose:
-            print(f"  Inversion: gap = {gap:.4f}, loss = {final_loss:.4f}, converged = {converged}")
-
-        return InversionStepResult(
-            z_inv=z_inv,
-            z_original=z_original,
-            gap=gap,
-            final_loss=final_loss,
-            converged=converged,
-        )
-
     def _log_iteration_summary(
         self,
         record: IterationRecord,
@@ -868,8 +748,6 @@ OPTIMIZATION GAP METRICS:
 GENERATION QUALITY:
   Cosine Similarity:  {record.cosine_similarity:.4f}
   LogEI:              {log_ei_str}
-  Gap (inversion):    {record.gap:.4f}
-  Inversion Iters:    {record.inversion_iters}
   Rejection Attempts: {record.rejection_attempts}
   Low Quality Accept: {record.low_quality_accepted}
 ─────────────────────────────────────────────────────────────────
@@ -902,17 +780,13 @@ GP Status:
         iteration: int,
         num_restarts: int = 64,
         raw_samples: int = 1024,
-        use_inversion: bool = True,
-        max_inversion_iters: int = 3,
-        gap_threshold: float = 0.1,
         skip_eval: bool = False,
         verbose: bool = True,
     ) -> IterationRecord:
         """Run a single optimization iteration using BoTorch qLogEI.
 
         Uses BoTorch's gradient-based LogEI optimization with multi-start
-        L-BFGS-B for finding optimal latent points. Includes InvBO inversion
-        loop to close the gap between decoder output and Vec2Text reconstruction.
+        L-BFGS-B for finding optimal latent points.
 
         Candidate Rejection:
             Enforces cosine similarity threshold between decoder(z) and GTR(text)
@@ -925,9 +799,6 @@ GP Status:
             iteration: Iteration number
             num_restarts: Number of L-BFGS-B restarts for BoTorch optimization
             raw_samples: Raw samples for initialization seeding
-            use_inversion: Use InvBO inversion loop to improve alignment
-            max_inversion_iters: Maximum inversion iterations
-            gap_threshold: Gap threshold for re-inversion (cosine distance)
             skip_eval: Skip LLM evaluation (use GP prediction)
             verbose: Print progress
 
@@ -1052,40 +923,6 @@ GP Status:
                     print(f"  [Attempt {attempt + 1}] Generated:\n{instruction}")
                 else:
                     print(f"  Generated:\n{instruction}")
-
-            # Inversion loop if enabled - closes the decoder→Vec2Text→GTR gap
-            gap = 0.0
-            inv_iters = 1
-            if use_inversion:
-                for inv_iter in range(max_inversion_iters):
-                    inv_result = self.inversion_step(
-                        instruction,
-                        n_steps=self.config.inversion_n_steps,
-                        lr=self.config.inversion_lr,
-                        convergence_threshold=self.config.inversion_convergence_threshold,
-                        verbose=False,
-                    )
-                    gap = inv_result.gap
-
-                    if gap <= gap_threshold:
-                        if verbose:
-                            print(f"  Gap {gap:.4f} <= {gap_threshold}, accepting")
-                        break
-
-                    if verbose:
-                        print(f"  Gap {gap:.4f} > {gap_threshold}, re-inverting")
-
-                    # Re-decode from inverted latent (z_inv is normalized, need denormalization)
-                    z_opt = inv_result.z_inv
-                    z_unnorm = z_opt * x_range + self.gp.X_min
-                    with torch.no_grad():
-                        z_decode = z_unnorm.to(self.vae_with_adapter.device)
-                        embedding = self.vae_with_adapter.decode(z_decode)
-                    instruction = self.inverter.invert(embedding.clone())
-                    inv_iters += 1
-
-                    if verbose:
-                        print(f"  Re-generated:\n{instruction}")
 
             # Re-encode for GP prediction
             # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
@@ -1240,8 +1077,6 @@ GP Status:
             best_error_so_far=self.best_error,
             gp_samples=self.gp.get_training_size(),
             log_ei=log_ei,
-            gap=gap,
-            inversion_iters=inv_iters,
             rejection_attempts=rejection_attempts,
             low_quality_accepted=low_quality_accepted,
             # Optimization Gap Test metrics
@@ -1277,9 +1112,6 @@ GP Status:
         iterations: int = 10,
         num_restarts: int = 64,
         raw_samples: int = 1024,
-        use_inversion: bool = True,
-        max_inversion_iters: int = 3,
-        gap_threshold: float = 0.1,
         skip_eval: bool = False,
         verbose: bool = True,
     ) -> List[IterationRecord]:
@@ -1289,9 +1121,6 @@ GP Status:
             iterations: Number of iterations
             num_restarts: Number of L-BFGS-B restarts for BoTorch optimization
             raw_samples: Raw samples for initialization seeding
-            use_inversion: Use InvBO inversion loop to improve alignment
-            max_inversion_iters: Maximum inversion iterations per step
-            gap_threshold: Gap threshold for re-inversion
             skip_eval: Skip LLM evaluation
             verbose: Print progress
 
@@ -1300,11 +1129,10 @@ GP Status:
         """
         if verbose:
             print("\n" + "=" * 60)
-            print("Starting InvBO Inference (BoTorch + Inversion)")
+            print("Starting LIPO Inference (BoTorch qLogEI)")
             print("=" * 60)
             print(f"  Initial best error: {self.best_error:.4f}")
             print(f"  GP samples: {self.gp.get_training_size()}")
-            print(f"  Use inversion: {use_inversion}")
             print(f"  BoTorch: {num_restarts} restarts, {raw_samples} raw samples")
 
         for i in range(iterations):
@@ -1312,16 +1140,13 @@ GP Status:
                 iteration=i + 1,
                 num_restarts=num_restarts,
                 raw_samples=raw_samples,
-                use_inversion=use_inversion,
-                max_inversion_iters=max_inversion_iters,
-                gap_threshold=gap_threshold,
                 skip_eval=skip_eval,
                 verbose=verbose,
             )
 
         if verbose:
             print("\n" + "=" * 60)
-            print("InvBO Inference Complete")
+            print("LIPO Inference Complete")
             print("=" * 60)
             print(f"  Best error: {self.best_error:.4f}")
             print(f"  Best instruction:\n{self.best_instruction}")

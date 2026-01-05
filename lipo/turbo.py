@@ -372,7 +372,9 @@ class PotentialAwareAnchorSelector:
 
         Algorithm 2 from InvBO paper:
         1. For each training point, sample candidates in local region
-        2. Use Thompson Sampling to estimate potential (max posterior sample)
+        2. Use Joint Thompson Sampling to estimate potential (max posterior sample)
+           IMPORTANT: Uses SAME function realization for all candidates to ensure
+           comparable potentials across training points.
         3. Scale potentials to match objective value range
         4. Combine: s^i = y^i + α_scaled^i
         5. Return point with highest combined score
@@ -404,22 +406,34 @@ class PotentialAwareAnchorSelector:
         denom[denom == 0] = 1.0
         X_norm = (X_train - X_min) / denom
 
-        # Step 1 & 2: Compute potential score for each training point
-        potentials = torch.zeros(n_points, device=self.device)
+        # Step 1: Sample ALL candidates for ALL training points
+        # This allows joint Thompson Sampling from a single function realization
+        all_candidates = []
+        candidate_indices = []  # Track which training point each candidate belongs to
 
         for i in range(n_points):
-            # Sample candidates in local trust region around point i
             candidates = self._sample_candidates_in_region(
                 center=X_norm[i],
                 trust_length=trust_length,
                 global_bounds=global_bounds,
                 n_samples=self.n_candidates,
             )
+            all_candidates.append(candidates)
+            candidate_indices.extend([i] * self.n_candidates)
 
-            # Thompson Sampling on normalized candidates
-            # GP model expects normalized [0,1] inputs
-            ts_values = self._thompson_sample(gp_model, candidates)
-            potentials[i] = ts_values.max()
+        # Concatenate all candidates: shape (n_points * n_candidates, dim)
+        all_candidates_tensor = torch.cat(all_candidates, dim=0)
+        candidate_indices = torch.tensor(candidate_indices, device=self.device)
+
+        # Step 2: Joint Thompson Sampling - ONE function sample for ALL candidates
+        # This ensures comparable potentials across training points
+        ts_values = self._thompson_sample(gp_model, all_candidates_tensor)
+
+        # Compute max potential for each training point from the same function realization
+        potentials = torch.zeros(n_points, device=self.device)
+        for i in range(n_points):
+            mask = candidate_indices == i
+            potentials[i] = ts_values[mask].max()
 
         # Step 3: Scale potentials to match objective value range
         # α_scaled^i = (α_pot^i - A_min) / (A_max - A_min) × (Y_max - Y_min)
@@ -449,6 +463,7 @@ class PotentialAwareAnchorSelector:
             print(f"    y={y_train[anchor_idx]:.4f}, potential={scaled_potentials[anchor_idx]:.4f}")
             print(f"    Potential range: [{A_min:.4f}, {A_max:.4f}]")
             print(f"    Objective range: [{Y_min:.4f}, {Y_max:.4f}]")
+            print(f"    Joint TS: {n_points * self.n_candidates} candidates sampled together")
 
         return anchor_latent, anchor_idx
 

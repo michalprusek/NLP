@@ -88,9 +88,6 @@ class Config:
     raw_samples: int = 4096  # Raw samples for initialization (higher for better coverage in high-D)
     acquisition_type: str = "ucb"  # Acquisition function: "ucb" or "logei"
     ucb_beta: float = 8.0  # UCB exploration parameter (higher = more exploration)
-    use_inversion: bool = True  # Use InvBO inversion loop
-    max_inversion_iters: int = 3  # Maximum inversion iterations per step
-    gap_threshold: float = 0.08  # Gap threshold for re-inversion (stricter to reduce optimization gap)
     cosine_sim_threshold: float = 0.90  # Min cosine similarity for candidate acceptance
     max_rejection_attempts: int = 10  # Max attempts (increased for better candidates)
 
@@ -119,10 +116,7 @@ class Config:
     distance_weight: float = 2.0  # Penalty strength (higher = stronger constraint)
     distance_threshold: float = 0.3  # Min distance before penalty kicks in (normalized space)
 
-    # === Inversion Optimization ===
-    inversion_n_steps: int = 100  # Adam optimization steps
-    inversion_lr: float = 0.1  # Adam learning rate
-    inversion_convergence_threshold: float = 0.01  # Early stop threshold
+    # === Latent Space ===
     latent_margin: float = 0.2  # Margin for latent bounds expansion
 
     # === GP Retrain (during inference) ===

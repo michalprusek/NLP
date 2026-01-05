@@ -19,109 +19,7 @@ from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
 from scipy.stats import norm
-from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional, Dict, Any, Union
-
-
-# =============================================================================
-# LogEI: Numerically stable log Expected Improvement
-# Based on: "Unexpected Improvements to Expected Improvement" (NeurIPS 2023)
-# =============================================================================
-
-# Constants for log_h computation
-_C1 = math.log(2 * math.pi) / 2  # log(2π)/2
-_C2 = math.log(math.pi / 2) / 2  # log(π/2)/2
-_EPS = np.finfo(np.float64).eps  # Machine epsilon
-_THRESH = -1 / math.sqrt(_EPS)  # Threshold for asymptotic branch
-
-
-def _log1mexp(x: float) -> float:
-    """Numerically stable computation of log(1 - exp(x)) for x < 0.
-
-    Uses different branches based on threshold to avoid numerical issues.
-    Based on Mächler (2012) "Accurately computing log(1 - exp(-|a|))".
-    """
-    if x > -math.log(2):
-        return math.log(-expm1(x))
-    else:
-        return log1p(-math.exp(x))
-
-
-def log_h(z: float) -> float:
-    """Numerically stable computation of log(h(z)) where h(z) = φ(z) + z·Φ(z).
-
-    This is the core of LogEI from the paper. Uses three branches:
-    1. Direct computation for z > -1
-    2. erfcx-based computation for -1/√ε < z ≤ -1
-    3. Asymptotic approximation for z ≤ -1/√ε
-
-    Args:
-        z: Standardized improvement (μ - y*) / σ
-
-    Returns:
-        log(h(z)) value, can be negative (no clipping!)
-    """
-    if z > -1:
-        # Direct computation is numerically stable for z > -1
-        phi_z = norm.pdf(z)
-        Phi_z = norm.cdf(z)
-        h_val = phi_z + z * Phi_z
-        if h_val > 0:
-            return math.log(h_val)
-        else:
-            # Fallback to middle branch if numerical issues
-            z = -1.0 - 1e-10
-
-    if z > _THRESH:
-        # Middle branch: -1/√ε < z ≤ -1
-        # log_h(z) = -z²/2 - c1 + log1mexp(log(erfcx(-z/√2)·|z|) + c2)
-        z_scaled = -z / math.sqrt(2)
-        erfcx_val = erfcx(z_scaled)
-        inner = math.log(erfcx_val * abs(z)) + _C2
-        return -z * z / 2 - _C1 + _log1mexp(inner)
-    else:
-        # Asymptotic branch: z ≤ -1/√ε
-        # log_h(z) ≈ -z²/2 - c1 - 2·log(|z|)
-        return -z * z / 2 - _C1 - 2 * math.log(abs(z))
-
-
-def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
-    """Tensor version of log_h that supports autograd.
-
-    Numerically stable computation of log(h(z)) where h(z) = φ(z) + z·Φ(z).
-    Uses piecewise approximation with smooth transitions for gradient stability.
-
-    Args:
-        z: Standardized improvement tensor (can be batched)
-
-    Returns:
-        log(h(z)) tensor with gradients preserved
-    """
-    # Constants
-    LOG_SQRT_2PI = 0.5 * math.log(2 * math.pi)
-    SQRT_2 = math.sqrt(2)
-
-    # Standard normal PDF and CDF
-    phi_z = torch.exp(-0.5 * z * z) / math.sqrt(2 * math.pi)
-    # Use error function for CDF: Φ(z) = 0.5 * (1 + erf(z/√2))
-    Phi_z = 0.5 * (1 + torch.erf(z / SQRT_2))
-
-    # h(z) = φ(z) + z * Φ(z)
-    h_z = phi_z + z * Phi_z
-
-    # Clamp to avoid log(0) - use small positive value
-    h_z_clamped = h_z.clamp(min=1e-40)
-
-    # For very negative z, use asymptotic approximation
-    # log_h(z) ≈ -z²/2 - log(2π)/2 - 2*log(|z|) for z << -1
-    log_h_asymptotic = -0.5 * z * z - LOG_SQRT_2PI - 2 * torch.log(torch.abs(z).clamp(min=1e-10))
-
-    # Use asymptotic for z < -5, direct for z >= -5
-    # Smooth transition using sigmoid
-    weight = torch.sigmoid(5 * (z + 5))  # 0 for z << -5, 1 for z >> -5
-    log_h_direct = torch.log(h_z_clamped)
-
-    return weight * log_h_direct + (1 - weight) * log_h_asymptotic
 
 
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
@@ -745,101 +643,6 @@ class GPWithEI:
         ei = (best - mean - xi) * norm.cdf(z) + std * norm.pdf(z)
         return max(0.0, ei)
 
-    def log_expected_improvement(
-        self,
-        embedding: torch.Tensor,
-        xi: float = 0.01,
-    ) -> float:
-        """Compute Log Expected Improvement for embedding.
-
-        LogEI(x) = log_h(z) + log(σ(x))
-        where z = (best - mu(x) - xi) / sigma(x)
-
-        This is numerically stable even when EI values are extremely small.
-        Uses positive error rates for interpretability.
-
-        Args:
-            embedding: Instruction embedding (768,)
-            xi: Exploration-exploitation trade-off (default 0.01)
-
-        Returns:
-            Log expected improvement value (can be very negative!)
-        """
-        if self.gp_model is None or self.y_best is None:
-            return float("-inf")
-
-        mean, std = self.predict(embedding)  # Returns positive error rate
-        best = self.best_error_rate  # Positive error rate
-
-        if std <= 1e-10:
-            improvement = best - mean
-            if improvement > 0:
-                return math.log(improvement)
-            return float("-inf")
-
-        z = (best - mean - xi) / std
-
-        # LogEI = log_h(z) + log(σ)
-        return log_h(z) + math.log(std)
-
-    def log_expected_improvement_tensor(
-        self,
-        embedding: torch.Tensor,
-        xi: float = 0.01,
-    ) -> torch.Tensor:
-        """Compute Log Expected Improvement as a differentiable tensor.
-
-        This version maintains gradients for optimization.
-        Note: This is a standalone method for debugging/analysis.
-        The main optimization uses BoTorch's qLogExpectedImprovement.
-
-        Args:
-            embedding: Instruction embedding (768,) or (1, 768)
-            xi: Exploration-exploitation trade-off (default 0.01)
-
-        Returns:
-            LogEI as scalar tensor with gradient support
-        """
-        if self.gp_model is None or self.y_best is None:
-            return torch.tensor(float("-inf"), device=self.device)
-
-        # Ensure correct shape
-        if embedding.dim() == 1:
-            embedding = embedding.unsqueeze(0)
-        embedding = embedding.to(self.device)
-
-        # Normalize (preserving gradients)
-        denom = self.X_max - self.X_min
-        denom = denom.clone()
-        denom[denom == 0] = 1.0
-        X_norm = (embedding - self.X_min) / denom
-
-        # Get GP prediction with gradients (predicts -error_rate)
-        self.gp_model.eval()
-        self.likelihood.eval()
-
-        with gpytorch.settings.fast_pred_var():
-            pred = self.gp_model(X_norm)
-            mean_norm = pred.mean
-            var_norm = pred.variance.clamp(min=1e-12)
-            std_norm = torch.sqrt(var_norm)
-
-        # Denormalize (GP predicts -error_rate)
-        neg_error = mean_norm * self.y_std + self.y_mean
-        std = std_norm * self.y_std
-
-        # Convert to positive error rate space for EI
-        mean = -neg_error  # Positive error rate
-        best = -self.y_best  # Positive best error rate (self.y_best = -min_error)
-
-        # Compute z-score: improvement = best - mean (lower error is better)
-        z = (best - mean - xi) / std.clamp(min=1e-10)
-
-        # LogEI = log_h(z) + log(σ)
-        log_ei = log_h_tensor(z) + torch.log(std.clamp(min=1e-10))
-
-        return log_ei.squeeze()
-
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
         """Get 32D VAE latent for embedding.
 
@@ -933,6 +736,32 @@ class GPWithEI:
 
         # Move result back to GP device for training data storage
         new_z = new_z.to(self.device)
+
+        # Bounds validation: warn if new observation is outside current training bounds
+        # This can cause GP extrapolation issues until retrained
+        if self.X_min is not None and self.X_max is not None:
+            z_squeezed = new_z.squeeze(0)
+            out_of_bounds_dims = []
+            for d in range(z_squeezed.shape[0]):
+                if z_squeezed[d] < self.X_min[d] - 1e-6:
+                    out_of_bounds_dims.append((d, "below", z_squeezed[d].item(), self.X_min[d].item()))
+                elif z_squeezed[d] > self.X_max[d] + 1e-6:
+                    out_of_bounds_dims.append((d, "above", z_squeezed[d].item(), self.X_max[d].item()))
+
+            if out_of_bounds_dims:
+                import warnings
+                n_oob = len(out_of_bounds_dims)
+                examples = out_of_bounds_dims[:3]  # Show first 3 dimensions
+                examples_str = ", ".join([
+                    f"dim {d}: {val:.4f} {direction} {bound:.4f}"
+                    for d, direction, val, bound in examples
+                ])
+                warnings.warn(
+                    f"New observation has {n_oob} dimensions outside current training bounds. "
+                    f"Examples: {examples_str}. "
+                    f"GP normalization will extrapolate until train() is called.",
+                    UserWarning
+                )
 
         # Empirical Bayes posterior mean for consistency with training data
         # Formula: (errors + α) / (n + α + β) - data-driven prior instead of uniform
