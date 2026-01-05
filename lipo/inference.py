@@ -541,7 +541,7 @@ class LIPOHyperbandInference:
             beam_width=config.vec2text_beam,
             device=str(self.device),
             model_type=config.vec2text_model,
-            max_length=getattr(config, 'vec2text_max_length', 128),
+            max_length=config.vec2text_max_length,
         )
 
         # History
@@ -566,8 +566,8 @@ class LIPOHyperbandInference:
             # Note: instruction not available from GP alone
 
         # Initialize TuRBO trust region manager
-        self.use_turbo = getattr(config, 'turbo_enabled', True)
-        self.use_pas = getattr(config, 'pas_enabled', True)
+        self.use_turbo = config.turbo_enabled
+        self.use_pas = config.pas_enabled
 
         if self.use_turbo:
             self.trust_region = create_turbo_manager(config, self.device)

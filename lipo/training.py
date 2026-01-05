@@ -773,11 +773,17 @@ class LIPOHyperbandTrainer:
         try:
             inverter = Vec2TextInverter(
                 device=str(self.device),
-                model_type=getattr(self.config, 'vec2text_model', "gtr-base"),
+                model_type=self.config.vec2text_model,
             )
-        except Exception as e:
+        except (ImportError, FileNotFoundError, OSError) as e:
+            # Vec2Text not available or model files missing - skip validation
             if verbose:
-                print(f"  Skipping: Vec2Text init failed: {e}")
+                print(f"  Skipping: Vec2Text not available: {e}")
+            return True
+        except (RuntimeError, MemoryError) as e:
+            # GPU/memory issues - warn loudly but continue (validation optional)
+            print(f"WARNING: Vec2Text init failed with GPU/memory issue: {e}")
+            print(f"  Consider reducing batch size or using CPU for validation.")
             return True
 
         results = validate_roundtrip_quality(
@@ -1561,6 +1567,10 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
+            # Data inconsistency - log warning but continue with index 0
+            print(f"WARNING: Best instruction from grid not found in instructions list")
+            print(f"  Instruction: {best['instruction_text'][:100]}...")
+            print(f"  This indicates data inconsistency - using index 0")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(
@@ -1600,6 +1610,10 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
+            # Data inconsistency - log warning but continue with index 0
+            print(f"WARNING: Best instruction from grid not found in instructions list")
+            print(f"  Instruction: {best['instruction_text'][:100]}...")
+            print(f"  This indicates data inconsistency - using index 0")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(
