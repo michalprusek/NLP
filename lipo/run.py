@@ -282,8 +282,12 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.01,
-        help="VAE KL regularization weight"
+        "--vae-beta", type=float, default=0.005,
+        help="VAE KL regularization weight (default: 0.005, lowered for better reconstruction)"
+    )
+    parser.add_argument(
+        "--vae-mse-weight", type=float, default=0.2,
+        help="MSE weight in VAE reconstruction loss (default: 0.2 = 20%% MSE + 80%% cosine)"
     )
     parser.add_argument(
         "--vae-epochs", type=int, default=50000,
@@ -296,6 +300,10 @@ def main():
     parser.add_argument(
         "--vae-gamma", type=float, default=0.0,
         help="VAE cycle consistency weight (disabled, compensated by higher beta)"
+    )
+    parser.add_argument(
+        "--no-curriculum", action="store_true",
+        help="Disable curriculum learning for VAE training"
     )
 
     # Hyperband
@@ -327,8 +335,8 @@ def main():
         help="GP training epochs (default: 10000)"
     )
     parser.add_argument(
-        "--gp-lr", type=float, default=0.01,
-        help="GP learning rate (default: 0.01)"
+        "--gp-lr", type=float, default=0.0025,
+        help="GP learning rate (default: 0.0025, scaled for 32D latent)"
     )
     parser.add_argument(
         "--gp-patience", type=int, default=100,
@@ -394,6 +402,14 @@ def main():
     parser.add_argument(
         "--vec2text-max-length", type=int, default=128,
         help="Maximum output tokens for Vec2Text (default: 128)"
+    )
+    parser.add_argument(
+        "--vec2text-finetuned", type=str, default="",
+        help="Path to fine-tuned Vec2Text corrector model (empty = use pre-trained)"
+    )
+    parser.add_argument(
+        "--vec2text-finetuned-inverter", type=str, default="",
+        help="Path to fine-tuned Vec2Text InversionModel (empty = use pre-trained)"
     )
 
     # Evaluation
@@ -505,9 +521,11 @@ def main():
         ape_cache_path=args.ape_cache,
         # VAE Training
         vae_beta=args.vae_beta,
+        vae_mse_weight=args.vae_mse_weight,
         vae_gamma=args.vae_gamma,
         vae_epochs=args.vae_epochs,
         vae_annealing_epochs=args.vae_annealing,
+        vae_curriculum=not args.no_curriculum,
         # Hyperband
         bmin=args.bmin,
         eta=args.eta,
@@ -523,6 +541,8 @@ def main():
         vec2text_beam=args.vec2text_beam,
         vec2text_model=args.vec2text_model,
         vec2text_max_length=args.vec2text_max_length,
+        vec2text_finetuned_path=args.vec2text_finetuned,
+        vec2text_finetuned_inverter_path=args.vec2text_finetuned_inverter,
         # Device/Paths
         validation_path=args.validation_path,
         device=args.device,
@@ -836,12 +856,14 @@ def _save_results(
 
             # VAE hyperparameters
             "vae_beta": args.vae_beta,
+            "vae_mse_weight": args.vae_mse_weight,
             "vae_gamma": args.vae_gamma,
             "vae_epochs": args.vae_epochs,
             "vae_annealing": args.vae_annealing,
             "vae_latent_dim": trainer.config.latent_dim,
             "vae_lr": trainer.config.vae_lr,
             "vae_patience": trainer.config.vae_patience,
+            "vae_curriculum": not args.no_curriculum,
 
             # Hyperband settings
             "bmin": args.bmin,

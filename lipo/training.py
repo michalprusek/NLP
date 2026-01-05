@@ -332,8 +332,18 @@ Output format:
                 if len(cleaned) > 5 and cleaned != instruction:
                     variations.append(cleaned)
             return variations[:3]
-        except (TimeoutError, ConnectionError):
-            # Transient network errors - continue silently
+        except (TimeoutError, ConnectionError) as e:
+            # Track network failures for cumulative reporting
+            if not hasattr(self, '_network_failures'):
+                self._network_failures = 0
+            self._network_failures += 1
+
+            # Log first failure and periodically after
+            if self._network_failures == 1:
+                print(f"WARNING: APE augmentation network error: {type(e).__name__}")
+                print(f"  This may reduce VAE training data quality.")
+            elif self._network_failures % 10 == 0:
+                print(f"WARNING: {self._network_failures} APE augmentation network failures so far")
             return []
         except (ValueError, KeyError, IndexError) as e:
             # Parsing errors in response - log and continue
@@ -589,27 +599,66 @@ class LIPOHyperbandTrainer:
             print(f"Training VAE on {source_name} Instructions")
             print("=" * 60)
 
-        # Prepare embeddings
-        embeddings = torch.stack(list(embeddings_dict.values())).to(self.device)
+        # Prepare embeddings with optional curriculum learning
+        # Curriculum: sort by instruction length, start with shorter (simpler) instructions
+        use_curriculum = getattr(self.config, 'vae_curriculum', True)
+        curriculum_start_pct = getattr(self.config, 'vae_curriculum_start_pct', 0.3)
+        curriculum_epochs = getattr(self.config, 'vae_curriculum_epochs', 5000)
+
+        # Get instruction indices sorted by text length (shorter = simpler)
+        if use_curriculum and embedding_source == "instructions" and self.instructions:
+            # Sort instructions by length
+            length_sorted_indices = sorted(
+                range(len(self.instructions)),
+                key=lambda i: len(self.instructions[i])
+            )
+            # Reorder embeddings dict keys to match sorted order
+            try:
+                embeddings_keys = list(embeddings_dict.keys())
+                sorted_keys = [embeddings_keys[i] for i in length_sorted_indices]
+                embeddings_sorted = torch.stack([embeddings_dict[k] for k in sorted_keys]).to(self.device)
+            except (IndexError, KeyError) as e:
+                print(f"ERROR: Curriculum learning index mismatch")
+                print(f"  Instructions count: {len(self.instructions)}")
+                print(f"  Embeddings dict keys count: {len(embeddings_dict)}")
+                print(f"  Embeddings dict keys (first 10): {list(embeddings_dict.keys())[:10]}")
+                print(f"  Sorted indices (first 10): {length_sorted_indices[:10]}")
+                raise ValueError(
+                    f"Curriculum learning failed: embeddings_dict keys don't match instruction indices. "
+                    f"This may indicate a data loading bug. Original error: {e}"
+                )
+            embeddings = embeddings_sorted
+            if verbose:
+                print(f"  Curriculum learning enabled:")
+                print(f"    Start with {curriculum_start_pct*100:.0f}% shortest instructions")
+                print(f"    Increase to 100% over {curriculum_epochs} epochs")
+                print(f"    Shortest instruction: {len(self.instructions[length_sorted_indices[0]])} chars")
+                print(f"    Longest instruction: {len(self.instructions[length_sorted_indices[-1]])} chars")
+        else:
+            embeddings = torch.stack(list(embeddings_dict.values())).to(self.device)
+            use_curriculum = False
 
         if verbose:
             print(f"  Training on {embeddings.shape[0]} embeddings")
 
-        # Initialize VAE
+        # Initialize VAE with improved architecture
+        mse_weight = getattr(self.config, 'vae_mse_weight', 0.2)
         self.vae = InstructionVAE(
             input_dim=self.config.embedding_dim,
             latent_dim=self.config.latent_dim,
             beta=self.config.vae_beta,
+            mse_weight=mse_weight,
         ).to(self.device)
 
         if verbose:
-            print(f"\n  VAE Architecture:")
+            print(f"\n  VAE Architecture (IMPROVED):")
             print(f"    Input dim: {self.config.embedding_dim}D (GTR embedding)")
             print(f"    Latent dim: {self.config.latent_dim}D ({self.config.embedding_dim}/{self.config.latent_dim} = {self.config.embedding_dim // self.config.latent_dim}x compression)")
             print(f"    Beta (KL weight): {self.config.vae_beta}")
-            print(f"    Encoder: {self.config.embedding_dim} → 256 → 128 → {self.config.latent_dim * 2} (mu+logvar)")
-            print(f"    Decoder: {self.config.latent_dim} → 128 → 256 → {self.config.embedding_dim} + L2 norm")
-            print(f"    Dropout: 0.1 (encoder layer 1, decoder layer 2)")
+            print(f"    MSE weight: {mse_weight} (in reconstruction loss)")
+            print(f"    Encoder: {self.config.embedding_dim} → 512 → 256 → 128 → {self.config.latent_dim * 2} (mu+logvar)")
+            print(f"    Decoder: {self.config.latent_dim} → 128 → 256 → 512 → {self.config.embedding_dim} + L2 norm")
+            print(f"    Dropout: 0.1")
             total_params = sum(p.numel() for p in self.vae.parameters())
             print(f"    Total parameters: {total_params:,}")
 
@@ -634,9 +683,20 @@ class LIPOHyperbandTrainer:
             else:
                 current_beta = self.config.vae_beta
 
-            # Shuffle data
-            perm = torch.randperm(embeddings.shape[0], device=self.device)
-            X_shuffled = embeddings[perm]
+            # Curriculum learning: gradually increase number of embeddings
+            # Start with curriculum_start_pct, increase to 100% over curriculum_epochs
+            if use_curriculum and epoch < curriculum_epochs:
+                progress = epoch / curriculum_epochs
+                current_pct = curriculum_start_pct + (1.0 - curriculum_start_pct) * progress
+                n_embeddings = max(self.config.vae_batch_size, int(len(embeddings) * current_pct))
+                # Use first n_embeddings (sorted by length - shorter first)
+                curr_embeddings = embeddings[:n_embeddings]
+            else:
+                curr_embeddings = embeddings
+
+            # Shuffle data (only the current subset)
+            perm = torch.randperm(curr_embeddings.shape[0], device=self.device)
+            X_shuffled = curr_embeddings[perm]
 
             epoch_losses = []
             epoch_cosine = []
@@ -644,7 +704,7 @@ class LIPOHyperbandTrainer:
             epoch_cycle = []
             epoch_cycle_cosine = []
 
-            for i in range(0, len(embeddings), self.config.vae_batch_size):
+            for i in range(0, len(curr_embeddings), self.config.vae_batch_size):
                 batch = X_shuffled[i:i + self.config.vae_batch_size]
 
                 optimizer.zero_grad()
@@ -693,7 +753,8 @@ class LIPOHyperbandTrainer:
 
             if verbose and (epoch + 1) % 100 == 0:
                 cycle_str = f", cycle={avg_cycle:.4f}, z_cos={avg_cycle_cosine:.4f}" if self.config.vae_gamma > 0 else ""
-                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, kl={avg_kl:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}{cycle_str}")
+                curriculum_str = f", samples={len(curr_embeddings)}" if use_curriculum and epoch < curriculum_epochs else ""
+                print(f"  Epoch {epoch + 1}: recon={avg_recon:.4f}, kl={avg_kl:.4f}, cosine={avg_cosine:.4f}, β={current_beta:.4f}{cycle_str}{curriculum_str}")
 
         # Store VAE training stats
         self.vae_stats = {
@@ -705,9 +766,13 @@ class LIPOHyperbandTrainer:
             "final_cycle_cosine": float(avg_cycle_cosine),
             "final_beta": float(current_beta),
             "gamma": float(self.config.vae_gamma),
+            "mse_weight": float(mse_weight),
             "early_stopped": patience_counter >= self.config.vae_patience,
             "num_embeddings": len(embeddings),
             "latent_dim": self.config.latent_dim,
+            "curriculum_enabled": use_curriculum,
+            "curriculum_start_pct": curriculum_start_pct if use_curriculum else None,
+            "curriculum_epochs": curriculum_epochs if use_curriculum else None,
         }
 
         if verbose:
@@ -738,7 +803,7 @@ class LIPOHyperbandTrainer:
 
         return self.vae
 
-    def _validate_vae_roundtrip(self, verbose: bool = True) -> bool:
+    def _validate_vae_roundtrip(self, verbose: bool = True) -> Optional[bool]:
         """Validate VAE + Vec2Text round-trip quality.
 
         Tests that the pipeline: instruction → GTR → VAE → decode → Vec2Text
@@ -748,6 +813,8 @@ class LIPOHyperbandTrainer:
 
         Returns:
             True if quality is acceptable (mean_sim >= threshold)
+            False if quality is below threshold
+            None if validation was skipped (Vec2Text not available, no data, etc.)
         """
         from lipo.inference import validate_roundtrip_quality, Vec2TextInverter
 
@@ -768,23 +835,24 @@ class LIPOHyperbandTrainer:
         else:
             if verbose:
                 print("  Skipping: no instructions loaded for validation")
-            return True
+            return None  # Validation skipped - no data
 
         try:
             inverter = Vec2TextInverter(
                 device=str(self.device),
                 model_type=self.config.vec2text_model,
+                finetuned_path=self.config.vec2text_finetuned_path,
             )
         except (ImportError, FileNotFoundError, OSError) as e:
             # Vec2Text not available or model files missing - skip validation
             if verbose:
                 print(f"  Skipping: Vec2Text not available: {e}")
-            return True
+            return None  # Validation skipped - Vec2Text unavailable
         except (RuntimeError, MemoryError) as e:
             # GPU/memory issues - warn loudly but continue (validation optional)
             print(f"WARNING: Vec2Text init failed with GPU/memory issue: {e}")
             print(f"  Consider reducing batch size or using CPU for validation.")
-            return True
+            return None  # Validation skipped - GPU/memory issue
 
         results = validate_roundtrip_quality(
             vae=self.vae,
@@ -1567,10 +1635,15 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
-            # Data inconsistency - log warning but continue with index 0
-            print(f"WARNING: Best instruction from grid not found in instructions list")
-            print(f"  Instruction: {best['instruction_text'][:100]}...")
-            print(f"  This indicates data inconsistency - using index 0")
+            # Data inconsistency - log detailed diagnostic context
+            print(f"ERROR: Best instruction from grid not found in instructions list")
+            print(f"  Best instruction: {best['instruction_text']}")
+            print(f"  Instructions list size: {len(self.instructions)}")
+            if self.instructions:
+                print(f"  Falling back to index 0: {self.instructions[0]}")
+            else:
+                print(f"  WARNING: Instructions list is EMPTY!")
+            print(f"  This indicates a data pipeline bug - investigate source files.")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(
@@ -1610,10 +1683,15 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
-            # Data inconsistency - log warning but continue with index 0
-            print(f"WARNING: Best instruction from grid not found in instructions list")
-            print(f"  Instruction: {best['instruction_text'][:100]}...")
-            print(f"  This indicates data inconsistency - using index 0")
+            # Data inconsistency - log detailed diagnostic context
+            print(f"ERROR: Best instruction from grid not found in instructions list")
+            print(f"  Best instruction: {best['instruction_text']}")
+            print(f"  Instructions list size: {len(self.instructions)}")
+            if self.instructions:
+                print(f"  Falling back to index 0: {self.instructions[0]}")
+            else:
+                print(f"  WARNING: Instructions list is EMPTY!")
+            print(f"  This indicates a data pipeline bug - investigate source files.")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(

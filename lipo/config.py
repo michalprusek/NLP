@@ -53,8 +53,9 @@ class Config:
     ape_max_length: int = 500
 
     # === VAE Training ===
-    vae_beta: float = 0.01  # KL regularization weight
+    vae_beta: float = 0.005  # KL regularization weight (lowered from 0.01 for better reconstruction)
     vae_gamma: float = 0.0  # Cycle consistency disabled (compensated by higher beta)
+    vae_mse_weight: float = 0.2  # MSE weight in reconstruction loss (0.2 = 20% MSE + 80% cosine)
     vae_epochs: int = 50000  # Increased for better reconstruction with 32D latent
     vae_annealing_epochs: int = 2500  # 5% of epochs for KL warmup
     vae_patience: int = 1000  # More patience for longer training
@@ -62,6 +63,9 @@ class Config:
     vae_batch_size: int = 64
     vae_grad_clip: float = 1.0
     vae_eta_min: float = 1e-4
+    vae_curriculum: bool = True  # Curriculum learning: start with shorter instructions
+    vae_curriculum_start_pct: float = 0.3  # Start with 30% of instructions (shortest)
+    vae_curriculum_epochs: int = 5000  # Epochs over which to increase to 100%
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension
@@ -88,13 +92,22 @@ class Config:
     raw_samples: int = 4096  # Raw samples for initialization (higher for better coverage in high-D)
     acquisition_type: str = "ucb"  # Acquisition function: "ucb" or "logei"
     ucb_beta: float = 8.0  # UCB exploration parameter (higher = more exploration)
+    ucb_beta_adaptive: bool = True  # Enable adaptive UCB beta (decay over iterations)
+    ucb_beta_final: float = 2.0  # Final UCB beta at last iteration (when adaptive)
     cosine_sim_threshold: float = 0.90  # Min cosine similarity for candidate acceptance
     max_rejection_attempts: int = 10  # Max attempts (increased for better candidates)
+    latent_noise_scale: float = 0.05  # Noise scale for diversity injection in latent space
 
     # === Vec2Text ===
     vec2text_beam: int = 8  # Beam width for Vec2Text generation
-    vec2text_model: str = "32_tokens"  # "32_tokens" (faster, more diverse) or "512_tokens" (longer but unicode issues)
+    vec2text_model: str = "32_tokens"  # "32_tokens" (recommended, no unicode issues) or "512_tokens" (longer but produces garbage)
     vec2text_max_length: int = 128  # Maximum output tokens for Vec2Text
+    vec2text_finetuned_path: str = ""  # Path to fine-tuned Vec2Text corrector (empty = use pre-trained)
+    vec2text_finetuned_inverter_path: str = ""  # Path to fine-tuned InversionModel (empty = use pre-trained)
+    # Adaptive correction: iteratively refine until embedding matches target
+    vec2text_adaptive_correction: bool = False  # Enable adaptive iterative correction
+    vec2text_adaptive_max_steps: int = 100  # Maximum correction steps
+    vec2text_adaptive_threshold: float = 0.98  # Stop when cosine >= this (high = strict)
 
     # === TuRBO (Trust Region) ===
     # Parameters from Eriksson et al. "Scalable Global Optimization via Local BO" (NeurIPS 2019)
@@ -128,6 +141,39 @@ class Config:
     device: str = "cuda"
     validation_path: str = "hbbops_improved_2/data/validation.json"
     seed: int = 42
+
+    def __post_init__(self):
+        """Validate configuration invariants."""
+        # VAE weight bounds
+        if not 0.0 <= self.vae_mse_weight <= 1.0:
+            raise ValueError(f"vae_mse_weight must be in [0, 1], got {self.vae_mse_weight}")
+        if not 0.0 < self.vae_curriculum_start_pct <= 1.0:
+            raise ValueError(f"vae_curriculum_start_pct must be in (0, 1], got {self.vae_curriculum_start_pct}")
+
+        # Non-negative constraints
+        if self.latent_noise_scale < 0:
+            raise ValueError(f"latent_noise_scale must be non-negative, got {self.latent_noise_scale}")
+        if self.vae_curriculum_epochs < 0:
+            raise ValueError(f"vae_curriculum_epochs must be non-negative, got {self.vae_curriculum_epochs}")
+        if self.vae_beta < 0:
+            raise ValueError(f"vae_beta must be non-negative, got {self.vae_beta}")
+
+        # Adaptive UCB relationship
+        if self.ucb_beta_adaptive and self.ucb_beta_final > self.ucb_beta:
+            raise ValueError(
+                f"ucb_beta_final ({self.ucb_beta_final}) must be <= ucb_beta ({self.ucb_beta}) when adaptive"
+            )
+
+        # Adaptive correction constraints
+        if self.vec2text_adaptive_correction:
+            if not 0.0 < self.vec2text_adaptive_threshold <= 1.0:
+                raise ValueError(
+                    f"vec2text_adaptive_threshold must be in (0, 1], got {self.vec2text_adaptive_threshold}"
+                )
+            if self.vec2text_adaptive_max_steps < 1:
+                raise ValueError(
+                    f"vec2text_adaptive_max_steps must be positive, got {self.vec2text_adaptive_max_steps}"
+                )
 
     def for_hyperband_gp(self) -> dict:
         """Get GP training params for Hyperband (reduced for speed).

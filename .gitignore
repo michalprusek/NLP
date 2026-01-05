@@ -150,3 +150,8 @@ robust_vec2text/visualizations/
 
 # CatBoost training info
 catboost_info/
+
+# Vec2Text finetuning - large model checkpoints and training data
+lipo/vec2text_finetune/checkpoints*/
+lipo/vec2text_finetune/data*/
+lipo/vec2text_finetune/logs/

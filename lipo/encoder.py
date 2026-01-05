@@ -89,14 +89,14 @@ class InstructionVAE(nn.Module):
     Provides smooth latent space via KL regularization to N(0,1).
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
-    Architecture (32D latent):
-        Encoder: 768D → 256 → 128 → 2*32 (mu + log_var)
-        Decoder: 32D → 128 → 256 → 768D (L2 normalized)
+    Architecture (32D latent) - IMPROVED for better reconstruction:
+        Encoder: 768D → 512 → 256 → 128 → 2*32 (mu + log_var)
+        Decoder: 32D → 128 → 256 → 512 → 768D (L2 normalized)
 
-    Compression ratios per layer: 3× → 2× → 2× (gradual)
+    Compression ratios per layer: 1.5× → 2× → 2× → 2× (more gradual)
 
     Loss:
-        L = recon_loss + beta * KL(q(z|x) || N(0,1))
+        L = (1-mse_weight)*cosine_loss + mse_weight*mse_loss + beta * KL
         (cycle_loss disabled by default with gamma=0)
 
     The KL regularization ensures:
@@ -110,28 +110,48 @@ class InstructionVAE(nn.Module):
         self,
         input_dim: int = 768,
         latent_dim: int = 32,
-        beta: float = 0.01,
+        beta: float = 0.005,  # Lowered from 0.01 for better reconstruction
         gamma: float = 0.0,
+        mse_weight: float = 0.2,  # Weight for MSE component in reconstruction loss
     ):
         """Initialize VAE.
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
             latent_dim: Latent space dimension (32 by default, 24x compression)
-            beta: KL regularization weight
+            beta: KL regularization weight (default 0.005, lowered for reconstruction quality)
             gamma: Cycle consistency weight (disabled by default)
+            mse_weight: Weight for MSE in reconstruction loss (0.2 = 20% MSE + 80% cosine)
         """
         super().__init__()
+
+        # Validate parameters
+        if not 0.0 <= mse_weight <= 1.0:
+            raise ValueError(f"mse_weight must be in [0, 1], got {mse_weight}")
+        if beta < 0:
+            raise ValueError(f"beta must be non-negative, got {beta}")
+        if gamma < 0:
+            raise ValueError(f"gamma must be non-negative, got {gamma}")
+        if input_dim <= 0:
+            raise ValueError(f"input_dim must be positive, got {input_dim}")
+        if latent_dim <= 0:
+            raise ValueError(f"latent_dim must be positive, got {latent_dim}")
+
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.beta = beta
         self.gamma = gamma
+        self.mse_weight = mse_weight
 
-        # Encoder: 768 → 256 → 128 → 2*latent_dim (mu + logvar)
-        # Gradual compression: 3× → 2× → 2×
-        # Dropout for regularization
+        # Encoder: 768 → 512 → 256 → 128 → 2*latent_dim (mu + logvar)
+        # More gradual compression: 1.5× → 2× → 2× → 2×
+        # Added 512D layer for better capacity
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 256),  # 768 → 256 (3×)
+            nn.Linear(input_dim, 512),  # 768 → 512 (1.5×) - more gradual
+            nn.GELU(),
+            nn.LayerNorm(512),
+            nn.Dropout(0.1),
+            nn.Linear(512, 256),  # 512 → 256 (2×)
             nn.GELU(),
             nn.LayerNorm(256),
             nn.Dropout(0.1),
@@ -141,8 +161,8 @@ class InstructionVAE(nn.Module):
             nn.Linear(128, latent_dim * 2),  # 128 → 64 (2×) mu + log_var
         )
 
-        # Decoder: latent → 128 → 256 → 768
-        # Symmetric architecture with Dropout
+        # Decoder: latent → 128 → 256 → 512 → 768
+        # Symmetric architecture with added 512D layer
         # L2 normalization on output (critical for GTR embeddings)
         self.decoder_layers = nn.Sequential(
             nn.Linear(latent_dim, 128),  # 32 → 128 (4×)
@@ -152,7 +172,10 @@ class InstructionVAE(nn.Module):
             nn.GELU(),
             nn.LayerNorm(256),
             nn.Dropout(0.1),
-            nn.Linear(256, input_dim),  # 256 → 768 (3×)
+            nn.Linear(256, 512),  # 256 → 512 (2×) - added layer
+            nn.GELU(),
+            nn.LayerNorm(512),
+            nn.Linear(512, input_dim),  # 512 → 768 (1.5×) - more gradual
         )
 
         # Initialize weights for stable training
@@ -253,10 +276,12 @@ class InstructionVAE(nn.Module):
         z: Optional[torch.Tensor] = None,
         beta: Optional[float] = None,
         gamma: Optional[float] = None,
+        mse_weight: Optional[float] = None,
     ) -> Tuple[torch.Tensor, dict]:
         """Compute VAE loss with optional cycle consistency.
 
         Loss = recon_loss + beta * KL_loss + gamma * cycle_loss
+        where recon_loss = (1-mse_weight)*cosine_loss + mse_weight*mse_loss
 
         Cycle consistency ensures that z ≈ encode_mu(decode(z)), preventing
         the latent space from having "holes" where decoded embeddings map
@@ -270,6 +295,7 @@ class InstructionVAE(nn.Module):
             z: Sampled latent (required if gamma > 0)
             beta: Optional override for KL weight
             gamma: Optional override for cycle consistency weight
+            mse_weight: Optional override for MSE weight in reconstruction loss
 
         Returns:
             (total_loss, loss_dict) tuple
@@ -278,10 +304,17 @@ class InstructionVAE(nn.Module):
             beta = self.beta
         if gamma is None:
             gamma = self.gamma
+        if mse_weight is None:
+            mse_weight = self.mse_weight
 
-        # Reconstruction loss (cosine)
+        # Reconstruction loss: combination of cosine and MSE
+        # Cosine captures direction, MSE captures magnitude
         cosine_sim = F.cosine_similarity(x, x_recon, dim=-1)
-        recon_loss = (1 - cosine_sim).mean()
+        cosine_loss = (1 - cosine_sim).mean()
+        mse_loss = F.mse_loss(x, x_recon)
+
+        # Combined reconstruction loss
+        recon_loss = (1 - mse_weight) * cosine_loss + mse_weight * mse_loss
 
         # KL divergence to N(0,1)
         # KL = -0.5 * sum(1 + log_var - mu^2 - var)
@@ -305,6 +338,8 @@ class InstructionVAE(nn.Module):
         loss_dict = {
             "total": total_loss.item(),
             "recon": recon_loss.item(),
+            "cosine_loss": cosine_loss.item(),
+            "mse_loss": mse_loss.item(),
             "kl": kl_loss.item(),
             "cycle": cycle_loss_val,
             "cosine_mean": cosine_sim.mean().item(),
