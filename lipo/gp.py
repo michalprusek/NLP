@@ -1,10 +1,10 @@
 """Deep Kernel Gaussian Process for instruction optimization.
 
 Provides:
-- InstructionDeepKernelGP: GP with Matern 5/2 kernel on 10D latent features
+- InstructionDeepKernelGP: GP with Matern 5/2 kernel on 32D VAE latent
 - GPWithEI: Wrapper with Expected Improvement computation
 
-Self-contained within the lipo package (no imports from other lipo/ modules).
+GP operates directly on 32D VAE latent space (no adapter compression).
 """
 
 import torch
@@ -18,7 +18,6 @@ from gpytorch.constraints import Interval
 from gpytorch.distributions import MultivariateNormal
 from botorch.models.gpytorch import GPyTorchModel
 from botorch.models.transforms.outcome import Standardize
-from botorch.models.transforms.input import Warp
 from scipy.stats import norm
 from scipy.special import erfcx, log1p, expm1
 from typing import Tuple, Optional, Dict, Any, Union
@@ -126,29 +125,23 @@ def log_h_tensor(z: torch.Tensor) -> torch.Tensor:
 
 
 class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
-    """Gaussian Process with deep kernel for instruction optimization.
+    """Gaussian Process with ARD Matern 5/2 kernel for instruction optimization.
 
-    Uses optional Kumaraswamy warping + trainable adapter (D → 10D) + ARD Matern 5/2 kernel.
+    Operates directly on VAE latent space with ARD kernel.
     Inherits from GPyTorchModel for BoTorch compatibility (enables EI, etc.).
 
     Architecture:
-        VAE latent (D, normalized to [0,1]) -> Kumaraswamy Warp -> Adapter (D → 10D) -> Matern 5/2 kernel (ARD)
-                                                                                                      |
-                                                                                            GP(mean=0, K(latent))
-
-    Kumaraswamy Input Warping:
-        Transforms inputs in [0,1] non-linearly using learned concentration parameters (a, b).
-        Helps GP handle non-uniform data distributions by concentrating density where data is.
-        Applied BEFORE adapter because inputs must be in [0,1] for Kumaraswamy CDF.
-        Formula: F(x; a,b) = 1 - (1-x^a)^b
+        VAE latent (32D, normalized to [0,1]) -> Matern 5/2 kernel (ARD)
+                                                        |
+                                                GP(mean=0, K(latent))
 
     ARD (Automatic Relevance Determination):
-        Per-dimension lengthscales allow the kernel to learn which dimensions
-        are most relevant for prediction. Irrelevant dimensions get large
+        Per-dimension lengthscales allow the kernel to learn which
+        dimensions are most relevant for prediction. Irrelevant dimensions get large
         lengthscales (effectively ignored).
 
-    Training: Warping, adapter, and GP kernel are trained jointly on VAE latents.
-    VAE encoder is frozen and applied before GP training.
+    Note: No adapter compression - GP works directly on 32D VAE latent.
+    This simplifies the architecture and avoids overfitting with limited training data.
     """
 
     _num_outputs = 1  # Required for BoTorch
@@ -158,70 +151,84 @@ class InstructionDeepKernelGP(ExactGP, GPyTorchModel):
         train_x: torch.Tensor,
         train_y: torch.Tensor,
         likelihood: Union[GaussianLikelihood, FixedNoiseGaussianLikelihood],
-        adapter: nn.Module,
-        use_input_warping: bool = True,
     ):
         """Initialize GP.
 
         Args:
-            train_x: Training VAE latents (N, D) where D is VAE latent dimension
+            train_x: Training VAE latents (N, D) where D is VAE latent dimension (32)
             train_y: Training targets (N,) - negated error rates (for BoTorch maximization)
             likelihood: Gaussian or FixedNoiseGaussian likelihood
-            adapter: Trainable adapter MLP (D → 10D)
-            use_input_warping: Whether to apply Kumaraswamy input warping before adapter
         """
         # Ensure train_y is 1D for ExactGP
         train_y = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
         super().__init__(train_x, train_y, likelihood)
 
-        self.adapter = adapter
+        self._input_dim = train_x.shape[-1]  # Get actual VAE latent dimension (32)
 
-        # Kumaraswamy input warping on VAE latents (BEFORE adapter)
-        # Learns concentration parameters (a, b) per dimension to handle non-uniform data
-        # Applied before adapter because:
-        # 1. X_norm is already in [0,1] (unit cube normalized) - required by Kumaraswamy
-        # 2. Warping helps GP model non-uniform input distributions
-        # Note: Only set attribute if warping is enabled to avoid BoTorch GPyTorchModel issues
-        self._use_input_warping = use_input_warping
-        self._input_dim = train_x.shape[-1]  # Get actual VAE latent dimension
-        if use_input_warping:
-            self.input_transform = Warp(
-                d=self._input_dim,  # Dynamic: matches actual VAE latent dimension
-                indices=list(range(self._input_dim)),  # Warp all dims
-            )
+        # === Data-driven prior estimation ===
+        # Lengthscale: estimate from median pairwise distances per dimension
+        # For [0,1] normalized inputs, typical distances are ~0.2-0.5
+        # We use a broad prior centered on median distance to allow flexibility
+        with torch.no_grad():
+            # Sample subset for efficiency (max 100 pairs)
+            n_samples = min(train_x.shape[0], 100)
+            idx = torch.randperm(train_x.shape[0])[:n_samples]
+            X_sample = train_x[idx]
+
+            # Compute per-dimension distances
+            # Shape: (n_samples, n_samples, D)
+            diffs = X_sample.unsqueeze(0) - X_sample.unsqueeze(1)
+            per_dim_dists = diffs.abs()
+
+            # Median distance per dimension (excluding self-distances)
+            mask = ~torch.eye(n_samples, dtype=torch.bool, device=train_x.device)
+            median_dists = []
+            for d in range(self._input_dim):
+                dim_dists = per_dim_dists[:, :, d][mask]
+                median_dists.append(dim_dists.median().item())
+            median_dist = np.median(median_dists)
+
+            # Clamp to reasonable range for numerical stability
+            median_dist = max(0.05, min(0.5, median_dist))
+
+        # Lengthscale prior: Gamma with mean = median_dist, moderate variance
+        # Gamma(α, β) has mean = α/β, variance = α/β²
+        # We want mean ≈ median_dist, std ≈ median_dist/2
+        # α = 4, β = 4/median_dist gives mean=median_dist, std=median_dist/2
+        ls_alpha = 4.0
+        ls_beta = ls_alpha / median_dist
+
+        # Outputscale prior: Since y is standardized (mean=0, std=1),
+        # outputscale should be around 1.0
+        # Gamma(2, 2) has mean=1, std=0.71 - reasonable for standardized targets
+        os_alpha = 2.0
+        os_beta = 2.0
 
         self.mean_module = gpytorch.means.ZeroMean()
         self.covar_module = gpytorch.kernels.ScaleKernel(
             gpytorch.kernels.MaternKernel(
                 nu=2.5,  # Matern 5/2 - smooth but flexible
-                ard_num_dims=10,  # Per-dimension lengthscales (adapter output dim)
-                lengthscale_prior=gpytorch.priors.GammaPrior(3.0, 6.0),
+                ard_num_dims=self._input_dim,  # Per-dimension lengthscales (32D)
+                lengthscale_prior=gpytorch.priors.GammaPrior(ls_alpha, ls_beta),
             ),
-            outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15),
+            outputscale_prior=gpytorch.priors.GammaPrior(os_alpha, os_beta),
         )
+
+        # Initialize lengthscales to median distance (better starting point)
+        self.covar_module.base_kernel.lengthscale = median_dist
 
     def forward(self, x: torch.Tensor) -> MultivariateNormal:
         """Forward pass through GP.
 
-        Pipeline: x (D) -> warping (if enabled) -> adapter (10D) -> kernel
+        Pipeline: x (32D) -> Matern 5/2 ARD kernel
 
         Args:
-            x: VAE latent (batch, D) or (batch, n, D), already unit cube normalized to [0,1]
+            x: VAE latent (batch, 32) or (batch, n, 32), already unit cube normalized to [0,1]
 
         Returns:
             MultivariateNormal distribution over function values
         """
-        # Apply Kumaraswamy input warping BEFORE adapter
-        # x is already in [0,1] from unit cube normalization, which is required for warping
-        if self._use_input_warping:
-            # Clamp to (eps, 1-eps) to avoid numerical issues at boundaries
-            # Kumaraswamy CDF has numerical issues at exactly 0 or 1
-            eps = 1e-6
-            x = x.clamp(min=eps, max=1 - eps)
-            x = self.input_transform(x)
-
-        # Apply adapter: D → 10D
-        latent = self.adapter(x)
+        latent = x
 
         # Handle 3D for BoTorch posterior
         if latent.dim() == 3:
@@ -240,38 +247,35 @@ class GPWithEI:
     instruction optimization.
 
     Architecture:
-        Training: embeddings (768D) → frozen VAE encoder → z (D) → normalize [0,1] → warping+adapter+GP training
-        Inference: z_norm (D, [0,1]) → Kumaraswamy Warp → adapter (10D) → ARD Matern kernel → GP → qLogEI
+        Training: embeddings (768D) → frozen VAE encoder → z (32D) → normalize [0,1] → GP training
+        Inference: z_norm (32D, [0,1]) → ARD Matern kernel → GP → qLogEI
 
-    Where D is the VAE latent dimension (configurable, default 16).
+    No adapter compression - GP works directly on 32D VAE latent space.
     """
 
     def __init__(
         self,
         device: str = "cuda",
-        latent_dim: int = 10,
     ):
         """Initialize GP wrapper.
 
         Args:
             device: Device to use
-            latent_dim: Adapter output dimension (10)
         """
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.latent_dim = latent_dim
 
         # Components (initialized during training)
-        self.vae_with_adapter: Optional[nn.Module] = None  # VAEWithAdapter (frozen VAE + trainable adapter)
+        self.vae_with_adapter: Optional[nn.Module] = None  # VAEWithAdapter (frozen VAE wrapper)
         self.likelihood: Optional[GaussianLikelihood] = None
         self.gp_model: Optional[InstructionDeepKernelGP] = None
 
-        # Training data - stored as 16D VAE latents
-        self.X_train: Optional[torch.Tensor] = None  # (N, 16) VAE latents
+        # Training data - stored as 32D VAE latents
+        self.X_train: Optional[torch.Tensor] = None  # (N, 32) VAE latents
         self.y_train: Optional[torch.Tensor] = None  # (N,) negated error rates (internal)
         self.fidelity_train: Optional[torch.Tensor] = None  # (N,) sample counts for each observation
         self._error_rates_original: Optional[torch.Tensor] = None  # (N,) positive error rates for noise computation
 
-        # Normalization parameters (for 64D latents)
+        # Normalization parameters (for 32D latents)
         self.X_min: Optional[torch.Tensor] = None
         self.X_max: Optional[torch.Tensor] = None
         self.y_mean: Optional[torch.Tensor] = None
@@ -279,6 +283,11 @@ class GPWithEI:
 
         # Best observed value (for EI)
         self.y_best: Optional[float] = None
+
+        # Empirical Bayes prior parameters (set from training data)
+        # Default to Beta(1,1) = uniform prior (equivalent to Laplace smoothing)
+        self.beta_alpha: float = 1.0
+        self.beta_beta: float = 1.0
 
         # Training stats (populated after train())
         self.training_stats: Dict[str, Any] = {}
@@ -288,10 +297,12 @@ class GPWithEI:
         embeddings: torch.Tensor,
         error_rates: torch.Tensor,
         fidelities: Optional[torch.Tensor] = None,
+        beta_alpha: float = 1.0,
+        beta_beta: float = 1.0,
     ):
         """Set training data for GP.
 
-        Transforms embeddings to 16D VAE latents using frozen VAE encoder.
+        Transforms embeddings to 32D VAE latents using frozen VAE encoder.
 
         IMPORTANT: We negate error_rates for BoTorch compatibility.
         BoTorch's qLogExpectedImprovement MAXIMIZES by default:
@@ -306,7 +317,12 @@ class GPWithEI:
             embeddings: Instruction embeddings (N, 768)
             error_rates: Error rates (N,) in [0, 1] - will be negated internally
             fidelities: Sample counts for each observation (N,) - used for heteroscedastic noise
+            beta_alpha: Empirical Bayes prior alpha (default 1.0 = uniform prior)
+            beta_beta: Empirical Bayes prior beta (default 1.0 = uniform prior)
         """
+        # Store Empirical Bayes prior parameters for noise computation
+        self.beta_alpha = beta_alpha
+        self.beta_beta = beta_beta
         if self.vae_with_adapter is None:
             raise RuntimeError("vae_with_adapter must be set before setting training data.")
 
@@ -320,7 +336,7 @@ class GPWithEI:
                 f"Ensure you're passing GTR embeddings, not VAE latents."
             )
 
-        # Transform to 16D VAE latents using frozen encoder
+        # Transform to 32D VAE latents using frozen encoder
         self.vae_with_adapter.eval()
         with torch.no_grad():
             vae_latents = self.vae_with_adapter.encode_vae(embeddings)
@@ -333,7 +349,7 @@ class GPWithEI:
                 f"got {vae_latents.shape[-1]}. Check VAE configuration."
             )
 
-        self.X_train = vae_latents  # (N, 16)
+        self.X_train = vae_latents  # (N, 32) - VAE latent dimension
 
         # Store original error rates for noise computation (needs positive values)
         self._error_rates_original = error_rates.to(self.device)
@@ -357,31 +373,38 @@ class GPWithEI:
             )
 
     def _compute_observation_noise(self, y: torch.Tensor, fidelity: torch.Tensor) -> torch.Tensor:
-        """Compute observation noise variance based on Bernoulli statistics.
+        """Compute observation noise variance using Beta posterior with Empirical Bayes prior.
 
-        For error_rate measured on n samples, variance is: Var = p(1-p)/n
-        where p is error_rate and n is fidelity (sample count).
+        Uses Empirical Bayes prior Beta(α, β) learned from data.
+        For error_rate p measured on n samples:
+        - Posterior: Beta(α+errors, β+successes)
+        - Posterior mean: (errors + α) / (n + α + β)
+        - Posterior variance: p(1-p) / (n + α + β + 1)
 
-        This gives GP information about observation reliability:
-        - Low fidelity (small n) → high variance → less trust
-        - High fidelity (large n) → low variance → more trust
+        With Empirical Bayes:
+        - Prior is centered at actual data mean (not 50%)
+        - More accurate uncertainty for low-fidelity samples
+        - Falls back to Beta(1,1) if prior not set
 
         Args:
-            y: Error rates (N,)
-            fidelity: Sample counts (N,)
+            y: Beta posterior mean of error rates (N,) - already smoothed
+            fidelity: Sample counts n (N,)
 
         Returns:
-            Observation noise variance for each point (N,)
+            Beta posterior variance for each point (N,)
         """
-        # Bernoulli variance: p(1-p)/n
-        # Clamp fidelity to minimum of 1 to avoid division by zero
-        safe_fidelity = torch.clamp(fidelity, min=1.0)
-        variance = (y * (1 - y)) / safe_fidelity
+        # Get Empirical Bayes prior parameters
+        alpha = self.beta_alpha
+        beta = self.beta_beta
 
-        # Clamp to avoid numerical issues:
-        # - min: prevent zero variance (causes numerical issues)
-        # - max: prevent extremely high variance for low-fidelity points
-        variance = torch.clamp(variance, min=1e-6, max=0.1)
+        # Beta posterior variance: p(1-p) / (n + α + β + 1)
+        # where p = posterior mean, n = fidelity
+        # This naturally handles p=0 or p=1 (no zero variance problem)
+        variance = (y * (1 - y)) / (fidelity + alpha + beta + 1)
+
+        # Minimal clamp for numerical stability only
+        # Beta posterior already provides reasonable variance even for extreme p
+        variance = torch.clamp(variance, min=1e-8, max=0.1)
 
         return variance
 
@@ -391,22 +414,20 @@ class GPWithEI:
         lr: float = 0.01,
         patience: int = 10,
         verbose: bool = True,
-        use_input_warping: bool = True,
     ) -> bool:
-        """Train GP on stored 16D VAE latents.
+        """Train GP on stored 32D VAE latents.
 
-        Trains adapter (16D→10D), Kumaraswamy warping, and GP kernel jointly.
-        VAE encoder is frozen.
+        Trains GP kernel on normalized VAE latents.
+        VAE encoder is frozen. No adapter - GP operates directly on 32D latent.
 
         Uses FixedNoiseGaussianLikelihood with heteroscedastic noise based on
-        Bernoulli variance: Var = p(1-p)/n, where n is fidelity (sample count).
+        Beta posterior variance: Var = p(1-p)/(n+3), where n is fidelity.
 
         Args:
             epochs: Maximum training epochs
             lr: Learning rate
             patience: Early stopping patience
             verbose: Print progress
-            use_input_warping: Whether to apply Kumaraswamy input warping on 10D adapter output
 
         Returns:
             True if training succeeded
@@ -414,10 +435,10 @@ class GPWithEI:
         if self.X_train is None or self.y_train is None:
             raise RuntimeError("No training data. Call set_training_data() first.")
 
-        X = self.X_train  # Already 16D VAE latents
+        X = self.X_train  # Already 32D VAE latents
         y = self.y_train
 
-        # Unit cube normalization for 16D latents
+        # Unit cube normalization for 32D latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -433,18 +454,15 @@ class GPWithEI:
         self.y_mean = self.outcome_transform.means.squeeze()
         self.y_std = self.outcome_transform.stdvs.squeeze()
 
-        # VAEWithAdapter must be pre-set
+        # VAEWithAdapter must be pre-set (for encoding embeddings to VAE latents)
         if self.vae_with_adapter is None:
             raise RuntimeError(
                 "vae_with_adapter must be set before training. "
                 "Use VAEWithAdapter from encoder.py."
             )
 
-        # Get trainable adapter from VAEWithAdapter
-        adapter = self.vae_with_adapter.adapter
-
-        # Compute heteroscedastic noise from Bernoulli variance
-        # Use original (positive) error rates for variance computation: p(1-p)/n
+        # Compute heteroscedastic noise from Beta posterior variance
+        # Use posterior mean for variance computation: p(1-p)/(n+3)
         # Noise in standardized space: scale by y_std^2
         raw_noise = self._compute_observation_noise(self._error_rates_original, self.fidelity_train)
         # Transform noise to standardized space (divide by y_std^2)
@@ -465,39 +483,78 @@ class GPWithEI:
 
         # FixedNoiseGaussianLikelihood with heteroscedastic noise
         # NOTE: learn_additional_noise=False to avoid CUDA errors with second_noise_covar
-        # The Bernoulli variance from fidelity is sufficient observation noise
+        # The Beta posterior variance from fidelity is sufficient observation noise
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=noise_standardized,
             learn_additional_noise=False,
         ).to(self.device)
+        # No adapter - GP operates directly on 32D VAE latent
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, adapter,
-            use_input_warping=use_input_warping,
+            X_norm, y_norm, self.likelihood,
         ).to(self.device)
 
         # Register outcome transform for BoTorch compatibility
         self.gp_model.outcome_transform = self.outcome_transform
 
+        # Log data-driven prior estimation
+        if verbose:
+            init_ls = self.gp_model.covar_module.base_kernel.lengthscale.mean().item()
+            print(f"  Data-driven lengthscale prior: mean={init_ls:.4f} (from median pairwise distances)")
+            print(f"  Outputscale prior: mean=1.0 (for standardized targets)")
+
         # Training loop
         self.gp_model.train()
         self.likelihood.train()
 
-        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=lr)
+        # Lower learning rate for higher dimensions to prevent gradient explosion
+        # With 32D we have ~35 parameters (32 ARD + kernel scale + outputscale)
+        dim = self.X_train.shape[-1]
+        if dim >= 32:
+            actual_lr = lr * 0.25  # 0.0025 for 32D
+        else:
+            actual_lr = lr
+        optimizer = torch.optim.AdamW(self.gp_model.parameters(), lr=actual_lr)
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
 
         best_loss = float("inf")
         patience_counter = 0
 
         if verbose:
-            print("Training GP...")
+            print(f"Training GP (lr={actual_lr:.4f}, dim={dim})...")
 
-        with gpytorch.settings.cholesky_jitter(1e-4):
+        # Higher jitter for numerical stability with larger dimension
+        if dim >= 32:
+            jitter = 1e-3
+        else:
+            jitter = 1e-4
+        with gpytorch.settings.cholesky_jitter(jitter):
             for epoch in range(epochs):
                 try:
                     optimizer.zero_grad()
                     output = self.gp_model(X_norm)
+
+                    # Early NaN detection - catch before Cholesky fails
+                    if torch.isnan(output.mean).any() or torch.isnan(output.lazy_covariance_matrix.diagonal()).any():
+                        print(f"ERROR: GP produced NaN at epoch {epoch + 1}")
+                        print(f"  This indicates numerical instability in kernel parameters")
+                        # Check which parameters went bad
+                        for name, param in self.gp_model.named_parameters():
+                            if torch.isnan(param).any():
+                                print(f"  NaN in parameter: {name}")
+                        return False
+
                     loss = -mll(output, y_norm)
+
+                    # Check for NaN loss
+                    if torch.isnan(loss):
+                        print(f"ERROR: NaN loss at epoch {epoch + 1}")
+                        return False
+
                     loss.backward()
+
+                    # Gradient clipping to prevent exploding gradients
+                    torch.nn.utils.clip_grad_norm_(self.gp_model.parameters(), max_norm=1.0)
+
                     optimizer.step()
 
                     if loss.item() < best_loss:
@@ -537,16 +594,33 @@ class GPWithEI:
                     # Re-raise all other RuntimeErrors - they indicate bugs, not expected failures
                     raise
 
+        # Get final lengthscales for analysis
+        final_ls = self.gp_model.covar_module.base_kernel.lengthscale.detach().cpu().squeeze()
+        final_os = self.gp_model.covar_module.outputscale.detach().cpu().item()
+
+        # Identify most relevant dimensions (smallest lengthscales = most important)
+        sorted_dims = torch.argsort(final_ls)
+        top_5_dims = sorted_dims[:5].tolist()
+        top_5_ls = final_ls[sorted_dims[:5]].tolist()
+
         # Store training stats
         self.training_stats = {
             "epochs_trained": epoch + 1,
             "final_loss": float(best_loss),
             "early_stopped": patience_counter >= patience,
             "num_samples": len(X),
+            "lengthscale_mean": float(final_ls.mean()),
+            "lengthscale_min": float(final_ls.min()),
+            "lengthscale_max": float(final_ls.max()),
+            "outputscale": float(final_os),
+            "top_5_relevant_dims": top_5_dims,
         }
 
         if verbose:
             print(f"  GP training complete (epochs={epoch + 1}, loss={best_loss:.4f})")
+            print(f"  Final lengthscales: mean={final_ls.mean():.4f}, min={final_ls.min():.4f}, max={final_ls.max():.4f}")
+            print(f"  Final outputscale: {final_os:.4f}")
+            print(f"  Top 5 relevant dims (smallest lengthscale): {list(zip(top_5_dims, [f'{ls:.3f}' for ls in top_5_ls]))}")
 
         return True
 
@@ -571,15 +645,19 @@ class GPWithEI:
         # Ensure correct shape
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
-        embedding = embedding.to(self.device)
 
-        # Encode 768D embedding to 16D VAE latent if needed
+        # Encode 768D embedding to 32D VAE latent if needed
         with torch.no_grad():
             if embedding.shape[-1] == 768:
-                # Encode through VAE to get 16D latent
-                z_vae = self.vae_with_adapter.encode_vae(embedding)
+                # Get the device where VAE actually is (may have been moved to CPU for eval)
+                vae_device = self.vae_with_adapter.device
+                embedding_for_vae = embedding.to(vae_device)
+                # Encode through VAE to get 32D latent
+                z_vae = self.vae_with_adapter.encode_vae(embedding_for_vae)
+                # Move result back to GP device
+                z_vae = z_vae.to(self.device)
             else:
-                z_vae = embedding
+                z_vae = embedding.to(self.device)
 
         # Normalize
         denom = self.X_max - self.X_min
@@ -763,38 +841,41 @@ class GPWithEI:
         return log_ei.squeeze()
 
     def get_latent(self, embedding: torch.Tensor) -> torch.Tensor:
-        """Get 10D latent for embedding using trained adapter.
+        """Get 32D VAE latent for embedding.
 
-        Pipeline: embedding (768D) → VAE encoder → z (16D) → normalize → adapter → z_gp (10D)
+        Pipeline: embedding (768D) → VAE encoder → z (32D) → normalize
 
         Args:
             embedding: Instruction embedding (768,)
 
         Returns:
-            Latent (10,)
+            Normalized VAE latent (32,)
         """
         if self.vae_with_adapter is None:
             raise RuntimeError("vae_with_adapter not initialized.")
 
-        embedding = embedding.to(self.device)
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
 
-        # First encode to 16D VAE latent
+        # Get the device where VAE actually is (may have been moved to CPU for eval)
+        vae_device = self.vae_with_adapter.device
+        embedding = embedding.to(vae_device)
+
+        # Encode to 32D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
             z_vae = self.vae_with_adapter.encode_vae(embedding)
 
-        # Normalize 16D latent
+        # Move result back to GP device
+        z_vae = z_vae.to(self.device)
+
+        # Normalize 32D latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         z_norm = (z_vae - self.X_min) / denom
 
-        # Apply adapter: 16D → 10D
-        with torch.no_grad():
-            latent = self.vae_with_adapter.adapter(z_norm)
-
-        return latent.squeeze(0)
+        # No adapter - return normalized VAE latent directly
+        return z_norm.squeeze(0)
 
     def get_training_size(self) -> int:
         """Get number of training samples."""
@@ -810,13 +891,13 @@ class GPWithEI:
 
         NOTE: Does NOT retrain - call train() after adding observations.
 
-        Error rate is Laplace-smoothed and negated internally for consistency
-        with training data and BoTorch compatibility.
+        Error rate is converted to Empirical Bayes posterior mean and negated internally
+        for consistency with training data and BoTorch compatibility.
 
         Args:
             embedding: Instruction embedding (768,) or (1, 768)
-            error_rate: Observed error rate (positive, will be smoothed and negated internally)
-            fidelity: Number of samples used for evaluation (for noise estimation and smoothing)
+            error_rate: Observed error rate (positive, will be regularized and negated internally)
+            fidelity: Number of samples used for evaluation (for Beta posterior variance)
 
         Raises:
             ValueError: If error_rate is not in [0, 1] or fidelity < 1
@@ -840,23 +921,29 @@ class GPWithEI:
         # Ensure correct shape
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
-        embedding = embedding.to(self.device)
 
-        # Encode to 16D VAE latent
+        # Get the device where VAE actually is (may have been moved to CPU for eval)
+        vae_device = self.vae_with_adapter.device
+        embedding = embedding.to(vae_device)
+
+        # Encode to 32D VAE latent
         self.vae_with_adapter.eval()
         with torch.no_grad():
-            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 16)
+            new_z = self.vae_with_adapter.encode_vae(embedding)  # (1, 32)
 
-        # Apply Laplace smoothing for consistency with training data
-        # Formula: (errors + 1) / (n + 2) - penalizes "lucky guesses" on low-fidelity samples
-        # This matches the smoothing applied in training.py:load_from_hyperband_evaluations()
+        # Move result back to GP device for training data storage
+        new_z = new_z.to(self.device)
+
+        # Empirical Bayes posterior mean for consistency with training data
+        # Formula: (errors + α) / (n + α + β) - data-driven prior instead of uniform
+        # This matches the posterior mean applied in training.py:load_from_hyperband_evaluations()
         num_errors = error_rate * fidelity
-        smoothed_error = (num_errors + 1) / (fidelity + 2)
+        posterior_mean = (num_errors + self.beta_alpha) / (fidelity + self.beta_alpha + self.beta_beta)
 
-        # Store original (smoothed) error rate for noise computation
-        new_error_original = torch.tensor([smoothed_error], dtype=torch.float32, device=self.device)
+        # Store posterior mean for noise computation (Beta posterior variance)
+        new_error_original = torch.tensor([posterior_mean], dtype=torch.float32, device=self.device)
         # Negate for GP training (BoTorch maximization)
-        new_y = torch.tensor([-smoothed_error], dtype=torch.float32, device=self.device)
+        new_y = torch.tensor([-posterior_mean], dtype=torch.float32, device=self.device)
         new_fid = torch.tensor([fidelity], dtype=torch.float32, device=self.device)
 
         # Append to existing data

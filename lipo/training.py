@@ -22,6 +22,65 @@ from lipo.encoder import GTRInstructionEncoder, InstructionVAE, VAEWithAdapter
 from lipo.gp import GPWithEI
 from lipo.hyperband import LIPOHyperband
 from lipo.instruction import InstructionOnlyPrompt
+from lipo.quality_kpi import compute_vae_quality
+
+
+def fit_beta_prior(raw_error_rates: List[float]) -> Tuple[float, float]:
+    """Estimate Beta prior parameters from existing data (Empirical Bayes).
+
+    Uses Method of Moments for fast, robust estimation.
+    This replaces the fixed Beta(1,1) prior (equivalent to Laplace smoothing)
+    with a data-driven prior that better reflects the actual error rate distribution.
+
+    For prompt optimization where error rates are typically 10-20%,
+    Beta(1,1) pulling toward 50% is too pessimistic.
+
+    Args:
+        raw_error_rates: List of observed error rates (before smoothing)
+
+    Returns:
+        (alpha, beta) tuple for Beta prior
+
+    Example:
+        If mean error rate is 0.15 with some variance, might return (2, 11)
+        giving a prior centered at 0.15 instead of 0.50.
+    """
+    import numpy as np
+
+    if len(raw_error_rates) < 2:
+        # Not enough data for fitting - fall back to weakly informative prior
+        return (1.0, 1.0)
+
+    # Clip extremes to avoid numerical issues
+    data = np.clip(raw_error_rates, 1e-4, 1 - 1e-4)
+
+    # Method of Moments estimation
+    mean = np.mean(data)
+    var = np.var(data)
+
+    # Avoid division by zero if variance is tiny
+    if var < 1e-8:
+        # Near-constant data - use weak prior centered at mean
+        return (1.0, (1.0 - mean) / mean if mean > 0.01 else 1.0)
+
+    # Solve for alpha, beta from mean and variance
+    # mean = α / (α + β)
+    # var = αβ / ((α+β)² (α+β+1))
+    # Rearranging: common = mean*(1-mean)/var - 1
+    common = mean * (1 - mean) / var - 1
+
+    if common <= 0:
+        # Variance too high for Beta - fall back to weak prior
+        return (1.0, 1.0)
+
+    alpha = mean * common
+    beta = (1 - mean) * common
+
+    # Clamp to reasonable range to avoid extreme priors
+    alpha = max(0.5, min(alpha, 10.0))
+    beta = max(0.5, min(beta, 50.0))
+
+    return alpha, beta
 
 
 class APEGenerator:
@@ -273,14 +332,14 @@ Output format:
                 if len(cleaned) > 5 and cleaned != instruction:
                     variations.append(cleaned)
             return variations[:3]
-        except (TimeoutError, ConnectionError) as e:
-            # Transient network errors - log briefly and continue
+        except (TimeoutError, ConnectionError):
+            # Transient network errors - continue silently
             return []
-        except Exception as e:
-            # Unexpected error - log with context for debugging
-            print(f"WARNING: APE augmentation failed for instruction: {instruction[:50]}...")
-            print(f"  Error type: {type(e).__name__}, Error: {e}")
+        except (ValueError, KeyError, IndexError) as e:
+            # Parsing errors in response - log and continue
+            print(f"WARNING: APE augmentation parsing failed: {type(e).__name__}: {e}")
             return []
+        # Note: AuthenticationError, RateLimitError, etc. propagate to caller
 
     def _add_noise(self, text: str, prob: float = 0.1) -> str:
         """Randomly drop or swap words for denoising VAE training.
@@ -406,6 +465,12 @@ class LIPOHyperbandTrainer:
         # Grid data (for load_from_grid mode)
         self.grid_data: Optional[List[dict]] = None
         self.grid_error_rates: List[float] = []
+        self.fidelities: List[int] = []
+
+        # Empirical Bayes prior parameters (set by load_from_hyperband_evaluations)
+        # Default to Beta(1,1) = uniform prior (equivalent to Laplace smoothing)
+        self.beta_alpha: float = 1.0
+        self.beta_beta: float = 1.0
 
         # LLM call counters
         self.total_llm_calls: int = 0  # Hyperband LLM calls
@@ -537,6 +602,17 @@ class LIPOHyperbandTrainer:
             beta=self.config.vae_beta,
         ).to(self.device)
 
+        if verbose:
+            print(f"\n  VAE Architecture:")
+            print(f"    Input dim: {self.config.embedding_dim}D (GTR embedding)")
+            print(f"    Latent dim: {self.config.latent_dim}D ({self.config.embedding_dim}/{self.config.latent_dim} = {self.config.embedding_dim // self.config.latent_dim}x compression)")
+            print(f"    Beta (KL weight): {self.config.vae_beta}")
+            print(f"    Encoder: {self.config.embedding_dim} → 256 → 128 → {self.config.latent_dim * 2} (mu+logvar)")
+            print(f"    Decoder: {self.config.latent_dim} → 128 → 256 → {self.config.embedding_dim} + L2 norm")
+            print(f"    Dropout: 0.1 (encoder layer 1, decoder layer 2)")
+            total_params = sum(p.numel() for p in self.vae.parameters())
+            print(f"    Total parameters: {total_params:,}")
+
         # Optimizer
         optimizer = torch.optim.AdamW(self.vae.parameters(), lr=self.config.vae_lr)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -637,12 +713,99 @@ class LIPOHyperbandTrainer:
         if verbose:
             print(f"  VAE training complete (epochs={epoch + 1}, final cosine={avg_cosine:.4f})")
 
-        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
+        # Compute and log VAE quality KPIs
+        vae_kpis = compute_vae_quality(self.vae, embeddings, device=self.device)
+        self.vae_quality_kpis = vae_kpis  # Store for later access
+
+        if verbose:
+            print(f"\n--- VAE Quality KPIs ---")
+            print(f"  Cosine Mean: {vae_kpis['cosine_mean']:.4f} (std: {vae_kpis['cosine_std']:.4f})")
+            print(f"  Percentile 10: {vae_kpis['percentile_10']:.4f} (target: >0.90)")
+            print(f"  Below 90%: {vae_kpis['below_90_count']} samples ({vae_kpis['below_90_pct']:.1f}%)")
+            print(f"  Quality Tier: {vae_kpis['quality_tier']}")
+
+            if vae_kpis['percentile_10'] < 0.90:
+                print(f"  WARNING: VAE Q10 below threshold! Consider increasing beta or epochs.")
+
+        # Create VAEWithAdapter (frozen VAE wrapper, no adapter)
         self.vae_with_adapter = VAEWithAdapter(
-            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+            self.vae, self.config.latent_dim
         ).to(self.device)
 
+        # Run round-trip validation if configured
+        if hasattr(self.config, 'roundtrip_validation_threshold'):
+            self._validate_vae_roundtrip(verbose=verbose)
+
         return self.vae
+
+    def _validate_vae_roundtrip(self, verbose: bool = True) -> bool:
+        """Validate VAE + Vec2Text round-trip quality.
+
+        Tests that the pipeline: instruction → GTR → VAE → decode → Vec2Text
+        produces embeddings with high cosine similarity to originals.
+
+        If similarity is below threshold, warns that optimization may not work.
+
+        Returns:
+            True if quality is acceptable (mean_sim >= threshold)
+        """
+        from lipo.inference import validate_roundtrip_quality, Vec2TextInverter
+
+        threshold = getattr(self.config, 'roundtrip_validation_threshold', 0.90)
+        n_samples = getattr(self.config, 'roundtrip_validation_samples', 20)
+
+        if verbose:
+            print("\n--- Round-Trip Validation ---")
+
+        # Get test instructions from grid data (task-relevant)
+        if hasattr(self, 'grid_data') and self.grid_data:
+            test_instructions = [
+                d["instruction_text"]
+                for d in self.grid_data[:n_samples]
+            ]
+        elif self.instructions:
+            test_instructions = self.instructions[:n_samples]
+        else:
+            if verbose:
+                print("  Skipping: no instructions loaded for validation")
+            return True
+
+        try:
+            inverter = Vec2TextInverter(
+                device=str(self.device),
+                model_type=self.config.vec2text_model,
+            )
+        except (ImportError, FileNotFoundError, OSError) as e:
+            # Vec2Text not available or model files missing - skip validation
+            if verbose:
+                print(f"  Skipping: Vec2Text not available: {e}")
+            return True
+        except (RuntimeError, MemoryError) as e:
+            # GPU/memory issues - warn loudly but continue (validation optional)
+            print(f"WARNING: Vec2Text init failed with GPU/memory issue: {e}")
+            print(f"  Consider reducing batch size or using CPU for validation.")
+            return True
+
+        results = validate_roundtrip_quality(
+            vae=self.vae,
+            gtr=self.gtr,
+            inverter=inverter,
+            instructions=test_instructions,
+            n_samples=len(test_instructions),
+            verbose=verbose,
+        )
+
+        if results["mean_sim"] < threshold:
+            print(f"WARNING: VAE round-trip quality below threshold!")
+            print(f"  Mean similarity: {results['mean_sim']:.4f} < {threshold}")
+            print(f"  Poor samples: {results['poor_count']}/{results['n_samples']}")
+            print(f"  Optimization may not improve results.")
+            return False
+
+        if verbose:
+            print(f"  Round-trip validation PASSED (mean_sim={results['mean_sim']:.4f} >= {threshold})")
+
+        return True
 
     def run_hyperband(
         self,
@@ -781,9 +944,9 @@ class LIPOHyperbandTrainer:
         ).to(self.device)
         self.vae.load_state_dict(torch.load(save_dir / "vae.pt", map_location=self.device))
 
-        # Create VAEWithAdapter (64D VAE latent → 10D GP latent via adapter)
+        # Create VAEWithAdapter (frozen VAE wrapper, no adapter)
         self.vae_with_adapter = VAEWithAdapter(
-            self.vae, self.config.latent_dim, self.config.gp_latent_dim
+            self.vae, self.config.latent_dim
         ).to(self.device)
 
         print(f"Models loaded from {save_dir}")
@@ -1030,10 +1193,11 @@ class LIPOHyperbandTrainer:
                 print(f"  Max fidelity: {max_fidelity}")
 
         # Build lists of ALL evaluated instructions with their error rates and fidelities
-        # FixedNoiseGaussianLikelihood will weight by fidelity (Bernoulli variance)
-        evaluated_instructions = []
-        error_rates = []
-        fidelities = []
+        # FixedNoiseGaussianLikelihood will weight by fidelity (Beta posterior variance)
+
+        # First pass: collect raw error rates for Empirical Bayes prior fitting
+        raw_error_rates = []
+        instruction_data = []  # (instruction, raw_error, fidelity)
 
         for idx_str, result in results.items():
             idx = int(idx_str)
@@ -1055,20 +1219,38 @@ class LIPOHyperbandTrainer:
                 if instruction is None:
                     continue
 
+            raw_error = result["error_rate"]
+            raw_error_rates.append(raw_error)
+            instruction_data.append((instruction, raw_error, fidelity))
+
+        # Fit Empirical Bayes prior from data
+        # This replaces fixed Beta(1,1) with data-driven prior
+        alpha, beta = fit_beta_prior(raw_error_rates)
+        self.beta_alpha = alpha
+        self.beta_beta = beta
+
+        if verbose:
+            prior_mean = alpha / (alpha + beta)
+            print(f"  Empirical Bayes prior: Alpha={alpha:.2f}, Beta={beta:.2f}")
+            print(f"  Prior mean error rate: {prior_mean:.2%}")
+
+        # Second pass: apply smoothing with learned prior
+        evaluated_instructions = []
+        error_rates = []
+        fidelities = []
+
+        for instruction, raw_error, fidelity in instruction_data:
             evaluated_instructions.append(instruction)
 
-            # Laplace smoothing: (errors + 1) / (n + 2)
-            # This penalizes "lucky guesses" on low-fidelity samples:
-            # - 0/10 → 1/12 = 0.083 (was 0.0)
-            # - 0/1319 → 1/1321 = 0.00076 (stays near 0)
-            raw_error = result["error_rate"]
+            # Empirical Bayes posterior mean: (errors + α) / (n + α + β)
+            # This pulls toward the data-driven prior mean instead of 50%
             num_errors = raw_error * fidelity
-            smoothed_error = (num_errors + 1) / (fidelity + 2)
-            error_rates.append(smoothed_error)
+            posterior_mean = (num_errors + alpha) / (fidelity + alpha + beta)
+            error_rates.append(posterior_mean)
             fidelities.append(fidelity)
 
         if verbose:
-            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Laplace-smoothed)")
+            print(f"  Using all {len(evaluated_instructions)} evaluated instructions (Empirical Bayes)")
             errors = sorted(error_rates)
             print(f"  Smoothed error range: [{errors[0]:.4f}, {errors[-1]:.4f}]")
             print(f"  Best 5 smoothed errors: {[f'{e:.4f}' for e in errors[:5]]}")
@@ -1300,17 +1482,20 @@ class LIPOHyperbandTrainer:
             print(f"  Error range: [{error_rates.min():.4f}, {error_rates.max():.4f}]")
             print(f"  Fidelity range: [{fidelities.min():.0f}, {fidelities.max():.0f}]")
 
-        # Create and train GP
+        # Create and train GP (works directly on 32D VAE latent, no adapter)
         self.gp = GPWithEI(
             device=str(self.device),
-            latent_dim=self.config.gp_latent_dim,  # Adapter output dim (10D)
         )
 
-        # Set VAEWithAdapter (frozen VAE + trainable adapter)
+        # Set VAEWithAdapter (frozen VAE wrapper for encoding)
         self.gp.vae_with_adapter = self.vae_with_adapter
 
-        # Set training data with fidelities for heteroscedastic noise
-        self.gp.set_training_data(embeddings, error_rates, fidelities)
+        # Set training data with fidelities and Empirical Bayes prior for heteroscedastic noise
+        self.gp.set_training_data(
+            embeddings, error_rates, fidelities,
+            beta_alpha=self.beta_alpha,
+            beta_beta=self.beta_beta,
+        )
 
         # Train GP
         train_success = self.gp.train(
@@ -1382,6 +1567,10 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
+            # Data inconsistency - log warning but continue with index 0
+            print(f"WARNING: Best instruction from grid not found in instructions list")
+            print(f"  Instruction: {best['instruction_text'][:100]}...")
+            print(f"  This indicates data inconsistency - using index 0")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(
@@ -1421,6 +1610,10 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
+            # Data inconsistency - log warning but continue with index 0
+            print(f"WARNING: Best instruction from grid not found in instructions list")
+            print(f"  Instruction: {best['instruction_text'][:100]}...")
+            print(f"  This indicates data inconsistency - using index 0")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(

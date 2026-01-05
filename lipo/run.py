@@ -23,7 +23,24 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 from scipy.stats import spearmanr
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+
+    def default(self, obj):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 from lipo.hbbops_results import extract_from_hyperband, save_hbbops_results
 
@@ -58,11 +75,19 @@ def setup_logging(output_dir: str, timestamp: str) -> Path:
     console_handler.setFormatter(console_format)
     root_logger.addHandler(console_handler)
 
-    # File handler
+    # File handler with auto-flush (prevents log loss on crash)
     file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.INFO)
     file_format = logging.Formatter('%(asctime)s | %(message)s', datefmt='%H:%M:%S')
     file_handler.setFormatter(file_format)
+
+    # Wrap emit to flush after every log entry
+    _original_emit = file_handler.emit
+    def _flushing_emit(record):
+        _original_emit(record)
+        file_handler.flush()
+    file_handler.emit = _flushing_emit
+
     root_logger.addHandler(file_handler)
 
     return log_file
@@ -72,10 +97,14 @@ class TeeOutput:
     """Tee stdout/stderr to both console and file logger.
 
     Filters out progress bars and other noisy output from file logging.
+    Handles both \n and \r line endings (tqdm uses \r for progress bars).
     """
 
     # Patterns to skip when logging to file (progress bars, etc.)
-    SKIP_PATTERNS = ("Batches:", "|", "it/s]", "Fetching", "%|")
+    SKIP_PATTERNS = ("Batches:", "|", "it/s]", "Fetching", "%|", "100%", "  0%")
+
+    # Maximum buffer size before forced flush (prevents memory issues)
+    MAX_BUFFER_SIZE = 10000
 
     def __init__(self, original, logger, level=logging.INFO):
         self.original = original
@@ -89,12 +118,36 @@ class TeeOutput:
 
     def write(self, text):
         self.original.write(text)
+        self.original.flush()  # Always flush to console immediately
+
         # Buffer lines and log complete lines
         self.buffer += text
-        while '\n' in self.buffer:
-            line, self.buffer = self.buffer.split('\n', 1)
+
+        # Handle both \n and \r as line endings
+        # tqdm uses \r for progress bar updates
+        while '\n' in self.buffer or '\r' in self.buffer:
+            # Find first line ending (either \n or \r)
+            n_pos = self.buffer.find('\n')
+            r_pos = self.buffer.find('\r')
+
+            if n_pos == -1:
+                split_pos = r_pos
+            elif r_pos == -1:
+                split_pos = n_pos
+            else:
+                split_pos = min(n_pos, r_pos)
+
+            line = self.buffer[:split_pos]
+            self.buffer = self.buffer[split_pos + 1:]
+
             if line.strip() and not self._should_skip(line):
                 self.logger.log(self.level, line)
+
+        # Force flush if buffer gets too large (prevents memory issues)
+        if len(self.buffer) > self.MAX_BUFFER_SIZE:
+            if self.buffer.strip() and not self._should_skip(self.buffer):
+                self.logger.log(self.level, self.buffer.strip())
+            self.buffer = ""
 
     def flush(self):
         self.original.flush()
@@ -229,20 +282,20 @@ def main():
 
     # VAE training
     parser.add_argument(
-        "--vae-beta", type=float, default=0.003,
-        help="VAE KL regularization weight (low for text VAE)"
+        "--vae-beta", type=float, default=0.01,
+        help="VAE KL regularization weight"
     )
     parser.add_argument(
-        "--vae-epochs", type=int, default=15000,
-        help="VAE training epochs"
+        "--vae-epochs", type=int, default=50000,
+        help="VAE training epochs (default: 50000 for 32D latent)"
     )
     parser.add_argument(
-        "--vae-annealing", type=int, default=500,
-        help="VAE KL annealing epochs"
+        "--vae-annealing", type=int, default=2500,
+        help="VAE KL annealing epochs (default: 2500, 5%% of epochs)"
     )
     parser.add_argument(
-        "--vae-gamma", type=float, default=5.0,
-        help="VAE cycle consistency weight (ensures z ≈ encode(decode(z)))"
+        "--vae-gamma", type=float, default=0.0,
+        help="VAE cycle consistency weight (disabled, compensated by higher beta)"
     )
 
     # Hyperband
@@ -314,25 +367,33 @@ def main():
         help="Skip LLM evaluation during inference (use GP predictions)"
     )
     parser.add_argument(
-        "--vec2text-model", type=str, default="512_tokens",
+        "--vec2text-model", type=str, default="32_tokens",
         choices=["32_tokens", "512_tokens"],
-        help="Vec2Text model type (default: 512_tokens)"
+        help="Vec2Text model type (default: 32_tokens, recommended for diversity)"
     )
     parser.add_argument(
         "--num-restarts", type=int, default=64,
         help="L-BFGS-B restarts for BoTorch optimization (default: 64)"
     )
     parser.add_argument(
-        "--raw-samples", type=int, default=1024,
-        help="Raw samples for initialization seeding (default: 1024)"
+        "--raw-samples", type=int, default=4096,
+        help="Raw samples for initialization seeding (default: 4096)"
+    )
+    parser.add_argument(
+        "--acquisition-type", type=str, default="ucb", choices=["ucb", "logei"],
+        help="Acquisition function: 'ucb' (exploration) or 'logei' (exploitation) (default: ucb)"
+    )
+    parser.add_argument(
+        "--ucb-beta", type=float, default=8.0,
+        help="UCB exploration parameter (higher = more exploration) (default: 8.0)"
     )
     parser.add_argument(
         "--max-inversion-iters", type=int, default=3,
         help="Maximum inversion iterations per step (default: 3)"
     )
     parser.add_argument(
-        "--gap-threshold", type=float, default=0.1,
-        help="Gap threshold for re-inversion (cosine distance) (default: 0.1)"
+        "--gap-threshold", type=float, default=0.08,
+        help="Gap threshold for re-inversion (cosine distance) (default: 0.08)"
     )
     parser.add_argument(
         "--vec2text-beam", type=int, default=8,
@@ -465,6 +526,8 @@ def main():
         # Inference
         num_restarts=args.num_restarts,
         raw_samples=args.raw_samples,
+        acquisition_type=args.acquisition_type,
+        ucb_beta=args.ucb_beta,
         max_inversion_iters=args.max_inversion_iters,
         gap_threshold=args.gap_threshold,
         vec2text_beam=args.vec2text_beam,
@@ -786,6 +849,7 @@ def _save_results(
 
             # VAE hyperparameters
             "vae_beta": args.vae_beta,
+            "vae_gamma": args.vae_gamma,
             "vae_epochs": args.vae_epochs,
             "vae_annealing": args.vae_annealing,
             "vae_latent_dim": trainer.config.latent_dim,
@@ -804,6 +868,10 @@ def _save_results(
             # Inference settings
             "iterations": args.iterations,
             "vec2text_model": args.vec2text_model,
+            "acquisition_type": args.acquisition_type,
+            "ucb_beta": args.ucb_beta,
+            "raw_samples": args.raw_samples,
+            "num_restarts": args.num_restarts,
 
             # Evaluation settings
             "eval_model": args.eval_model,
@@ -860,8 +928,19 @@ def _save_results(
             ],
         }
 
+        # Add quality KPIs from inference
+        inference_kpis = inference.compute_inference_kpis()
+        result["quality_kpis"] = {
+            "gp_spearman": inference_kpis["gp_quality"],
+            "system_gap": inference_kpis["system_gap"],
+        }
+
+        # Add VAE quality KPIs if available from trainer
+        if hasattr(trainer, 'vae_quality_kpis'):
+            result["quality_kpis"]["vae_quality"] = trainer.vae_quality_kpis
+
     with open(result_path, "w") as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
+        json.dump(result, f, indent=2, ensure_ascii=False, cls=NumpyEncoder)
 
     print(f"\nResults saved to {result_path}")
 

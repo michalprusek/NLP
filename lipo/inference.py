@@ -7,10 +7,56 @@ Provides:
 Self-contained within lipo package. Uses external libs: vec2text, safetensors, huggingface_hub.
 """
 
+import re
 import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
+
+
+def is_valid_instruction(text: str, min_length: int = 10) -> bool:
+    """Validate instruction text quality.
+
+    Rejects instructions with:
+    - Unicode garbage characters (common Vec2Text artifacts)
+    - Too short length (< min_length characters)
+    - Excessive whitespace (> 50% whitespace)
+    - Repetitive patterns (same word 4+ times in a row)
+
+    Args:
+        text: Instruction text to validate
+        min_length: Minimum acceptable length (default: 10 chars)
+
+    Returns:
+        True if instruction passes all quality checks
+    """
+    if not text:
+        return False
+
+    # Reject unicode garbage (common Vec2Text artifacts from 512_tokens model)
+    # These characters indicate encoding issues in the inversion
+    unicode_garbage = r'[»«â€¢™®©†‡°±²³µ¶·¹º¼½¾¿×÷]'
+    if re.search(unicode_garbage, text):
+        return False
+
+    # Reject too short
+    stripped = text.strip()
+    if len(stripped) < min_length:
+        return False
+
+    # Reject mostly whitespace (> 50% whitespace)
+    non_whitespace = len(stripped.replace(' ', '').replace('\t', '').replace('\n', ''))
+    if non_whitespace < len(stripped) * 0.5:
+        return False
+
+    # Reject repetitive patterns (same word 4+ times consecutively)
+    words = stripped.lower().split()
+    if len(words) >= 4:
+        for i in range(len(words) - 3):
+            if words[i] == words[i+1] == words[i+2] == words[i+3]:
+                return False
+
+    return True
 
 from lipo.config import Config, get_device
 from lipo.encoder import GTRInstructionEncoder, InstructionVAE
@@ -22,6 +68,7 @@ from lipo.turbo import (
     create_turbo_manager,
     create_pas_selector,
 )
+from lipo.quality_kpi import compute_gp_spearman, compute_system_gap, format_kpi_report
 
 
 @dataclass
@@ -52,9 +99,9 @@ class IterationRecord:
     rejection_attempts: int = 0  # How many candidates were rejected before acceptance
     low_quality_accepted: bool = False  # Whether this was forced acceptance below threshold
     # Optimization Gap Test metrics (z_opt vs z_real after Vec2Text inversion)
-    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (64D)
+    z_opt_z_real_cosine: float = 0.0     # Cosine sim in VAE latent space (32D)
     z_opt_z_real_euclidean: float = 0.0  # Euclidean distance in VAE latent space
-    z_opt_z_real_gp_cosine: float = 0.0  # Cosine sim in GP adapter space (10D)
+    z_opt_z_real_gp_cosine: float = 0.0  # Same as z_opt_z_real_cosine (no adapter, GP on 32D)
     predicted_error_at_z_real: float = 0.0  # GP prediction at actual z_real point
     # TuRBO trust region state
     trust_region_length: float = 0.0  # Current trust region side length
@@ -106,6 +153,7 @@ class Vec2TextInverter:
         self.model_type = model_type
         self._corrector = None
         self._inversion_model = None
+        self._pre_reload_callback = None  # Called before reload to free GPU memory
 
     def _load_model(self):
         """Lazy load Vec2Text model."""
@@ -195,6 +243,52 @@ class Vec2TextInverter:
 
         print(f"  Vec2Text (512_tokens) loaded on {self.device}")
 
+    def _ensure_on_device(self, pre_reload_callback: callable = None):
+        """Ensure model is on the correct device.
+
+        Reloads from CPU if model was offloaded. This allows Vec2Text to be
+        offloaded during evaluation and automatically reloaded for next inversion.
+
+        Args:
+            pre_reload_callback: Optional callback to call BEFORE reloading to GPU.
+                                 Used to free GPU memory (e.g., shutdown vLLM evaluator).
+        """
+        needs_reload = False
+        # self.device can be str or torch.device - normalize to device type string
+        target_type = self.device.type if hasattr(self.device, 'type') else str(self.device).split(':')[0]
+
+        if self._inversion_model is not None:
+            # Check if 512_tokens model needs to be moved to GPU
+            try:
+                param = next(self._inversion_model.parameters())
+                if param.device.type == 'cpu' and target_type == 'cuda':
+                    needs_reload = True
+            except StopIteration:
+                pass
+
+        if self._corrector is not None:
+            # Check if 32_tokens model needs to be moved to GPU
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                try:
+                    param = next(self._corrector.model.parameters())
+                    if param.device.type == 'cpu' and target_type == 'cuda':
+                        needs_reload = True
+                except StopIteration:
+                    pass
+
+        if needs_reload:
+            if pre_reload_callback is not None:
+                pre_reload_callback()
+            self.reload()
+
+    def set_pre_reload_callback(self, callback: callable):
+        """Set callback to be called before reloading model to GPU.
+
+        This is used to free GPU memory (e.g., shutdown vLLM evaluator)
+        before reloading Vec2Text to GPU.
+        """
+        self._pre_reload_callback = callback
+
     def invert(self, embedding: torch.Tensor) -> str:
         """Invert embedding to text.
 
@@ -205,6 +299,10 @@ class Vec2TextInverter:
             Reconstructed text
         """
         self._load_model()
+
+        # Auto-reload to GPU if model was offloaded to CPU
+        # Use pre-reload callback to free GPU memory (e.g., shutdown vLLM evaluator)
+        self._ensure_on_device(self._pre_reload_callback)
 
         if embedding.dim() == 1:
             embedding = embedding.unsqueeze(0)
@@ -246,192 +344,164 @@ class Vec2TextInverter:
         result = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         return result.strip()
 
+    def offload(self):
+        """Move Vec2Text model to CPU and clear CUDA cache.
 
-class ZSInvertRefiner:
-    """ZSInvert-style iterative refinement for Vec2Text output.
+        Call this before loading large models (e.g., Qwen evaluator) to free GPU memory.
+        The model will be automatically reloaded to GPU on next invert() call.
+        """
+        import gc
 
-    After Vec2Text inverts embedding→text, there's often semantic drift
-    (similarity ~0.85). ZSInvert uses gradient-based optimization to refine
-    the latent z so decode(z) better matches GTR(text), then re-inverts.
+        if self._corrector is not None:
+            # 32_tokens model - move all components to CPU
+            if hasattr(self._corrector, 'inversion_trainer') and self._corrector.inversion_trainer is not None:
+                self._corrector.inversion_trainer.model = self._corrector.inversion_trainer.model.to('cpu')
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                self._corrector.model = self._corrector.model.to('cpu')
+            if hasattr(self._corrector, 'embedder') and self._corrector.embedder is not None:
+                self._corrector.embedder = self._corrector.embedder.to('cpu')
+            print("  Vec2Text (32_tokens) offloaded to CPU")
 
-    Algorithm (per iteration):
-        1. Encode current text with GTR → target_emb
-        2. Gradient descent: minimize ||decode(z) - target_emb||
-        3. Decode optimized z and re-invert with Vec2Text
-        4. Check improvement, continue if significant
+        if self._inversion_model is not None:
+            # 512_tokens model - move to CPU
+            self._inversion_model = self._inversion_model.to('cpu')
+            print("  Vec2Text (512_tokens) offloaded to CPU")
 
-    This "tightens" the loop between latent optimization and text generation.
+        # Clear CUDA cache
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    def reload(self):
+        """Reload Vec2Text model to GPU after offload."""
+        if self._corrector is not None:
+            if hasattr(self._corrector, 'inversion_trainer') and self._corrector.inversion_trainer is not None:
+                self._corrector.inversion_trainer.model = self._corrector.inversion_trainer.model.to(self.device)
+            if hasattr(self._corrector, 'model') and self._corrector.model is not None:
+                self._corrector.model = self._corrector.model.to(self.device)
+            if hasattr(self._corrector, 'embedder') and self._corrector.embedder is not None:
+                self._corrector.embedder = self._corrector.embedder.to(self.device)
+            print(f"  Vec2Text (32_tokens) reloaded to {self.device}")
+
+        if self._inversion_model is not None:
+            self._inversion_model = self._inversion_model.to(self.device)
+            print(f"  Vec2Text (512_tokens) reloaded to {self.device}")
+
+
+def validate_roundtrip_quality(
+    vae: InstructionVAE,
+    gtr: GTRInstructionEncoder,
+    inverter: Vec2TextInverter,
+    instructions: List[str],
+    n_samples: int = 20,
+    verbose: bool = True,
+) -> dict:
+    """Validate round-trip quality of VAE + Vec2Text pipeline.
+
+    Tests how well the full pipeline can reconstruct known instructions:
+        instruction → GTR → VAE(encode→decode) → Vec2Text → GTR → cosine_sim
+
+    Poor round-trip quality indicates GP may optimize in "empty space" -
+    regions that don't correspond to valid instructions.
+
+    Args:
+        vae: Trained InstructionVAE
+        gtr: GTR encoder
+        inverter: Vec2Text inverter
+        instructions: List of instructions to test
+        n_samples: Number of random samples to test
+        verbose: Print progress and results
+
+    Returns:
+        Dict with metrics:
+        - mean_sim: Mean cosine similarity
+        - std_sim: Std of similarities
+        - min_sim: Worst reconstruction
+        - poor_count: Number with sim < 0.90
+        - samples: List of (original, reconstructed, sim) tuples
     """
+    import random
+    import numpy as np
 
-    def __init__(
-        self,
-        vae_with_adapter,
-        gtr_encoder: GTRInstructionEncoder,
-        inverter: Vec2TextInverter,
-        n_iterations: int = 3,
-        lr: float = 0.1,
-        n_steps_per_iter: int = 50,
-        improvement_threshold: float = 0.01,
-        patience: int = 5,
-        device: str = "cuda",
-    ):
-        """Initialize ZSInvert refiner.
+    # Sample instructions
+    n = min(n_samples, len(instructions))
+    samples = random.sample(instructions, n)
 
-        Args:
-            vae_with_adapter: VAEWithAdapter for decoding latents to embeddings
-            gtr_encoder: GTR encoder for text→embedding
-            inverter: Vec2Text inverter for embedding→text
-            n_iterations: Maximum refinement iterations
-            lr: Learning rate for gradient descent
-            n_steps_per_iter: Optimization steps per iteration
-            improvement_threshold: Minimum improvement to continue
-            patience: Number of iterations without improvement before stopping
-            device: Torch device
-        """
-        self.vae = vae_with_adapter
-        self.gtr = gtr_encoder
-        self.inverter = inverter
-        self.n_iterations = n_iterations
-        self.lr = lr
-        self.n_steps = n_steps_per_iter
-        self.threshold = improvement_threshold
-        self.patience = patience
-        self.device = torch.device(device)
+    vae.eval()
+    vae_dev = next(vae.parameters()).device
+    sims = []
+    sample_results = []
 
-    def refine(
-        self,
-        initial_text: str,
-        initial_z: torch.Tensor,
-        X_min: torch.Tensor,
-        X_max: torch.Tensor,
-        verbose: bool = False,
-    ) -> Tuple[str, torch.Tensor, dict]:
-        """Iteratively refine text using gradient-based latent optimization.
+    for i, instruction in enumerate(samples):
+        # Full pipeline - ensure device consistency
+        emb_original = gtr.encode_tensor(instruction)
+        with torch.no_grad():
+            emb_for_vae = emb_original.to(vae_dev)
+            mu, _ = vae.encode(emb_for_vae)
+            decoded = vae.decode(mu)
 
-        Args:
-            initial_text: Vec2Text output to refine
-            initial_z: Normalized latent [0,1]^d from optimization
-            X_min, X_max: Denormalization parameters
-            verbose: Print progress
+        reconstructed = inverter.invert(decoded)
+        emb_recon = gtr.encode_tensor(reconstructed)
 
-        Returns:
-            (refined_text, refined_z_normalized, metrics) tuple where:
-            - refined_text: Best refined instruction text
-            - refined_z_normalized: Corresponding latent in [0,1]^d
-            - metrics: Dict with iterations, initial_sim, final_sim, improvement
-        """
-        best_text = initial_text
-        best_sim = 0.0
-        z = initial_z.clone().to(self.device)
-        x_range = (X_max - X_min).to(self.device)
-        X_min_dev = X_min.to(self.device)
-        patience_counter = 0
-        iteration = 0
+        sim = F.cosine_similarity(
+            emb_original.unsqueeze(0),
+            emb_recon.unsqueeze(0)
+        ).item()
+        sims.append(sim)
+        sample_results.append((instruction, reconstructed, sim))
 
-        metrics = {
-            "iterations": 0,
-            "initial_sim": 0.0,
-            "final_sim": 0.0,
-            "improvement": 0.0,
-        }
+        if verbose and (i + 1) % 5 == 0:
+            print(f"  Validated {i + 1}/{n} samples...")
 
-        self.vae.eval()
+    sims_arr = np.array(sims)
+    results = {
+        "mean_sim": float(np.mean(sims_arr)),
+        "std_sim": float(np.std(sims_arr)),
+        "min_sim": float(np.min(sims_arr)),
+        "max_sim": float(np.max(sims_arr)),
+        "poor_count": int(np.sum(sims_arr < 0.90)),
+        "acceptable_count": int(np.sum(sims_arr >= 0.90)),
+        "n_samples": n,
+        "samples": sample_results,
+    }
 
-        try:
-            for iteration in range(self.n_iterations):
-                # 1. Encode current best text
-                target_emb = self.gtr.encode_tensor(best_text)
+    if verbose:
+        quality = "GOOD" if results["mean_sim"] >= 0.90 else "POOR"
+        print(f"""
+============================================================
+ROUND-TRIP DIAGNOSTIC
+============================================================
+Tested: {n} instructions
+Mean similarity: {results['mean_sim']:.4f}
+Min: {results['min_sim']:.4f}, Max: {results['max_sim']:.4f}
+Below 0.90 (poor): {results['poor_count']}
+Below 0.95 (acceptable): {n - results['acceptable_count'] + results['poor_count']}
+Interpretation: {quality} - {"good reconstruction" if quality == "GOOD" else "significant meaning loss in reconstruction"}
+  {"" if quality == "GOOD" else "This may explain lack of optimization improvement."}
+""")
+        # Show worst example
+        worst_idx = np.argmin(sims_arr)
+        orig, recon, wsim = sample_results[worst_idx]
+        print(f"Worst reconstruction (sim={wsim:.4f}):")
+        print(f"  Original: {orig[:80]}...")
+        print(f"  Reconstructed: {recon[:100]}...")
 
-                # 2. Compute current similarity
-                with torch.no_grad():
-                    z_unnorm = z * x_range + X_min_dev
-                    current_emb = self.vae.decode(z_unnorm)
-                    current_sim = F.cosine_similarity(
-                        current_emb.unsqueeze(0),
-                        target_emb.unsqueeze(0)
-                    ).item()
+    return results
 
-                if iteration == 0:
-                    metrics["initial_sim"] = current_sim
-                    best_sim = current_sim
-
-                # 3. Gradient-based refinement of z
-                z_opt = z.clone().requires_grad_(True)
-                optimizer = torch.optim.Adam([z_opt], lr=self.lr)
-
-                for step in range(self.n_steps):
-                    optimizer.zero_grad()
-                    z_unnorm = z_opt * x_range + X_min_dev
-                    decoded = self.vae.decode(z_unnorm)
-                    loss = 1 - F.cosine_similarity(
-                        decoded.unsqueeze(0),
-                        target_emb.unsqueeze(0)
-                    )
-                    loss.backward()
-                    optimizer.step()
-
-                    # Clamp to valid normalized range [0, 1]
-                    with torch.no_grad():
-                        z_opt.data.clamp_(0, 1)
-
-                # 4. Decode refined latent and invert to text
-                z = z_opt.detach()
-                with torch.no_grad():
-                    z_unnorm = z * x_range + X_min_dev
-                    new_emb = self.vae.decode(z_unnorm)
-
-                new_text = self.inverter.invert(new_emb.clone())
-
-                # 5. Evaluate improvement (GTR similarity between new_emb and GTR(new_text))
-                new_target = self.gtr.encode_tensor(new_text)
-                new_sim = F.cosine_similarity(
-                    new_emb.unsqueeze(0),
-                    new_target.unsqueeze(0)
-                ).item()
-
-                if verbose:
-                    print(f"    ZSInvert iter {iteration + 1}: sim {current_sim:.4f} → {new_sim:.4f}")
-
-                if new_sim > best_sim + self.threshold:
-                    best_sim = new_sim
-                    best_text = new_text
-                    metrics["iterations"] = iteration + 1
-                    patience_counter = 0  # Reset patience on improvement
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.patience:
-                        # Patience exhausted, stop
-                        if verbose:
-                            print(f"    ZSInvert: patience exhausted ({self.patience}), stopping")
-                        break
-
-        except Exception as e:
-            # Log error and return best result so far
-            import warnings
-            warnings.warn(
-                f"ZSInvert refinement failed at iteration {iteration}: {e}. "
-                f"Returning best result found before failure."
-            )
-            metrics["error"] = str(e)
-            metrics["iterations"] = iteration
-
-        metrics["final_sim"] = best_sim
-        metrics["improvement"] = best_sim - metrics["initial_sim"]
-
-        return best_text, z, metrics
 
 
 class LIPOHyperbandInference:
     """InvBO inference pipeline for LIPO.
 
     Pipeline:
-        1. Optimize in 64D VAE latent space using LogEI acquisition
-           (GP uses adapter: 64D → 10D for kernel computation)
+        1. Optimize in 32D VAE latent space using LogEI acquisition
+           (GP operates directly on 32D latent with ARD kernel)
         2. Decode optimal latent to 768D embedding via VAE decoder
         3. Invert embedding to text via Vec2Text (512_tokens)
         4. Evaluate and add to GP
 
     Uses 512_tokens Vec2Text model for longer instruction generation.
+    Includes KPI tracking for GP quality and optimization gap monitoring.
     """
 
     def __init__(
@@ -460,7 +530,7 @@ class LIPOHyperbandInference:
         self.gp = gp
         self.vae = vae
         self.config = config
-        # VAEWithAdapter for decoding (64D -> 768D)
+        # VAEWithAdapter for decoding (32D -> 768D)
         self.vae_with_adapter = gp.vae_with_adapter
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.evaluator = evaluator
@@ -471,7 +541,7 @@ class LIPOHyperbandInference:
             beam_width=config.vec2text_beam,
             device=str(self.device),
             model_type=config.vec2text_model,
-            max_length=getattr(config, 'vec2text_max_length', 128),
+            max_length=config.vec2text_max_length,
         )
 
         # History
@@ -482,6 +552,11 @@ class LIPOHyperbandInference:
         self._consecutive_retrain_failures: int = 0  # Track consecutive GP retrain failures
         self._total_retrain_failures: int = 0  # Track total GP retrain failures (never resets)
 
+        # KPI tracking lists for periodic quality reporting
+        self._predicted_errors: List[float] = []
+        self._actual_errors: List[float] = []
+        self._z_gaps: List[float] = []
+
         # Initialize best from Hyperband results or GP
         if initial_best_instruction is not None and initial_best_error is not None:
             self.best_instruction = initial_best_instruction
@@ -491,8 +566,8 @@ class LIPOHyperbandInference:
             # Note: instruction not available from GP alone
 
         # Initialize TuRBO trust region manager
-        self.use_turbo = getattr(config, 'turbo_enabled', True)
-        self.use_pas = getattr(config, 'pas_enabled', True)
+        self.use_turbo = config.turbo_enabled
+        self.use_pas = config.pas_enabled
 
         if self.use_turbo:
             self.trust_region = create_turbo_manager(config, self.device)
@@ -504,22 +579,10 @@ class LIPOHyperbandInference:
         else:
             self.anchor_selector = None
 
-        # Initialize ZSInvert refiner (runs after Vec2Text for iterative refinement)
-        self.use_zsinvert = getattr(config, 'zsinvert_enabled', True)
-        if self.use_zsinvert:
-            self.zsinvert_refiner = ZSInvertRefiner(
-                vae_with_adapter=self.vae_with_adapter,
-                gtr_encoder=self.gtr,
-                inverter=self.inverter,
-                n_iterations=getattr(config, 'zsinvert_iterations', 3),
-                lr=getattr(config, 'zsinvert_lr', 0.1),
-                n_steps_per_iter=getattr(config, 'zsinvert_steps_per_iter', 50),
-                improvement_threshold=getattr(config, 'zsinvert_improvement_threshold', 0.01),
-                patience=getattr(config, 'zsinvert_patience', 5),
-                device=str(self.device),
-            )
-        else:
-            self.zsinvert_refiner = None
+        # Distance penalty settings (used when TuRBO disabled)
+        self.distance_penalty_enabled = config.distance_penalty_enabled
+        self.distance_weight = config.distance_weight
+        self.distance_threshold = config.distance_threshold
 
         # Cache global bounds (computed on first iteration)
         self._global_bounds: Optional[torch.Tensor] = None
@@ -546,37 +609,66 @@ class LIPOHyperbandInference:
     def optimize_latent_botorch(
         self,
         num_restarts: int = 64,
-        raw_samples: int = 1024,
+        raw_samples: int = 4096,
         verbose: bool = True,
         seed: Optional[int] = None,
         bounds: Optional[torch.Tensor] = None,
+        acquisition_type: Optional[str] = None,
+        ucb_beta: Optional[float] = None,
     ) -> Tuple[torch.Tensor, float]:
-        """Optimize VAE latent using BoTorch qLogExpectedImprovement.
+        """Optimize VAE latent using BoTorch acquisition function.
 
-        Uses multi-start L-BFGS-B with proper gradient flow through:
-            z (64D VAE latent) -> adapter -> z_gp (10D) -> GP posterior -> qLogEI
+        Supports both UCB (exploration-focused) and LogEI (exploitation-focused).
 
-        This is the recommended optimization method as it:
-        1. Optimizes in 64D VAE latent space
-        2. Uses adapter to compress to 10D for efficient GP
-        3. Gradients flow through adapter for latent optimization
+        Uses multi-start L-BFGS-B with proper gradient flow:
+            z (latent_dim VAE latent) -> GP posterior -> Acquisition
+
+        GP operates directly on VAE latent (no adapter compression).
+        ARD lengthscales allow the kernel to learn which dimensions matter.
 
         Args:
             num_restarts: Number of L-BFGS-B restarts (default: 64)
-            raw_samples: Raw samples for initialization seeding (default: 1024)
+            raw_samples: Raw samples for initialization seeding (default: 4096)
             verbose: Print progress
             seed: Optional random seed for reproducibility
             bounds: Optional custom bounds (e.g., trust region bounds). If None, uses global bounds.
+            acquisition_type: "ucb" or "logei" (default: from config)
+            ucb_beta: UCB exploration parameter (default: from config)
 
         Returns:
-            (optimal_latent, log_ei) tuple where:
+            (optimal_latent, acq_value) tuple where:
             - optimal_latent: Best VAE latent tensor, shape (latent_dim,)
-            - log_ei: Log expected improvement value at optimal point
+            - acq_value: Acquisition function value at optimal point
         """
-        from lipo.botorch_acq import LatentSpaceAcquisition, get_latent_bounds
+        from lipo.botorch_acq import (
+            LatentSpaceAcquisition,
+            get_latent_bounds,
+        )
+
+        # Use config defaults if not provided
+        if acquisition_type is None:
+            acquisition_type = self.config.acquisition_type
+        if ucb_beta is None:
+            ucb_beta = self.config.ucb_beta
+
+        # Determine if distance penalty should be active
+        # UCB already explores via σ term, so disable distance penalty for UCB
+        use_distance_penalty = (
+            self.distance_penalty_enabled
+            and not self.use_turbo
+            and acquisition_type != "ucb"
+        )
 
         if verbose:
-            print(f"Optimizing with BoTorch qLogEI ({num_restarts} restarts, {raw_samples} raw samples)...")
+            if acquisition_type == "ucb":
+                acq_name = f"UCB (β={ucb_beta})"
+            else:
+                acq_name = "LogEI"
+            if use_distance_penalty:
+                acq_name = f"DistancePenalized{acq_name}"
+            print(f"Optimizing with BoTorch {acq_name} ({num_restarts} restarts, {raw_samples} raw samples)...")
+            if use_distance_penalty:
+                print(f"  Distance penalty: weight={self.distance_weight}, threshold={self.distance_threshold}")
 
         # Get latent bounds (use provided bounds or compute global bounds)
         if bounds is None:
@@ -588,19 +680,31 @@ class LIPOHyperbandInference:
                 margin=self.config.latent_margin,
             )
 
+        # Compute normalized training data for distance penalty
+        X_train_normalized = None
+        if use_distance_penalty:
+            denom = self.gp.X_max - self.gp.X_min
+            denom[denom == 0] = 1.0
+            X_train_normalized = (self.gp.X_train - self.gp.X_min) / denom
+
         # Create acquisition optimizer
-        # Optimization path: z (64D) → GP (with adapter) → z_gp (10D) → kernel → qLogEI
-        # After optimization: z_opt (64D) → VAE decoder → embedding (768D)
+        # Optimization path: z (latent_dim) → GP → kernel (ARD) → Acquisition (+ distance penalty)
         acq_optimizer = LatentSpaceAcquisition(
             gp_model=self.gp.gp_model,
             bounds=bounds,
             device=self.device,
+            X_train_normalized=X_train_normalized,
+            distance_penalty_enabled=use_distance_penalty,
+            distance_weight=self.distance_weight,
+            distance_threshold=self.distance_threshold,
+            acquisition_type=acquisition_type,
+            ucb_beta=ucb_beta,
         )
 
         # best_f is the best observed GP target value (-min_error).
         # Since GP predicts -error_rate, qLogEI maximizes (finds lower error).
         best_f = self.gp.y_best
-        z_opt, log_ei = acq_optimizer.optimize(
+        z_opt, acq_value = acq_optimizer.optimize(
             best_f=best_f,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
@@ -608,10 +712,11 @@ class LIPOHyperbandInference:
         )
 
         if verbose:
-            print(f"  BoTorch LogEI: {log_ei.item():.4f}")
+            acq_label = "UCB" if acquisition_type == "ucb" else "LogEI"
+            print(f"  BoTorch {acq_label}: {acq_value.item():.4f}")
 
         # Return as 1D tensor
-        return z_opt.squeeze(), log_ei.item()
+        return z_opt.squeeze(), acq_value.item()
 
     def inversion_step(
         self,
@@ -642,12 +747,16 @@ class LIPOHyperbandInference:
         # Get target embedding from text
         target_emb = self.gtr.encode_tensor(text)
 
-        # Warm start: encode target embedding to VAE latent (64D)
+        # Warm start: encode target embedding to VAE latent (32D)
         encoder = self.gp.vae_with_adapter
         encoder.eval()
 
+        # Ensure target_emb is on VAE device for gradient computation
+        vae_device = self.vae_with_adapter.device
+        target_emb = target_emb.to(vae_device)
+
         with torch.no_grad():
-            # Encode 768D embedding to 64D VAE latent (unnormalized)
+            # Encode 768D embedding to 32D VAE latent (unnormalized)
             z_vae = encoder.encode_vae(target_emb.unsqueeze(0)).squeeze(0)
 
             # Normalize to GP input space
@@ -670,9 +779,9 @@ class LIPOHyperbandInference:
         for step in range(n_steps):
             optimizer.zero_grad()
 
-            # Denormalize z to VAE latent space (64D), then decode to 768D embedding
+            # Denormalize z to VAE latent space (32D), then decode to 768D embedding
             z_vae = z * x_range + self.gp.X_min
-            decoded = self.vae_with_adapter.decode(z_vae)
+            decoded = self.vae_with_adapter.decode(z_vae.to(self.vae_with_adapter.device))
 
             # Cosine loss to target
             loss = 1 - F.cosine_similarity(
@@ -698,8 +807,9 @@ class LIPOHyperbandInference:
             self.vae_with_adapter.eval()
             z_vae_original = z_original * x_range + self.gp.X_min
             z_vae_inv = z_inv * x_range + self.gp.X_min
-            emb_original = self.vae_with_adapter.decode(z_vae_original)
-            emb_inv = self.vae_with_adapter.decode(z_vae_inv)
+            vae_dev = self.vae_with_adapter.device
+            emb_original = self.vae_with_adapter.decode(z_vae_original.to(vae_dev))
+            emb_inv = self.vae_with_adapter.decode(z_vae_inv.to(vae_dev))
         cosine_gap = 1 - F.cosine_similarity(
             emb_original.unsqueeze(0), emb_inv.unsqueeze(0)
         ).item()
@@ -766,6 +876,26 @@ GENERATION QUALITY:
 GP Status:
   Training Samples:   {record.gp_samples}
 ═══════════════════════════════════════════════════════════════""")
+
+    def compute_inference_kpis(self) -> dict:
+        """Compute GP Spearman and System Gap KPIs from tracked data.
+
+        Returns:
+            Dictionary with:
+            - gp_quality: GP prediction quality metrics
+            - system_gap: Optimization gap metrics
+        """
+        gp_kpi = compute_gp_spearman(self._predicted_errors, self._actual_errors)
+        gap_kpi = compute_system_gap(self._z_gaps)
+        return {"gp_quality": gp_kpi, "system_gap": gap_kpi}
+
+    def _log_kpi_report(self, iteration: int) -> None:
+        """Log periodic KPI report.
+
+        Called every 10 iterations to monitor optimization quality.
+        """
+        kpis = self.compute_inference_kpis()
+        print(f"\n{format_kpi_report(kpis, iteration)}\n")
 
     def run_iteration(
         self,
@@ -859,15 +989,15 @@ GP Status:
                 anchor_idx = best_idx
 
             # Get ARD lengthscales from GP kernel for LOL-BO style scaling
-            # Note: lengthscales are in 10D adapter space, bounds are in 64D VAE space
-            # get_ard_bounds() handles dimension mismatch by falling back to uniform scaling
+            # Lengthscales are in 32D VAE space (no adapter) - each dimension gets its own lengthscale
             lengthscales = None
             try:
                 if hasattr(self.gp.gp_model, 'covar_module'):
                     base_kernel = self.gp.gp_model.covar_module.base_kernel
                     if hasattr(base_kernel, 'lengthscale'):
                         lengthscales = base_kernel.lengthscale.detach().squeeze()
-            except Exception as e:
+            except AttributeError as e:
+                # Only catch AttributeError - other exceptions (CUDA, memory) should propagate
                 import warnings
                 warnings.warn(
                     f"Could not extract ARD lengthscales from GP kernel: {e}. "
@@ -889,7 +1019,7 @@ GP Status:
 
         # Main loop with rejection for low cosine similarity
         for attempt in range(max_rejection_attempts):
-            # Optimize latent using BoTorch qLogEI (within trust region if enabled)
+            # Optimize latent using BoTorch acquisition (UCB or LogEI)
             # Use different seed for each attempt to get different candidates
             attempt_seed = iteration * max_rejection_attempts + attempt
             z_opt, log_ei = self.optimize_latent_botorch(
@@ -908,9 +1038,11 @@ GP Status:
             # Save original z_opt for optimization gap measurement
             z_opt_original = z_opt.clone()
 
+            # Decode to embedding
             self.vae_with_adapter.eval()
             with torch.no_grad():
-                embedding = self.vae_with_adapter.decode(z_unnorm)
+                z_decode = z_unnorm.to(self.vae_with_adapter.device)
+                embedding = self.vae_with_adapter.decode(z_decode)
 
             # Invert to text
             instruction = self.inverter.invert(embedding.clone())
@@ -947,35 +1079,13 @@ GP Status:
                     z_opt = inv_result.z_inv
                     z_unnorm = z_opt * x_range + self.gp.X_min
                     with torch.no_grad():
-                        embedding = self.vae_with_adapter.decode(z_unnorm)
+                        z_decode = z_unnorm.to(self.vae_with_adapter.device)
+                        embedding = self.vae_with_adapter.decode(z_decode)
                     instruction = self.inverter.invert(embedding.clone())
                     inv_iters += 1
 
                     if verbose:
                         print(f"  Re-generated:\n{instruction}")
-
-            # ZSInvert refinement - runs EVERY iteration after Vec2Text
-            # Improves text-embedding alignment via gradient-based latent optimization
-            if self.use_zsinvert and self.zsinvert_refiner is not None:
-                instruction, z_refined, zsinvert_metrics = self.zsinvert_refiner.refine(
-                    initial_text=instruction,
-                    initial_z=z_opt,
-                    X_min=self.gp.X_min,
-                    X_max=self.gp.X_max,
-                    verbose=verbose,
-                )
-                # Update z_opt if refinement occurred
-                if zsinvert_metrics["iterations"] > 0:
-                    z_opt = z_refined
-                    # Re-decode to get updated embedding
-                    z_unnorm = z_opt * x_range + self.gp.X_min
-                    with torch.no_grad():
-                        embedding = self.vae_with_adapter.decode(z_unnorm)
-
-                if verbose:
-                    print(f"  ZSInvert: {zsinvert_metrics['iterations']} iters, "
-                          f"sim: {zsinvert_metrics['initial_sim']:.4f} → {zsinvert_metrics['final_sim']:.4f} "
-                          f"(Δ={zsinvert_metrics['improvement']:+.4f})")
 
             # Re-encode for GP prediction
             # IMPORTANT: Predict on GTR(text), not decoder(z), for alignment with training data
@@ -983,6 +1093,21 @@ GP Status:
             cosine_sim = F.cosine_similarity(
                 embedding.unsqueeze(0), reencoded.unsqueeze(0)
             ).item()
+
+            # Check instruction text quality (garbage filtering)
+            if not is_valid_instruction(instruction):
+                if attempt < max_rejection_attempts - 1:
+                    if verbose:
+                        print(f"  REJECTED: Invalid instruction (garbage/too short), "
+                              f"retrying ({attempt + 1}/{max_rejection_attempts})")
+                    continue  # Skip cosine check, go to next attempt
+                else:
+                    # Log full instruction per CLAUDE.md (never truncate prompts)
+                    print(f"WARNING: Accepting invalid instruction after {max_rejection_attempts} attempts")
+                    print(f"  Full instruction:\n{instruction}")
+                    rejection_attempts = attempt
+                    low_quality_accepted = True
+                    break  # Accept despite garbage
 
             # Check cosine similarity threshold
             if cosine_sim >= cosine_sim_threshold:
@@ -1017,17 +1142,14 @@ GP Status:
             denom[denom == 0] = 1.0
             z_real_norm = (z_real - self.gp.X_min) / denom
 
-            # Gap metrics in VAE latent space (64D)
+            # Gap metrics in VAE latent space (32D) - this is also GP space (no adapter)
             z_opt_z_real_cosine = F.cosine_similarity(
                 z_opt_original.unsqueeze(0), z_real_norm.unsqueeze(0)
             ).item()
             z_opt_z_real_euclidean = torch.dist(z_opt_original, z_real_norm).item()
 
-            # Gap metrics in GP adapter space (10D)
-            z_opt_unnorm = z_opt_original * x_range + self.gp.X_min
-            z_opt_gp = self.vae_with_adapter.adapter(z_opt_unnorm.unsqueeze(0))
-            z_real_gp = self.vae_with_adapter.adapter(z_real.unsqueeze(0))
-            z_opt_z_real_gp_cosine = F.cosine_similarity(z_opt_gp, z_real_gp).item()
+            # GP space is now same as VAE latent space (no adapter compression)
+            z_opt_z_real_gp_cosine = z_opt_z_real_cosine  # Same metric, no adapter
 
             # GP prediction at z_real (actual text) vs at z_opt (dream)
             # This shows if GP was "fooled" by holes in latent space
@@ -1135,9 +1257,18 @@ GP Status:
 
         self.iteration_history.append(record)
 
+        # Track KPI data
+        self._predicted_errors.append(pred_error)
+        self._actual_errors.append(actual_error)
+        self._z_gaps.append(z_opt_z_real_euclidean)
+
         # Print consolidated iteration summary
         if verbose:
             self._log_iteration_summary(record, pred_std=pred_std)
+
+        # Periodic KPI report every 10 iterations
+        if iteration % 10 == 0 and iteration > 0:
+            self._log_kpi_report(iteration)
 
         return record
 
@@ -1217,9 +1348,12 @@ GP Status:
         emb_original = self.gtr.encode_tensor(instruction)
 
         # VAE encode -> decode (full round-trip through latent space)
+        # Ensure device consistency for cross-device scenarios
         self.vae_with_adapter.eval()
+        vae_dev = self.vae_with_adapter.device
         with torch.no_grad():
-            z = self.vae_with_adapter.encode_vae(emb_original.unsqueeze(0))
+            emb_for_vae = emb_original.to(vae_dev)
+            z = self.vae_with_adapter.encode_vae(emb_for_vae.unsqueeze(0))
             emb_decoded = self.vae_with_adapter.decode(z.squeeze(0))
 
         # Vec2Text inversion (embedding -> text)

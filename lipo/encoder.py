@@ -89,12 +89,15 @@ class InstructionVAE(nn.Module):
     Provides smooth latent space via KL regularization to N(0,1).
     Designed for joint use with GP (for EI optimization) and Vec2Text (for inversion).
 
-    Architecture:
-        Encoder: 768D → 384 → 192 → 2*64 (mu + log_var)
-        Decoder: 64D → 192 → 384 → 768D (L2 normalized)
+    Architecture (32D latent):
+        Encoder: 768D → 256 → 128 → 2*32 (mu + log_var)
+        Decoder: 32D → 128 → 256 → 768D (L2 normalized)
+
+    Compression ratios per layer: 3× → 2× → 2× (gradual)
 
     Loss:
         L = recon_loss + beta * KL(q(z|x) || N(0,1))
+        (cycle_loss disabled by default with gamma=0)
 
     The KL regularization ensures:
         - Smooth latent space (gradual transitions)
@@ -106,17 +109,17 @@ class InstructionVAE(nn.Module):
     def __init__(
         self,
         input_dim: int = 768,
-        latent_dim: int = 64,
-        beta: float = 0.1,
+        latent_dim: int = 32,
+        beta: float = 0.01,
         gamma: float = 0.0,
     ):
         """Initialize VAE.
 
         Args:
             input_dim: Input embedding dimension (768 for GTR)
-            latent_dim: Latent space dimension (64 by default, matches config.latent_dim)
-            beta: KL regularization weight (higher = more regularized)
-            gamma: Cycle consistency weight (ensures z ≈ encode(decode(z)))
+            latent_dim: Latent space dimension (32 by default, 24x compression)
+            beta: KL regularization weight
+            gamma: Cycle consistency weight (disabled by default)
         """
         super().__init__()
         self.input_dim = input_dim
@@ -124,32 +127,32 @@ class InstructionVAE(nn.Module):
         self.beta = beta
         self.gamma = gamma
 
-        # Encoder: 768 -> mu, log_var
-        # Using LayerNorm instead of BatchNorm for:
-        # - Stability with batch_size=1
-        # - Consistent behavior in train/eval modes
-        # Architecture: 768 → 384 → 192 → 2*latent_dim
-        # Layer before latent (192) is 3× larger than latent (64) for feature mixing
-        # GELU activation for smoother gradients (used in transformers)
+        # Encoder: 768 → 256 → 128 → 2*latent_dim (mu + logvar)
+        # Gradual compression: 3× → 2× → 2×
+        # Dropout for regularization
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, 384),
+            nn.Linear(input_dim, 256),  # 768 → 256 (3×)
             nn.GELU(),
-            nn.LayerNorm(384),
-            nn.Linear(384, 192),
+            nn.LayerNorm(256),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),  # 256 → 128 (2×)
             nn.GELU(),
-            nn.LayerNorm(192),
-            nn.Linear(192, latent_dim * 2),  # mu + log_var
+            nn.LayerNorm(128),
+            nn.Linear(128, latent_dim * 2),  # 128 → 64 (2×) mu + log_var
         )
 
-        # Decoder: latent -> 768 (symmetric architecture)
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 192),
+        # Decoder: latent → 128 → 256 → 768
+        # Symmetric architecture with Dropout
+        # L2 normalization on output (critical for GTR embeddings)
+        self.decoder_layers = nn.Sequential(
+            nn.Linear(latent_dim, 128),  # 32 → 128 (4×)
             nn.GELU(),
-            nn.LayerNorm(192),
-            nn.Linear(192, 384),
+            nn.LayerNorm(128),
+            nn.Linear(128, 256),  # 128 → 256 (2×)
             nn.GELU(),
-            nn.LayerNorm(384),
-            nn.Linear(384, input_dim),
+            nn.LayerNorm(256),
+            nn.Dropout(0.1),
+            nn.Linear(256, input_dim),  # 256 → 768 (3×)
         )
 
         # Initialize weights for stable training
@@ -217,8 +220,8 @@ class InstructionVAE(nn.Module):
         if was_1d:
             z = z.unsqueeze(0)
 
-        x_recon = self.decoder(z)
-        x_recon = F.normalize(x_recon, p=2, dim=-1)
+        x_recon = self.decoder_layers(z)
+        x_recon = F.normalize(x_recon, p=2, dim=-1)  # L2 normalizace (kritické pro GTR)
 
         if was_1d:
             x_recon = x_recon.squeeze(0)
@@ -284,27 +287,26 @@ class InstructionVAE(nn.Module):
         # KL = -0.5 * sum(1 + log_var - mu^2 - var)
         kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1).mean()
 
+        # Total loss starts with recon + KL
+        total_loss = recon_loss + beta * kl_loss
+
         # Cycle consistency loss: z ≈ encode_mu(decode(z))
-        # This prevents "holes" in latent space where different z's decode to similar x
-        # but encode back to completely different z's
-        cycle_loss = torch.tensor(0.0, device=x.device)
+        # Only compute if gamma > 0 (skip expensive encode_mu call otherwise)
+        cycle_loss_val = 0.0
         cycle_cosine = 0.0
         if gamma > 0 and z is not None:
-            # Re-encode the reconstructed embedding
             z_recon = self.encode_mu(x_recon)
-            # Use cosine similarity for consistency with other losses
             z_cosine = F.cosine_similarity(z, z_recon, dim=-1)
             cycle_loss = (1 - z_cosine).mean()
+            cycle_loss_val = cycle_loss.item()
             cycle_cosine = z_cosine.mean().item()
-
-        # Total loss
-        total_loss = recon_loss + beta * kl_loss + gamma * cycle_loss
+            total_loss = total_loss + gamma * cycle_loss
 
         loss_dict = {
             "total": total_loss.item(),
             "recon": recon_loss.item(),
             "kl": kl_loss.item(),
-            "cycle": cycle_loss.item() if gamma > 0 else 0.0,
+            "cycle": cycle_loss_val,
             "cosine_mean": cosine_sim.mean().item(),
             "cycle_cosine": cycle_cosine,
         }
@@ -358,20 +360,28 @@ class InstructionVAE(nn.Module):
 
 
 class VAEWithAdapter(nn.Module):
-    """Wrapper combining frozen VAE encoder with trainable adapter.
+    """Wrapper for frozen VAE encoder (no adapter compression).
 
     Architecture for optimization:
-        z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+        x (768D) → VAE encoder → z (32D) → GP → qLogEI
 
-    The adapter compresses VAE latent for efficient GP modeling while
-    optimization happens in the full 64D space with gradients flowing
-    through the adapter.
+    GP operates directly on 32D VAE latent space - no adapter bottleneck.
+    This simplifies the architecture and avoids overfitting the adapter
+    with limited training data.
 
     For decoding after optimization:
-        z (64D) → VAE decoder → embedding (768D)
+        z (32D) → VAE decoder → embedding (768D)
+
+    Note: Named "VAEWithAdapter" for API compatibility but adapter is removed.
     """
 
-    def __init__(self, vae: nn.Module, vae_latent_dim: int = 64, gp_latent_dim: int = 10):
+    def __init__(self, vae: nn.Module, vae_latent_dim: int = 32):
+        """Initialize frozen VAE wrapper.
+
+        Args:
+            vae: Trained InstructionVAE to wrap (will be frozen)
+            vae_latent_dim: VAE latent dimension (32 by default, matches config.latent_dim)
+        """
         super().__init__()
         # Freeze VAE (don't register as submodule to avoid saving it twice)
         object.__setattr__(self, '_vae', vae)
@@ -380,53 +390,80 @@ class VAEWithAdapter(nn.Module):
             param.requires_grad = False
 
         self.vae_latent_dim = vae_latent_dim
-        self.gp_latent_dim = gp_latent_dim
-
-        # Trainable adapter: compresses VAE latents (64D) to GP latents (10D)
-        # Intermediate dimension scales with input: ~half of vae_latent_dim
-        intermediate_dim = max(vae_latent_dim // 2, gp_latent_dim * 2)
-        self.adapter = nn.Sequential(
-            nn.Linear(vae_latent_dim, intermediate_dim),  # 64 → 32
-            nn.ReLU(),
-            nn.LayerNorm(intermediate_dim),
-            nn.Linear(intermediate_dim, gp_latent_dim),  # 32 → 10
-        )
+        # No adapter - GP works directly on 32D VAE latent
 
     def encode_vae(self, x: torch.Tensor) -> torch.Tensor:
         """Encode embedding to VAE latent (deterministic mu).
 
-        Use this for getting latent for optimization bounds.
+        Args:
+            x: Input embedding (batch, 768) or (768,)
+
+        Returns:
+            VAE latent (batch, 32) or (32,)
         """
         return self._vae.encode_mu(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Encode embedding to 10D GP latent (through adapter).
+        """Encode embedding to VAE latent for GP.
 
-        Pipeline: x (768D) → VAE encoder → z (64D) → adapter → z_gp (10D)
+        Pipeline: x (768D) → VAE encoder → z (32D)
 
-        This is used for GP training.
-        """
-        z = self._vae.encode_mu(x)
-        return self.adapter(z)
-
-    def adapt(self, z: torch.Tensor) -> torch.Tensor:
-        """Apply adapter to VAE latent.
+        No adapter compression - GP works on full 32D latent.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            x: Input embedding (batch, 768)
 
         Returns:
-            GP latent tensor of shape (..., 10)
+            VAE latent (batch, 32) for GP training
         """
-        return self.adapter(z)
+        return self._vae.encode_mu(x)
+
+    def adapt(self, z: torch.Tensor) -> torch.Tensor:
+        """Identity function (no adapter).
+
+        For API compatibility. Returns input unchanged since there's no adapter.
+
+        Args:
+            z: VAE latent tensor of shape (..., 32)
+
+        Returns:
+            Same tensor unchanged (..., 32)
+        """
+        return z
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """Decode VAE latent to 768D embedding.
 
         Args:
-            z: VAE latent tensor of shape (..., 64)
+            z: VAE latent tensor of shape (..., 32)
 
         Returns:
             Embedding tensor of shape (..., 768)
         """
         return self._vae.decode(z)
+
+    @property
+    def device(self) -> torch.device:
+        """Get device where the underlying VAE is located."""
+        return next(self._vae.parameters()).device
+
+    def to(self, device):
+        """Move to device, including the internal VAE.
+
+        Overrides nn.Module.to() because _vae is stored via object.__setattr__
+        to avoid double registration, so it won't be moved automatically.
+        """
+        # Move internal VAE first
+        self._vae.to(device)
+        # Then call parent to() for any other registered modules
+        return super().to(device)
+
+    def cpu(self):
+        """Move to CPU, including the internal VAE."""
+        return self.to(torch.device('cpu'))
+
+    def cuda(self, device=None):
+        """Move to CUDA, including the internal VAE."""
+        if device is None:
+            device = torch.device('cuda')
+        return self.to(device)

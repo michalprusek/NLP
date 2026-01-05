@@ -202,7 +202,7 @@ Note: Fidelity indicates how many validation samples were used. Lower fidelity =
 
 ### LIPO - Latent Instruction Prompt Optimization (`lipo/`)
 
-**Instruction-only optimization with VAE latent space and adapter-based GP:**
+**Instruction-only optimization with VAE latent space and direct GP on 32D latents:**
 
 ```bash
 # Skip HbBoPs: Load pre-evaluated results and train GP only (DEFAULT - no LLM needed)
@@ -224,13 +224,12 @@ uv run python -m lipo.run --iterations 10
 - **GP training**: Uses only HbBoPs-evaluated prompts with accuracy labels
 
 **Architecture:**
-- VAE: 768D GTR → 64D latent (frozen during GP training)
-- Adapter: 64D → 10D (trainable with GP)
-- GP: Matern 5/2 kernel on 10D adapter output with Kumaraswamy input warping
+- VAE: 768D GTR → 32D latent (frozen during GP training)
+- GP: Matern 5/2 kernel with ARD directly on 32D VAE latent (no adapter)
 
 **Optimization flow:**
 ```
-z (64D) → Adapter → z_gp (10D) → GP → qLogEI
+z (32D VAE latent) → GP (ARD kernel) → qLogEI
 ```
 
 **Skip HbBoPs Mode:**

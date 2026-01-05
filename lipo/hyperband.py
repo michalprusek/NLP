@@ -176,16 +176,16 @@ class LIPOHyperband:
         if np.std(errors) < 1e-6:
             return False
 
-        # Prepare training tensors - convert 768D embeddings to 64D VAE latents
+        # Prepare training tensors - convert 768D embeddings to 32D VAE latents
         embeddings = torch.stack([emb for emb, _ in fidelity_data]).to(self.device)
         y = torch.tensor(errors, dtype=torch.float32, device=self.device)
 
-        # Convert to 64D VAE latents (GP expects 64D input for adapter)
+        # Convert to 32D VAE latents (GP expects 32D input)
         self.vae_with_adapter.eval()
         with torch.no_grad():
             X = self.vae_with_adapter.encode_vae(embeddings)
 
-        # Unit cube normalization for 64D VAE latents
+        # Unit cube normalization for 32D VAE latents
         self.X_min = X.min(dim=0)[0]
         self.X_max = X.max(dim=0)[0]
         denom = self.X_max - self.X_min
@@ -201,8 +201,9 @@ class LIPOHyperband:
         self.likelihood = gpytorch.likelihoods.GaussianLikelihood(
             noise_constraint=gpytorch.constraints.Interval(0.001, 0.1)
         ).to(self.device)
+        # No adapter - GP operates directly on 32D VAE latent
         self.gp_model = InstructionDeepKernelGP(
-            X_norm, y_norm, self.likelihood, self.vae_with_adapter.adapter
+            X_norm, y_norm, self.likelihood
         ).to(self.device)
 
         # Use same training params as inference GP for consistency
@@ -258,12 +259,12 @@ class LIPOHyperband:
 
         emb = self.instruction_embeddings[prompt.instruction_id].unsqueeze(0)
 
-        # Convert 768D embedding to 64D VAE latent (GP expects 64D)
+        # Convert 768D embedding to 32D VAE latent (GP expects 32D)
         self.vae_with_adapter.eval()
         with torch.no_grad():
             z_vae = self.vae_with_adapter.encode_vae(emb)
 
-        # Normalize 64D VAE latent
+        # Normalize 32D VAE latent
         denom = self.X_max - self.X_min
         denom[denom == 0] = 1.0
         X_norm = (z_vae - self.X_min) / denom
@@ -437,7 +438,7 @@ class LIPOHyperband:
         if self.gp_model is None:
             raise RuntimeError("GP not trained. Run run_hyperband() first.")
 
-        gp_with_ei = GPWithEI(device=str(self.device), latent_dim=10)
+        gp_with_ei = GPWithEI(device=str(self.device))
         gp_with_ei.vae_with_adapter = self.vae_with_adapter
 
         # Filter to high-fidelity observations only (>= min_fidelity_pct of full)
@@ -464,7 +465,7 @@ class LIPOHyperband:
         print(f"  GP training data: {len(best_observations)} unique prompts")
         print(f"  Fidelity range: [{fidelities.min().item():.0f}, {fidelities.max().item():.0f}]")
 
-        # Pass fidelities for heteroscedastic noise (Bernoulli variance weighting)
+        # Pass fidelities for heteroscedastic noise (Beta posterior variance weighting)
         gp_with_ei.set_training_data(embeddings, errors, fidelities)
 
         # Note: train() will recompute X_min, X_max, y_mean, y_std from training data
