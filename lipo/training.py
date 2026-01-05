@@ -613,8 +613,20 @@ class LIPOHyperbandTrainer:
                 key=lambda i: len(self.instructions[i])
             )
             # Reorder embeddings dict keys to match sorted order
-            sorted_keys = [list(embeddings_dict.keys())[i] for i in length_sorted_indices]
-            embeddings_sorted = torch.stack([embeddings_dict[k] for k in sorted_keys]).to(self.device)
+            try:
+                embeddings_keys = list(embeddings_dict.keys())
+                sorted_keys = [embeddings_keys[i] for i in length_sorted_indices]
+                embeddings_sorted = torch.stack([embeddings_dict[k] for k in sorted_keys]).to(self.device)
+            except (IndexError, KeyError) as e:
+                print(f"ERROR: Curriculum learning index mismatch")
+                print(f"  Instructions count: {len(self.instructions)}")
+                print(f"  Embeddings dict keys count: {len(embeddings_dict)}")
+                print(f"  Embeddings dict keys (first 10): {list(embeddings_dict.keys())[:10]}")
+                print(f"  Sorted indices (first 10): {length_sorted_indices[:10]}")
+                raise ValueError(
+                    f"Curriculum learning failed: embeddings_dict keys don't match instruction indices. "
+                    f"This may indicate a data loading bug. Original error: {e}"
+                )
             embeddings = embeddings_sorted
             if verbose:
                 print(f"  Curriculum learning enabled:")
@@ -791,7 +803,7 @@ class LIPOHyperbandTrainer:
 
         return self.vae
 
-    def _validate_vae_roundtrip(self, verbose: bool = True) -> bool:
+    def _validate_vae_roundtrip(self, verbose: bool = True) -> Optional[bool]:
         """Validate VAE + Vec2Text round-trip quality.
 
         Tests that the pipeline: instruction → GTR → VAE → decode → Vec2Text
@@ -801,6 +813,8 @@ class LIPOHyperbandTrainer:
 
         Returns:
             True if quality is acceptable (mean_sim >= threshold)
+            False if quality is below threshold
+            None if validation was skipped (Vec2Text not available, no data, etc.)
         """
         from lipo.inference import validate_roundtrip_quality, Vec2TextInverter
 
@@ -821,7 +835,7 @@ class LIPOHyperbandTrainer:
         else:
             if verbose:
                 print("  Skipping: no instructions loaded for validation")
-            return True
+            return None  # Validation skipped - no data
 
         try:
             inverter = Vec2TextInverter(
@@ -833,12 +847,12 @@ class LIPOHyperbandTrainer:
             # Vec2Text not available or model files missing - skip validation
             if verbose:
                 print(f"  Skipping: Vec2Text not available: {e}")
-            return True
+            return None  # Validation skipped - Vec2Text unavailable
         except (RuntimeError, MemoryError) as e:
             # GPU/memory issues - warn loudly but continue (validation optional)
             print(f"WARNING: Vec2Text init failed with GPU/memory issue: {e}")
             print(f"  Consider reducing batch size or using CPU for validation.")
-            return True
+            return None  # Validation skipped - GPU/memory issue
 
         results = validate_roundtrip_quality(
             vae=self.vae,

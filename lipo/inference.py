@@ -285,7 +285,13 @@ class Vec2TextInverter:
             "ielabgroup/vec2text_gtr-base-st_inversion"
         )
         inversion_model = InversionModel(inv_config)
-        inversion_model.load_state_dict(load_file(inv_weights), strict=False)
+        inv_load_result = inversion_model.load_state_dict(load_file(inv_weights), strict=False)
+        if inv_load_result.missing_keys or inv_load_result.unexpected_keys:
+            print(f"WARNING: InversionModel weight mismatch")
+            if inv_load_result.missing_keys:
+                print(f"  Missing keys: {inv_load_result.missing_keys[:5]}{'...' if len(inv_load_result.missing_keys) > 5 else ''}")
+            if inv_load_result.unexpected_keys:
+                print(f"  Unexpected keys: {inv_load_result.unexpected_keys[:5]}{'...' if len(inv_load_result.unexpected_keys) > 5 else ''}")
         inversion_model = inversion_model.to(self.device).eval()
 
         corr_weights = hf_hub_download(
@@ -295,7 +301,13 @@ class Vec2TextInverter:
             "ielabgroup/vec2text_gtr-base-st_corrector"
         )
         corrector_model = CorrectorEncoderModel(corr_config)
-        corrector_model.load_state_dict(load_file(corr_weights), strict=False)
+        corr_load_result = corrector_model.load_state_dict(load_file(corr_weights), strict=False)
+        if corr_load_result.missing_keys or corr_load_result.unexpected_keys:
+            print(f"WARNING: CorrectorModel weight mismatch")
+            if corr_load_result.missing_keys:
+                print(f"  Missing keys: {corr_load_result.missing_keys[:5]}{'...' if len(corr_load_result.missing_keys) > 5 else ''}")
+            if corr_load_result.unexpected_keys:
+                print(f"  Unexpected keys: {corr_load_result.unexpected_keys[:5]}{'...' if len(corr_load_result.unexpected_keys) > 5 else ''}")
         corrector_model = corrector_model.to(self.device).eval()
 
         self._corrector = vec2text.load_corrector(inversion_model, corrector_model)
@@ -320,7 +332,13 @@ class Vec2TextInverter:
             "ielabgroup/vec2text_gtr-base-st_inversion"
         )
         self._inversion_model = InversionModel(inv_config)
-        self._inversion_model.load_state_dict(load_file(inv_weights), strict=False)
+        load_result = self._inversion_model.load_state_dict(load_file(inv_weights), strict=False)
+        if load_result.missing_keys or load_result.unexpected_keys:
+            print(f"WARNING: InversionModel weight mismatch")
+            if load_result.missing_keys:
+                print(f"  Missing keys: {load_result.missing_keys[:5]}{'...' if len(load_result.missing_keys) > 5 else ''}")
+            if load_result.unexpected_keys:
+                print(f"  Unexpected keys: {load_result.unexpected_keys[:5]}{'...' if len(load_result.unexpected_keys) > 5 else ''}")
         self._inversion_model = self._inversion_model.to(self.device).eval()
         print(f"  InversionModel loaded on {self.device}")
 
@@ -363,7 +381,13 @@ class Vec2TextInverter:
             shard_dict = load_file(shard_path)
             state_dict.update(shard_dict)
 
-        self._inversion_model.load_state_dict(state_dict, strict=False)
+        load_result = self._inversion_model.load_state_dict(state_dict, strict=False)
+        if load_result.missing_keys or load_result.unexpected_keys:
+            print(f"WARNING: Vec2Text 512_tokens model weight mismatch")
+            if load_result.missing_keys:
+                print(f"  Missing keys: {load_result.missing_keys[:5]}{'...' if len(load_result.missing_keys) > 5 else ''}")
+            if load_result.unexpected_keys:
+                print(f"  Unexpected keys: {load_result.unexpected_keys[:5]}{'...' if len(load_result.unexpected_keys) > 5 else ''}")
         self._inversion_model = self._inversion_model.to(self.device).eval()
 
         print(f"  Vec2Text (512_tokens) loaded on {self.device}")
@@ -389,7 +413,7 @@ class Vec2TextInverter:
                 if param.device.type == 'cpu' and target_type == 'cuda':
                     needs_reload = True
             except StopIteration:
-                pass
+                print("WARNING: _inversion_model has no parameters - this may indicate a loading problem")
 
         if self._corrector is not None:
             # Check if 32_tokens model needs to be moved to GPU
@@ -399,7 +423,7 @@ class Vec2TextInverter:
                     if param.device.type == 'cpu' and target_type == 'cuda':
                         needs_reload = True
                 except StopIteration:
-                    pass
+                    print("WARNING: _corrector.model has no parameters - this may indicate a loading problem")
 
         if self._finetuned_model is not None:
             # Check if fine-tuned model needs to be moved to GPU
@@ -408,7 +432,7 @@ class Vec2TextInverter:
                 if param.device.type == 'cpu' and target_type == 'cuda':
                     needs_reload = True
             except StopIteration:
-                pass
+                print("WARNING: _finetuned_model has no parameters - this may indicate a loading problem")
 
         if self._finetuned_inverter is not None:
             # Check if fine-tuned Inverter needs to be moved to GPU
@@ -417,7 +441,7 @@ class Vec2TextInverter:
                 if param.device.type == 'cpu' and target_type == 'cuda':
                     needs_reload = True
             except StopIteration:
-                pass
+                print("WARNING: _finetuned_inverter has no parameters - this may indicate a loading problem")
 
         if needs_reload:
             if pre_reload_callback is not None:
