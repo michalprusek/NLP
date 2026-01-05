@@ -142,6 +142,39 @@ class Config:
     validation_path: str = "hbbops_improved_2/data/validation.json"
     seed: int = 42
 
+    def __post_init__(self):
+        """Validate configuration invariants."""
+        # VAE weight bounds
+        if not 0.0 <= self.vae_mse_weight <= 1.0:
+            raise ValueError(f"vae_mse_weight must be in [0, 1], got {self.vae_mse_weight}")
+        if not 0.0 < self.vae_curriculum_start_pct <= 1.0:
+            raise ValueError(f"vae_curriculum_start_pct must be in (0, 1], got {self.vae_curriculum_start_pct}")
+
+        # Non-negative constraints
+        if self.latent_noise_scale < 0:
+            raise ValueError(f"latent_noise_scale must be non-negative, got {self.latent_noise_scale}")
+        if self.vae_curriculum_epochs < 0:
+            raise ValueError(f"vae_curriculum_epochs must be non-negative, got {self.vae_curriculum_epochs}")
+        if self.vae_beta < 0:
+            raise ValueError(f"vae_beta must be non-negative, got {self.vae_beta}")
+
+        # Adaptive UCB relationship
+        if self.ucb_beta_adaptive and self.ucb_beta_final > self.ucb_beta:
+            raise ValueError(
+                f"ucb_beta_final ({self.ucb_beta_final}) must be <= ucb_beta ({self.ucb_beta}) when adaptive"
+            )
+
+        # Adaptive correction constraints
+        if self.vec2text_adaptive_correction:
+            if not 0.0 < self.vec2text_adaptive_threshold <= 1.0:
+                raise ValueError(
+                    f"vec2text_adaptive_threshold must be in (0, 1], got {self.vec2text_adaptive_threshold}"
+                )
+            if self.vec2text_adaptive_max_steps < 1:
+                raise ValueError(
+                    f"vec2text_adaptive_max_steps must be positive, got {self.vec2text_adaptive_max_steps}"
+                )
+
     def for_hyperband_gp(self) -> dict:
         """Get GP training params for Hyperband (reduced for speed).
 

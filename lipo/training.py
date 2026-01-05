@@ -332,8 +332,18 @@ Output format:
                 if len(cleaned) > 5 and cleaned != instruction:
                     variations.append(cleaned)
             return variations[:3]
-        except (TimeoutError, ConnectionError):
-            # Transient network errors - continue silently
+        except (TimeoutError, ConnectionError) as e:
+            # Track network failures for cumulative reporting
+            if not hasattr(self, '_network_failures'):
+                self._network_failures = 0
+            self._network_failures += 1
+
+            # Log first failure and periodically after
+            if self._network_failures == 1:
+                print(f"WARNING: APE augmentation network error: {type(e).__name__}")
+                print(f"  This may reduce VAE training data quality.")
+            elif self._network_failures % 10 == 0:
+                print(f"WARNING: {self._network_failures} APE augmentation network failures so far")
             return []
         except (ValueError, KeyError, IndexError) as e:
             # Parsing errors in response - log and continue
@@ -1611,10 +1621,15 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
-            # Data inconsistency - log warning but continue with index 0
-            print(f"WARNING: Best instruction from grid not found in instructions list")
-            print(f"  Instruction: {best['instruction_text'][:100]}...")
-            print(f"  This indicates data inconsistency - using index 0")
+            # Data inconsistency - log detailed diagnostic context
+            print(f"ERROR: Best instruction from grid not found in instructions list")
+            print(f"  Best instruction: {best['instruction_text']}")
+            print(f"  Instructions list size: {len(self.instructions)}")
+            if self.instructions:
+                print(f"  Falling back to index 0: {self.instructions[0]}")
+            else:
+                print(f"  WARNING: Instructions list is EMPTY!")
+            print(f"  This indicates a data pipeline bug - investigate source files.")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(
@@ -1654,10 +1669,15 @@ class LIPOHyperbandTrainer:
         try:
             best_idx = self.instructions.index(best["instruction_text"])
         except ValueError:
-            # Data inconsistency - log warning but continue with index 0
-            print(f"WARNING: Best instruction from grid not found in instructions list")
-            print(f"  Instruction: {best['instruction_text'][:100]}...")
-            print(f"  This indicates data inconsistency - using index 0")
+            # Data inconsistency - log detailed diagnostic context
+            print(f"ERROR: Best instruction from grid not found in instructions list")
+            print(f"  Best instruction: {best['instruction_text']}")
+            print(f"  Instructions list size: {len(self.instructions)}")
+            if self.instructions:
+                print(f"  Falling back to index 0: {self.instructions[0]}")
+            else:
+                print(f"  WARNING: Instructions list is EMPTY!")
+            print(f"  This indicates a data pipeline bug - investigate source files.")
             best_idx = 0
 
         best_prompt = InstructionOnlyPrompt(

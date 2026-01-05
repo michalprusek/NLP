@@ -335,8 +335,8 @@ def main():
         help="GP training epochs (default: 10000)"
     )
     parser.add_argument(
-        "--gp-lr", type=float, default=0.01,
-        help="GP learning rate (default: 0.01)"
+        "--gp-lr", type=float, default=0.0025,
+        help="GP learning rate (default: 0.0025, scaled for 32D latent)"
     )
     parser.add_argument(
         "--gp-patience", type=int, default=100,

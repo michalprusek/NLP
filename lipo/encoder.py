@@ -124,6 +124,19 @@ class InstructionVAE(nn.Module):
             mse_weight: Weight for MSE in reconstruction loss (0.2 = 20% MSE + 80% cosine)
         """
         super().__init__()
+
+        # Validate parameters
+        if not 0.0 <= mse_weight <= 1.0:
+            raise ValueError(f"mse_weight must be in [0, 1], got {mse_weight}")
+        if beta < 0:
+            raise ValueError(f"beta must be non-negative, got {beta}")
+        if gamma < 0:
+            raise ValueError(f"gamma must be non-negative, got {gamma}")
+        if input_dim <= 0:
+            raise ValueError(f"input_dim must be positive, got {input_dim}")
+        if latent_dim <= 0:
+            raise ValueError(f"latent_dim must be positive, got {latent_dim}")
+
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.beta = beta

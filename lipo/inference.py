@@ -1,8 +1,8 @@
 """InvBO inference pipeline for LIPO.
 
 Provides:
-- Vec2TextInverter: Embedding-to-text inverter (512_tokens model)
-- LIPOHyperbandInference: Complete inference with LogEI optimization
+- Vec2TextInverter: Embedding-to-text inverter (32_tokens by default, 512_tokens optional)
+- LIPOHyperbandInference: Complete inference with UCB/LogEI optimization
 
 Self-contained within lipo package. Uses external libs: vec2text, safetensors, huggingface_hub.
 """
@@ -113,8 +113,9 @@ class IterationRecord:
 class Vec2TextInverter:
     """Vec2Text embedding-to-text inverter.
 
-    Uses 512_tokens model (vec2text/gtr-512-noise-0.00001) by default.
-    This model supports longer sequences (up to 512 tokens vs 32 tokens).
+    Model type is configurable via model_type parameter.
+    Default from config: "32_tokens" (recommended, no unicode issues).
+    Alternative: "512_tokens" (longer sequences but produces garbage characters).
 
     Supports fine-tuned models via finetuned_path parameter.
     """
@@ -125,9 +126,9 @@ class Vec2TextInverter:
         beam_width: int = 8,
         max_length: int = 128,
         device: str = "auto",
-        model_type: str = "512_tokens",
-        finetuned_path: str = "",
-        finetuned_inverter_path: str = "",
+        model_type: str = "32_tokens",
+        finetuned_path: Optional[str] = None,
+        finetuned_inverter_path: Optional[str] = None,
     ):
         """Initialize inverter.
 
@@ -136,9 +137,9 @@ class Vec2TextInverter:
             beam_width: Beam search width
             max_length: Maximum output length
             device: Device to use
-            model_type: "32_tokens" or "512_tokens" (default)
-            finetuned_path: Path to fine-tuned corrector model (empty = use pre-trained)
-            finetuned_inverter_path: Path to fine-tuned InversionModel (empty = use pre-trained)
+            model_type: "32_tokens" (recommended) or "512_tokens"
+            finetuned_path: Path to fine-tuned corrector model (None = use pre-trained)
+            finetuned_inverter_path: Path to fine-tuned InversionModel (None = use pre-trained)
         """
         if model_type not in ("32_tokens", "512_tokens"):
             raise ValueError(f"model_type must be '32_tokens' or '512_tokens'")
@@ -215,7 +216,6 @@ class Vec2TextInverter:
         import torch
         from vec2text.models.config import InversionConfig
         from vec2text.models.inversion import InversionModel
-        from huggingface_hub import hf_hub_download
 
         finetuned_path = Path(self.finetuned_inverter_path)
         if not finetuned_path.exists():
@@ -235,14 +235,26 @@ class Vec2TextInverter:
         weights_path = finetuned_path / "pytorch_model.bin"
         if weights_path.exists():
             state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
-            self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+            load_result = self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+            if load_result.missing_keys or load_result.unexpected_keys:
+                print(f"WARNING: Fine-tuned model weight mismatch at {finetuned_path}")
+                if load_result.missing_keys:
+                    print(f"  Missing keys: {load_result.missing_keys[:5]}{'...' if len(load_result.missing_keys) > 5 else ''}")
+                if load_result.unexpected_keys:
+                    print(f"  Unexpected keys: {load_result.unexpected_keys[:5]}{'...' if len(load_result.unexpected_keys) > 5 else ''}")
         else:
             # Try safetensors format
             from safetensors.torch import load_file
             safetensors_path = finetuned_path / "model.safetensors"
             if safetensors_path.exists():
                 state_dict = load_file(str(safetensors_path))
-                self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+                load_result = self._finetuned_inverter.load_state_dict(state_dict, strict=False)
+                if load_result.missing_keys or load_result.unexpected_keys:
+                    print(f"WARNING: Fine-tuned model weight mismatch at {finetuned_path}")
+                    if load_result.missing_keys:
+                        print(f"  Missing keys: {load_result.missing_keys[:5]}{'...' if len(load_result.missing_keys) > 5 else ''}")
+                    if load_result.unexpected_keys:
+                        print(f"  Unexpected keys: {load_result.unexpected_keys[:5]}{'...' if len(load_result.unexpected_keys) > 5 else ''}")
             else:
                 raise ValueError(
                     f"No weights found at {finetuned_path}. "
@@ -930,12 +942,12 @@ Below 0.95 (acceptable): {n - results['acceptable_count'] + results['poor_count'
 Interpretation: {quality} - {"good reconstruction" if quality == "GOOD" else "significant meaning loss in reconstruction"}
   {"" if quality == "GOOD" else "This may explain lack of optimization improvement."}
 """)
-        # Show worst example
+        # Show worst example (full text per CLAUDE.md - never truncate prompts)
         worst_idx = np.argmin(sims_arr)
         orig, recon, wsim = sample_results[worst_idx]
         print(f"Worst reconstruction (sim={wsim:.4f}):")
-        print(f"  Original: {orig[:80]}...")
-        print(f"  Reconstructed: {recon[:100]}...")
+        print(f"  Original:\n    {orig}")
+        print(f"  Reconstructed:\n    {recon}")
 
     return results
 
