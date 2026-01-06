@@ -13,7 +13,7 @@ Usage:
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 
 import torch
@@ -130,7 +130,7 @@ def evaluate_model(
     device: str = "cuda",
     num_samples: Optional[int] = None,
     compare_original: bool = True,
-) -> Dict:
+) -> Tuple[Dict, List[EvaluationResult], List[EvaluationResult]]:
     """Evaluate fine-tuned model on test data.
 
     Returns dict with metrics for fine-tuned and optionally original model.
@@ -322,8 +322,8 @@ def main():
     worst = sorted(finetuned_results, key=lambda x: x.cosine_similarity)[:3]
     for i, r in enumerate(worst):
         logger.info(f"\n{i+1}. Cosine: {r.cosine_similarity:.4f}")
-        logger.info(f"   Original: {r.original_text[:80]}...")
-        logger.info(f"   Reconstructed: {r.reconstructed[:80]}...")
+        logger.info(f"   Original:\n{r.original_text}")
+        logger.info(f"   Reconstructed:\n{r.reconstructed}")
 
     # Save results if requested
     if args.output:

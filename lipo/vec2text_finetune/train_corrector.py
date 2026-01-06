@@ -47,6 +47,9 @@ class Config:
     # Sequence
     max_length: int = 128
 
+    # Memory management
+    max_samples: int = None  # Limit dataset size to prevent OOM
+
     # Precision
     bf16: bool = True
     gradient_checkpointing: bool = True
@@ -59,7 +62,11 @@ class Config:
 
 
 class CorrectorDataset(Dataset):
-    """Dataset for Corrector fine-tuning using pre-computed hypotheses."""
+    """Dataset for Corrector fine-tuning using pre-computed hypotheses.
+
+    Note: Pre-computing hypotheses stores embeddings in CPU memory.
+    For large datasets (>100k examples), use max_samples to limit memory usage.
+    """
 
     def __init__(
         self,
@@ -70,10 +77,16 @@ class CorrectorDataset(Dataset):
         corrector_embedder,
         max_length: int = 128,
         device: str = "cuda",
+        max_samples: int = None,
     ):
         logger.info(f"Loading {data_path}...")
         with open(data_path) as f:
             self.examples = json.load(f)
+
+        # Limit samples to prevent OOM on large datasets
+        if max_samples and len(self.examples) > max_samples:
+            logger.info(f"  Limiting to {max_samples} samples (from {len(self.examples)})")
+            self.examples = self.examples[:max_samples]
 
         self.tokenizer = tokenizer
         self.embedder_tokenizer = embedder_tokenizer
@@ -273,6 +286,7 @@ def train(config: Config):
             logger.info("Gradient checkpointing enabled")
 
     # Datasets
+    # Note: Large datasets may cause OOM. Use --max-samples to limit.
     logger.info("Creating datasets...")
     train_dataset = CorrectorDataset(
         config.train_data,
@@ -281,6 +295,7 @@ def train(config: Config):
         inversion_model,
         corrector_embedder,
         config.max_length,
+        max_samples=config.max_samples,
     )
     eval_dataset = CorrectorDataset(
         config.eval_data,
@@ -289,6 +304,7 @@ def train(config: Config):
         inversion_model,
         corrector_embedder,
         config.max_length,
+        max_samples=min(10000, config.max_samples) if config.max_samples else None,
     )
 
     logger.info(f"Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
@@ -366,6 +382,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--eval-steps", type=int, default=500)
+    parser.add_argument("--max-samples", type=int, default=None,
+                        help="Limit dataset size to prevent OOM (default: no limit)")
     args = parser.parse_args()
 
     config = Config(
@@ -376,6 +394,7 @@ def main():
         per_device_batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         eval_steps=args.eval_steps,
+        max_samples=args.max_samples,
     )
 
     train(config)

@@ -298,8 +298,8 @@ def main():
     if train:
         sample = train[0]
         logger.info(f"\nSample training example:")
-        logger.info(f"  Text: {sample.text[:100]}...")
-        logger.info(f"  Hypothesis: {sample.hypothesis[:100]}...")
+        logger.info(f"  Text:\n{sample.text}")
+        logger.info(f"  Hypothesis:\n{sample.hypothesis}")
 
 
 if __name__ == "__main__":

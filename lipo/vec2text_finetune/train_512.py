@@ -193,7 +193,7 @@ class InversionTrainer(Trainer):
             labels=inputs["labels"],
         )
 
-        loss = outputs["loss"]
+        loss = outputs.loss
 
         return (loss, outputs) if return_outputs else loss
 

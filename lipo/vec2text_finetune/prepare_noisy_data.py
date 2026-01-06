@@ -116,6 +116,10 @@ def process_with_noise_augmentation(
     with open(input_path) as f:
         data = json.load(f)
 
+    if len(data) == 0:
+        logger.error(f"No data found in {input_path}")
+        return {"error": "empty dataset", "total": 0}
+
     logger.info(f"  Loaded {len(data)} examples")
     logger.info(f"  Creating {num_augmentations} augmented versions each")
 

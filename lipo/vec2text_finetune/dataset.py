@@ -7,7 +7,7 @@ The corrector takes:
 """
 
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from pathlib import Path
 
 import torch
@@ -173,7 +173,16 @@ class SimpleSeq2SeqDataset(Dataset):
 
 
 def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-    """Custom collate function for DataLoader."""
+    """Custom collate function for DataLoader.
+
+    Stacks tensors from a list of dicts into a single batched dict.
+
+    Args:
+        batch: List of dicts, each containing tensors (input_ids, labels, etc.)
+
+    Returns:
+        Dict with same keys, but tensors stacked along batch dimension.
+    """
     return {
         key: torch.stack([item[key] for item in batch])
         for key in batch[0].keys()

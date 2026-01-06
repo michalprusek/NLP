@@ -19,7 +19,7 @@ from typing import List, Dict, Tuple
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path("lipo/vec2text_finetune/data")
+DATA_DIR = Path(__file__).parent / "data"
 
 
 def is_clean_instruction(text: str, min_len: int = 15, max_len: int = 500) -> bool:
@@ -62,89 +62,91 @@ def is_clean_instruction(text: str, min_len: int = 15, max_len: int = 500) -> bo
     return True
 
 
-def download_wizardlm() -> Tuple[List[str], List[str]]:
-    """Download WizardLM Evol-Instruct (196k evolved instructions)."""
+def _download_dataset_safe(
+    dataset_id: str,
+    name: str,
+    extract_fn,
+    split: str = "train",
+    streaming: bool = False,
+) -> Tuple[List[str], List[str]]:
+    """Helper to download dataset with error handling.
+
+    Args:
+        dataset_id: HuggingFace dataset identifier
+        name: Human-readable name for logging
+        extract_fn: Function (example) -> str|None to extract instruction text
+        split: Dataset split to load
+        streaming: Whether to use streaming mode
+
+    Returns:
+        Tuple of (instructions, sample_instructions)
+    """
     from datasets import load_dataset
 
-    logger.info("Downloading WizardLM Evol-Instruct (196k)...")
+    logger.info(f"Downloading {name}...")
     instructions = []
 
     try:
-        dataset = load_dataset(
-            "WizardLMTeam/WizardLM_evol_instruct_V2_196k",
-            split="train",
-        )
+        dataset = load_dataset(dataset_id, split=split, streaming=streaming)
 
         for example in dataset:
-            convs = example.get("conversations", [])
-            if convs and len(convs) > 0:
-                # First turn is the instruction
-                text = convs[0].get("value", "")
-                if text and is_clean_instruction(text):
-                    instructions.append(text.strip())
+            text = extract_fn(example)
+            if text and is_clean_instruction(text):
+                instructions.append(text.strip())
 
-        logger.info(f"  WizardLM: {len(instructions)} clean instructions")
+        logger.info(f"  {name}: {len(instructions)} clean instructions")
         return instructions, instructions[:5]
 
     except Exception as e:
-        logger.warning(f"  Failed to download WizardLM: {e}")
+        logger.warning(f"  Failed to download {name}: {e}")
         return [], []
+
+
+def download_wizardlm() -> Tuple[List[str], List[str]]:
+    """Download WizardLM Evol-Instruct (196k evolved instructions)."""
+    def extract(example):
+        convs = example.get("conversations", [])
+        if convs and len(convs) > 0:
+            return convs[0].get("value", "")
+        return None
+
+    return _download_dataset_safe(
+        "WizardLMTeam/WizardLM_evol_instruct_V2_196k",
+        "WizardLM Evol-Instruct (196k)",
+        extract,
+    )
 
 
 def download_alpaca() -> Tuple[List[str], List[str]]:
     """Download Stanford Alpaca dataset (52k)."""
-    from datasets import load_dataset
+    def extract(example):
+        instruction = example.get("instruction", "")
+        input_text = example.get("input", "")
+        if input_text:
+            return f"{instruction}\n\nInput: {input_text}"
+        return instruction
 
-    logger.info("Downloading Alpaca dataset (52k)...")
-    try:
-        dataset = load_dataset("tatsu-lab/alpaca", split="train")
-        instructions = []
-
-        for example in dataset:
-            instruction = example.get("instruction", "")
-            input_text = example.get("input", "")
-            if input_text:
-                text = f"{instruction}\n\nInput: {input_text}"
-            else:
-                text = instruction
-
-            if text and is_clean_instruction(text):
-                instructions.append(text.strip())
-
-        logger.info(f"  Alpaca: {len(instructions)} clean instructions")
-        return instructions, instructions[:5]
-
-    except Exception as e:
-        logger.warning(f"  Failed to download Alpaca: {e}")
-        return [], []
+    return _download_dataset_safe(
+        "tatsu-lab/alpaca",
+        "Alpaca (52k)",
+        extract,
+    )
 
 
 def download_dolly() -> Tuple[List[str], List[str]]:
     """Download Databricks Dolly dataset (15k human-written)."""
-    from datasets import load_dataset
+    def extract(example):
+        instruction = example.get("instruction", "")
+        context = example.get("context", "")
+        if context:
+            return f"{instruction}\n\nContext: {context}"
+        return instruction
 
-    logger.info("Downloading Dolly dataset (15k)...")
-    try:
-        dataset = load_dataset("databricks/databricks-dolly-15k", split="train")
-        instructions = []
-
-        for example in dataset:
-            instruction = example.get("instruction", "")
-            context = example.get("context", "")
-            if context:
-                text = f"{instruction}\n\nContext: {context}"
-            else:
-                text = instruction
-
-            if text and is_clean_instruction(text):
-                instructions.append(text.strip())
-
-        logger.info(f"  Dolly: {len(instructions)} clean instructions")
-        return instructions, instructions[:5]
-
-    except Exception as e:
-        logger.warning(f"  Failed to download Dolly: {e}")
-        return [], []
+    return _download_dataset_safe(
+        "databricks/databricks-dolly-15k",
+        "Dolly (15k)",
+        extract,
+    )
 
 
 def download_natural_instructions() -> Tuple[List[str], List[str]]:
@@ -185,33 +187,19 @@ def download_natural_instructions() -> Tuple[List[str], List[str]]:
 
 def download_sharegpt() -> Tuple[List[str], List[str]]:
     """Download ShareGPT (real user conversations)."""
-    from datasets import load_dataset
+    def extract(example):
+        convs = example.get("conversations", [])
+        if convs and len(convs) > 0:
+            first = convs[0]
+            if first.get("from") == "human":
+                return first.get("value", "")
+        return None
 
-    logger.info("Downloading ShareGPT...")
-    instructions = []
-
-    try:
-        dataset = load_dataset(
-            "anon8231489123/ShareGPT_Vicuna_unfiltered",
-            split="train",
-        )
-
-        for example in dataset:
-            convs = example.get("conversations", [])
-            if convs and len(convs) > 0:
-                # First human turn is the instruction
-                first = convs[0]
-                if first.get("from") == "human":
-                    text = first.get("value", "")
-                    if text and is_clean_instruction(text):
-                        instructions.append(text.strip())
-
-        logger.info(f"  ShareGPT: {len(instructions)} clean instructions")
-        return instructions, instructions[:5]
-
-    except Exception as e:
-        logger.warning(f"  Failed to download ShareGPT: {e}")
-        return [], []
+    return _download_dataset_safe(
+        "anon8231489123/ShareGPT_Vicuna_unfiltered",
+        "ShareGPT",
+        extract,
+    )
 
 
 def deduplicate(instructions: List[str]) -> List[str]:
