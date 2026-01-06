@@ -258,6 +258,22 @@ log(f"Generated: {prompt[:80]}...")
 log(f"Generated:\n{prompt}")
 ```
 
+### Long-Running Processes
+**Always run processes longer than ~30 seconds in tmux** with logging to results directory:
+
+```bash
+# Pattern for LIPO runs
+tmux new-session -d -s <session_name> "CUDA_VISIBLE_DEVICES=<gpu> uv run python -m lipo.run <args> 2>&1 | tee lipo/results/<descriptive_name>_$(date +%Y%m%d_%H%M%S).log; exec bash"
+
+# Example
+tmux new-session -d -s lipo_12d_beta0005 "CUDA_VISIBLE_DEVICES=0 uv run python -m lipo.run --skip-hbbops --latent-dim 12 --vae-beta 0.005 --iterations 50 2>&1 | tee lipo/results/12d_beta0005_$(date +%Y%m%d_%H%M%S).log; exec bash"
+```
+
+This ensures:
+- Process survives connection drops
+- Output is logged for later analysis
+- Multiple experiments can run in parallel on different GPUs
+
 ## Constraints
 
 - vLLM requires CUDA GPU; Claude API requires `ANTHROPIC_API_KEY`

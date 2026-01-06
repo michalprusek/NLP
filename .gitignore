@@ -155,3 +155,4 @@ catboost_info/
 lipo/vec2text_finetune/checkpoints*/
 lipo/vec2text_finetune/data*/
 lipo/vec2text_finetune/logs/
+.nfs*
