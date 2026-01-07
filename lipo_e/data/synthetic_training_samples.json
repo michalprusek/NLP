@@ -1,0 +1,6682 @@
+[
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      13,
+      17,
+      28,
+      31,
+      94
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5992418498862775,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      54,
+      75
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5492797573919637,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9992418498862775,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      71
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.978013646702047,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      0,
+      28,
+      35,
+      57,
+      75,
+      103,
+      111
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6723708437127695,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      13,
+      19,
+      27,
+      35,
+      43,
+      97,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5829091302935124,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      5,
+      33,
+      44,
+      77,
+      103,
+      108
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.970558503917109,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      118,
+      124
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.4727065959059894,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.976497346474602,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      5,
+      8,
+      24,
+      73,
+      84,
+      90
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5138741470811221,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      29,
+      109
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5663381349507202,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      20,
+      26,
+      45,
+      46,
+      47,
+      81,
+      85,
+      106
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7649734647460198,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      77,
+      81
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.3172858225928734,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      20,
+      34,
+      48,
+      59
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7937831690674754,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      41,
+      87,
+      98,
+      107
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5634950720242609,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9818043972706596,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      8,
+      27,
+      34,
+      72,
+      112,
+      116,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9753059677244666,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      17,
+      18,
+      33,
+      50,
+      58,
+      82,
+      113,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8042889635004874,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      51,
+      54,
+      74,
+      95,
+      114
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6620545868081881,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      11,
+      63,
+      65
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8685873136214304,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      54,
+      87,
+      101
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8233510235026534,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9962092494313874,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      1,
+      32,
+      67,
+      70,
+      87,
+      110,
+      120,
+      124
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6083613126827683,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      14,
+      37,
+      43,
+      82,
+      98
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6609552691432904,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      122
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.5398028809704322,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      22,
+      64,
+      97,
+      116,
+      124
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5626990144048521,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      25,
+      64,
+      77,
+      81,
+      107
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7924184988627749,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      69,
+      99,
+      122
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9239322719231741,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      2,
+      14,
+      46,
+      62,
+      112,
+      118
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8334596916856204,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      10,
+      72,
+      112,
+      121
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5392342683851402,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      68,
+      97
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9829416224412433,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      21,
+      33,
+      54,
+      67,
+      70,
+      77,
+      111,
+      121
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7174943138741471,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      39,
+      51,
+      85,
+      91
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6935178165276725,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      2,
+      8,
+      15,
+      28,
+      31,
+      43,
+      70,
+      75
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6413949962092494,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      9
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8786959818043972,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      4,
+      8,
+      110,
+      115
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8694086429112964,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9886277482941622,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      16,
+      27,
+      60,
+      69,
+      73,
+      92,
+      112,
+      119
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5968536770280515,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      12,
+      24,
+      45,
+      52,
+      54,
+      55,
+      84
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5538286580742987,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      86
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.265352539802881,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      7,
+      51
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.4378316906747536,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      24,
+      31
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7710386656557998,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      23,
+      35,
+      54
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7131665403083144,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      56,
+      103
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7088703563305534,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9893858984078847,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      124
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.5026535253980288,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      21,
+      52,
+      61,
+      62
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9535001263583522,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      21
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9294920394238059,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      36,
+      54,
+      71,
+      84,
+      89,
+      93,
+      100,
+      122
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6311599696739953,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      7,
+      27,
+      37,
+      123
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6980667172100077,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      95
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9181197877179682,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      7,
+      65,
+      122
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9396007076067728,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      8,
+      76
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9351781652767248,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      15,
+      31,
+      72,
+      74,
+      76,
+      113,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6432903714935557,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      33,
+      40,
+      66,
+      72,
+      74,
+      84,
+      119
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9762446297700279,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      16,
+      30,
+      33,
+      50,
+      82,
+      85
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8156178923426838,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      1,
+      58
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.44920394238059136,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      9,
+      68
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9226686884003032,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      44,
+      112,
+      119
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7958049027040688,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      20,
+      36,
+      56,
+      69,
+      90,
+      106
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.9107910032853171,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      85
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.16224412433661864,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      112,
+      120
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5121304018195603,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      70,
+      95
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9848369977255496,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      26,
+      43,
+      87,
+      91
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8637225170583775,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      6,
+      11,
+      32,
+      54,
+      81,
+      108,
+      115,
+      116
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6301310516625149,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.869598180439727,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      20,
+      56,
+      70,
+      90,
+      94
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6726686884003032,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      9,
+      120
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.6141015921152388,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      106
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9651250947687642,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      5,
+      16,
+      55
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7371746272428608,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      115
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.20318423047763456,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      13,
+      45,
+      85,
+      99
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6952236542835482,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      19,
+      30,
+      79,
+      95,
+      118,
+      119,
+      124
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.788855193328279,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      3,
+      52,
+      112
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9054839524892596,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      52,
+      85,
+      100,
+      102,
+      110,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.9128127369219106,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      13,
+      20,
+      48,
+      89,
+      100
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5986353297952994,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      25,
+      58,
+      104,
+      117
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9111068991660348,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      3,
+      24,
+      28,
+      84
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7649734647460198,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      98,
+      123
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.4651250947687642,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      3,
+      14,
+      42,
+      68,
+      86,
+      107,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.370843712769414,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      4,
+      13,
+      44,
+      55,
+      76
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.3610310841546626,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      14,
+      24,
+      49,
+      65,
+      73,
+      77,
+      115
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6030542618867106,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9264594389689158,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      8,
+      46,
+      55,
+      121
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6106899166034875,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      15,
+      38,
+      84,
+      92,
+      108,
+      115
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5040434672731867,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      16,
+      24,
+      37,
+      41,
+      51,
+      70,
+      89
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7564171991768655,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      22,
+      38,
+      72,
+      78,
+      86,
+      95,
+      115
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6876421531463229,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      38
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.2934040940106141,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      27,
+      56,
+      59,
+      60,
+      65,
+      86
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.21152388172858227,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      36,
+      65
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5614101592115239,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      11,
+      30,
+      86,
+      96,
+      104,
+      121
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5911043719989891,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      3,
+      5,
+      18,
+      31
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6393100833965124,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      53,
+      58
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.25815011372251706,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      0,
+      18,
+      31,
+      51,
+      63,
+      83,
+      88
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5782519224520742,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      54,
+      99
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.44086429112964365,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      6,
+      15,
+      17,
+      31,
+      58,
+      71,
+      108,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7090869706487598,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      56,
+      78,
+      96,
+      104,
+      114,
+      121
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6732373009855951,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      20,
+      57,
+      70,
+      95,
+      106,
+      114,
+      116
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6111772988194518,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      35,
+      81,
+      98,
+      107
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6199772554965883,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      9,
+      35,
+      56,
+      91
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5528809704321456,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      10,
+      17,
+      19,
+      40,
+      69,
+      114
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.3213040181956027,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      8,
+      27,
+      90
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6798079353045235,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      7,
+      26,
+      49,
+      53,
+      74,
+      98,
+      106,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5987490523123579,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9878695981804397,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      0,
+      38,
+      45,
+      49,
+      96,
+      109,
+      114,
+      120
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.589190945521499,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      28,
+      34,
+      55,
+      62
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5593252463987869,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9719484457922669,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      16,
+      21,
+      59,
+      79,
+      92,
+      107,
+      117
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5862666522257121,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      10
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.7482941622441244,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      6,
+      23,
+      27,
+      33,
+      41,
+      43,
+      48,
+      58
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.47774287880428895,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      32,
+      53,
+      96,
+      106,
+      121
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7109931766489765,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      121
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9234268385140257,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      99,
+      122
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9465504169825625,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9363153904473086,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      2,
+      19,
+      79,
+      107
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8333965125094769,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      72,
+      121
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7759666413949962,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      21,
+      47,
+      77,
+      98,
+      123
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8838514025777103,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      13,
+      39,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5150366439221633,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9931766489764974,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      9,
+      25,
+      50,
+      75,
+      88,
+      91,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.3708437127694141,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      15,
+      76,
+      87,
+      103,
+      108
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7320697498104625,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      8,
+      47,
+      54,
+      64,
+      68,
+      84
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8757897397017943,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      13,
+      46,
+      55,
+      62,
+      81,
+      105,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.528214014946388,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      22,
+      34,
+      66,
+      78,
+      83,
+      93,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.748619083721434,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      31,
+      34,
+      41,
+      55,
+      75,
+      93,
+      105,
+      109
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8118524134445287,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      31,
+      43,
+      48,
+      59,
+      72,
+      78,
+      85,
+      96
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8972706595905989,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      23,
+      27,
+      33,
+      45,
+      62,
+      102
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8085670962850644,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      1,
+      24,
+      66,
+      71,
+      121
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.644882486732373,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      30,
+      60,
+      62,
+      71,
+      82,
+      88,
+      97
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9380844073793279,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      11
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8597422289613343,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      39,
+      47,
+      74,
+      84
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.37433661865049284,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      42,
+      45,
+      54,
+      70,
+      89,
+      95
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5873136214303766,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      15,
+      24,
+      29,
+      40,
+      92
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8080363912054587,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      24,
+      27,
+      94
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8647965630528178,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      12,
+      24,
+      29,
+      37,
+      106
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6128885519332827,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      90
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9226686884003032,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      124
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.4943138741470811,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      81,
+      96,
+      111
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9610816274955775,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      73
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9719484457922669,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      6,
+      23,
+      32,
+      43,
+      61,
+      110,
+      120,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.4429762807321564,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      6,
+      9,
+      19,
+      62,
+      73,
+      80,
+      87
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7165782158200656,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      10,
+      15,
+      31,
+      71,
+      97
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9849886277482941,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      48,
+      57,
+      66,
+      99
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4791508718726307,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      7,
+      39,
+      72,
+      78,
+      79,
+      94,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.678923426838514,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      27,
+      33,
+      80,
+      84
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8180439727065959,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      9,
+      20,
+      70
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9775082132928986,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      4,
+      29,
+      36,
+      37,
+      58,
+      89,
+      90,
+      110
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7725549658832449,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      75,
+      80,
+      84,
+      100,
+      101
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9302501895375285,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      19,
+      34,
+      82,
+      116
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8743366186504928,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9977255496588324,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      15,
+      38,
+      56,
+      59,
+      88
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8582259287338894,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      10,
+      56,
+      63,
+      64,
+      69
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7636467020470052,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      3,
+      11,
+      29,
+      86,
+      123
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6827899924184988,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      97
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9181197877179682,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      97
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.354814253222138,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      23,
+      35,
+      55,
+      62,
+      74,
+      81,
+      104,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6729529946929492,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      13,
+      20,
+      41,
+      42,
+      52,
+      85,
+      109
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9699267121556736,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      4,
+      11,
+      40,
+      58,
+      70,
+      97,
+      104
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8346149680493882,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      0,
+      65,
+      69,
+      84,
+      105,
+      110,
+      111
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.3496588324488249,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      46,
+      66,
+      79,
+      96
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5724033358605004,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      26
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.4230477634571645,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      15,
+      56,
+      62,
+      89,
+      112
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.1640636846095527,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      20,
+      39,
+      70,
+      90
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8639120545868082,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      28,
+      107
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8995451099317665,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      82,
+      106
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8222137983320698,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      34,
+      53,
+      65,
+      90,
+      106
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9645185746777862,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      18,
+      49,
+      58,
+      70
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.46114480667172103,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      8,
+      35,
+      110
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6714682840535761,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      0,
+      34,
+      43,
+      64,
+      100,
+      105,
+      119
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8059135708870357,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      19,
+      42,
+      44,
+      57,
+      61,
+      68,
+      70,
+      110
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.3419257012888552,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      24,
+      30,
+      41,
+      49,
+      73,
+      89,
+      111,
+      119
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6994882486732373,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      5,
+      40,
+      60,
+      90,
+      95,
+      103,
+      116
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8534604137333478,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      4,
+      63,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5648218347232752,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      12,
+      56,
+      67,
+      108,
+      111,
+      116
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8109679049785191,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9939347990902199,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      9,
+      60,
+      100
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9269648723780642,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      10,
+      42,
+      48,
+      68,
+      83,
+      86,
+      109
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.3504819668580093,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      4,
+      8,
+      30,
+      69,
+      79,
+      80,
+      87,
+      111
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6562736921910539,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      12,
+      55
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.3809704321455648,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      21,
+      56
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5386656557998484,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      5
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8862774829416225,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      18,
+      31,
+      45,
+      47,
+      55
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.37680060652009095,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      10,
+      21,
+      22
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8574677786201668,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      18,
+      63,
+      74,
+      116
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7839272175890827,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      1,
+      32,
+      58,
+      85,
+      115
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5640636846095527,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      9,
+      56,
+      120
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6739954510993177,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      32,
+      54,
+      81,
+      88,
+      123
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7805913570887035,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      13,
+      49,
+      61,
+      109
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6531463229719484,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      2,
+      37,
+      73,
+      84,
+      89,
+      106
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6483447055850392,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      116
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.49962092494313876,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      29,
+      45,
+      77,
+      99,
+      102
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7883244882486732,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      84,
+      86,
+      92,
+      96,
+      98
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7266868840030326,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      80,
+      115
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.4636087945413192,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      37,
+      116
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.570507960576194,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      16,
+      25,
+      100
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.4963356077836745,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      21,
+      34,
+      64,
+      67,
+      106,
+      116
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8620166793025018,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      14,
+      37,
+      43,
+      95,
+      102,
+      103,
+      111,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.3956460522040507,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      28,
+      96,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7541066464493302,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      11,
+      46,
+      71,
+      101,
+      102,
+      108,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6518827394490776,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      33,
+      48,
+      74,
+      86,
+      95,
+      105
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8404094010614102,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      29,
+      86
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.3703563305534496,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      8,
+      81,
+      82,
+      105
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9064948193075563,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      5,
+      14,
+      17,
+      52,
+      83
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8429112964366945,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      12,
+      14,
+      17,
+      30,
+      49,
+      58,
+      68,
+      113
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9013321780569697,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      19,
+      53,
+      75,
+      83,
+      93,
+      95,
+      113
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7724466587241415,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      4,
+      27,
+      35,
+      47,
+      88,
+      120,
+      121
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.715567349001769,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      12,
+      46,
+      87,
+      109
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.599696739954511,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      7,
+      15,
+      24,
+      35,
+      50,
+      123
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8795804902704069,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      6
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9226686884003032,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      26,
+      72,
+      100
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7265605256507456,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      27,
+      75,
+      104,
+      111
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9636087945413192,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      76,
+      100,
+      115
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7632044478140005,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      16,
+      32,
+      69
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8708617639625978,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      16
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9401061410159212,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      2,
+      22,
+      41,
+      75
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8656178923426839,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      8,
+      95
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8316906747536013,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      13,
+      28,
+      57,
+      64,
+      65,
+      75
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5140257771038665,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      3,
+      7,
+      51,
+      54,
+      61,
+      82,
+      108,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.46128019062060005,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      8,
+      9,
+      10,
+      16,
+      18,
+      41,
+      77,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6439221632549912,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      37,
+      48,
+      58,
+      64,
+      67,
+      76
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.174500884508466,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      83,
+      109
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8589840788476119,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      29,
+      55,
+      57,
+      113
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.32347738185494057,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      12,
+      32,
+      40,
+      51,
+      53,
+      54,
+      85,
+      93
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7012888551933282,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      8,
+      10,
+      11,
+      12,
+      55,
+      94,
+      95,
+      106
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8588577204953248,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      75
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.6277482941622441,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      45,
+      52
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.6626231993934799,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      6,
+      36,
+      76,
+      92,
+      111,
+      117,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5695873497238167,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      19,
+      28,
+      61,
+      84
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.24564063684609555,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      14,
+      28,
+      35,
+      73,
+      97,
+      103
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7472832954258276,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      77
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8339651250947687,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      3,
+      23,
+      34,
+      89,
+      97
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5924184988627748,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      0,
+      18,
+      23,
+      72,
+      84,
+      111
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.4416224412433662,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      11
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.66565579984837,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      20,
+      39,
+      43,
+      47,
+      53,
+      58,
+      92
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5115347124444926,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      6,
+      113
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7369219105382866,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      86
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.6641394996209249,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      27,
+      34,
+      53,
+      56,
+      62,
+      77,
+      96
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9262428246507094,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      14,
+      36,
+      62,
+      67,
+      75,
+      85,
+      86
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8129896386151124,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9681576952236542,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      0
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.6133434420015162,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      17,
+      32,
+      97,
+      98
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8612585291887793,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      63
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.28203184230477635,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      48,
+      68,
+      90
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6714682840535761,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      5,
+      9,
+      50,
+      55,
+      94,
+      110
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5554207733131159,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      40,
+      110
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9393479909021987,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      2,
+      14,
+      37,
+      51,
+      53,
+      81,
+      90
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8765478898155169,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      11,
+      13,
+      46,
+      55,
+      88,
+      106,
+      108,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.42721758908263835,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      10,
+      39,
+      43,
+      50,
+      67,
+      95,
+      111
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5898407884761182,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      9,
+      65,
+      81
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6851149861005812,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      44,
+      93,
+      99,
+      115
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8978392721758909,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      13,
+      18,
+      25,
+      32
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5976118271417741,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      22,
+      121
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9567854435178165,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      57,
+      72,
+      74,
+      87,
+      96,
+      97,
+      112,
+      118
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5270406873894364,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      19,
+      40,
+      56,
+      80,
+      110,
+      124
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8655547131665404,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      7,
+      35,
+      45,
+      75,
+      101
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8562547384382109,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9719484457922669,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      47
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.27520849128127367,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      59,
+      70,
+      74,
+      94,
+      101,
+      114,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9437705332322466,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      41,
+      60,
+      64,
+      77
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9239322719231741,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      10,
+      13,
+      43,
+      64,
+      91,
+      103,
+      107,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9505036282898299,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      56,
+      66,
+      67,
+      90
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4579226686884003,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      36,
+      43,
+      49,
+      52,
+      99,
+      117
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7760929997472833,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      8,
+      12,
+      42,
+      49,
+      71,
+      86
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5684862269396008,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      10,
+      42,
+      74
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6489764973464746,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      39,
+      50,
+      83,
+      84,
+      89,
+      123
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.2598938589840788,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      39,
+      71
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7566338134950721,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      16,
+      85,
+      89,
+      104,
+      106,
+      121
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6365428354814253,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      82,
+      85
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5773313115996968,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      46
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.5087187263078089,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      43,
+      62,
+      98,
+      121
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.41053828658074293,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      9,
+      19,
+      37
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7015415718979024,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      84
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.6770280515542078,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      19,
+      48,
+      76
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.4379580490270407,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      5,
+      56,
+      92
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.925448572150619,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      36,
+      56,
+      78,
+      124
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5365807429871114,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      29,
+      30,
+      39,
+      60,
+      68,
+      100,
+      103,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6629481208707896,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      36,
+      48,
+      53,
+      59,
+      64,
+      67,
+      98,
+      99
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6998808621249865,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      6,
+      32,
+      111
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9380844073793279,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      13,
+      66,
+      70,
+      91,
+      108,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6713419257012889,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      34,
+      57,
+      115
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8953752843062927,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      11,
+      28,
+      57,
+      104,
+      113,
+      116,
+      121
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7408209682660024,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      6,
+      10,
+      30,
+      47,
+      49,
+      50,
+      64
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8363659337882234,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      12,
+      42,
+      83,
+      91,
+      107,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8396512509476876,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      17,
+      60,
+      89,
+      106,
+      117
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8658074298711146,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      0,
+      2,
+      10,
+      27,
+      32,
+      78,
+      106,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7343225387198095,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      6,
+      14,
+      15,
+      30,
+      36,
+      38,
+      99
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9016932019206468,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      2,
+      8,
+      14,
+      63,
+      68,
+      76,
+      107,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7318043972706596,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      18,
+      37,
+      54,
+      91
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.46853677028051555,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      23,
+      53,
+      73,
+      85
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9107278241091736,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9893858984078847,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9977255496588324,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      49
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8673237300985596,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      2,
+      8,
+      45,
+      95,
+      100
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5981804397270659,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      74,
+      98
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9863532979529946,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      5,
+      45,
+      69
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6755117513267628,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      87,
+      99,
+      106
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.6686884003032602,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      8,
+      17,
+      23,
+      80,
+      91,
+      99,
+      103,
+      120
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8492228961334344,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9886277482941622,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      39,
+      50,
+      65,
+      69,
+      104,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7513267626990144,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      36,
+      45,
+      99,
+      110
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4431387414708112,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      15,
+      34,
+      47,
+      55,
+      102,
+      113
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8901945918625221,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      23,
+      43,
+      47,
+      63,
+      88,
+      118,
+      124
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.49593848153362946,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      54,
+      93
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7789992418498863,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      37,
+      41,
+      69
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9188779378316907,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9871114480667172,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      21,
+      44,
+      54,
+      56,
+      57,
+      77,
+      88,
+      91
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5646052204050689,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      35,
+      55,
+      78,
+      81,
+      101,
+      121
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8795804902704069,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      3,
+      18,
+      121
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5592620672226434,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      4,
+      8,
+      16,
+      30,
+      46,
+      49,
+      82,
+      99
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8132784577060546,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      9,
+      17,
+      47,
+      56,
+      73,
+      97
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7734394743492544,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      3,
+      14,
+      31,
+      35,
+      83,
+      122
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.813874147081122,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      15,
+      33,
+      57,
+      71,
+      90,
+      99,
+      116
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.627206758366728,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      15,
+      25,
+      62,
+      88,
+      117
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7335860500379076,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      11,
+      22,
+      56,
+      87,
+      91,
+      103,
+      115,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8303639120545867,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      69,
+      70
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7410917361637605,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      90,
+      91,
+      118
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.2812736921910538,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      15,
+      17,
+      25,
+      28,
+      65,
+      101
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8419257012888552,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      46
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.47384382107657314,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      8,
+      11,
+      16,
+      39,
+      70,
+      78,
+      102,
+      113
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7775777103866566,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      9,
+      16,
+      52,
+      67,
+      73,
+      98,
+      105,
+      124
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5573351023502653,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      16,
+      44,
+      59,
+      66,
+      87,
+      99,
+      106,
+      112
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.549658832448825,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      16,
+      98,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7232752084912812,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      106
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9181197877179682,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      20,
+      21,
+      41,
+      90,
+      119
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9063684609552691,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      10,
+      25,
+      32,
+      81,
+      108
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.727672479150872,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      11,
+      64,
+      68,
+      78,
+      82
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8321455648218347,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      21,
+      79,
+      84
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8579732120293152,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      5,
+      72,
+      105,
+      107,
+      110,
+      118
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7407126611068992,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9886277482941622,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      26,
+      53,
+      73,
+      83,
+      98
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.4591357088703564,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      37,
+      38,
+      61,
+      69,
+      80,
+      82,
+      113,
+      122
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7724286075309578,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      7,
+      9,
+      20,
+      38,
+      56,
+      58,
+      88
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.48749052312357843,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      18,
+      40,
+      43,
+      77
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.714177407126611,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      16,
+      47,
+      51,
+      65,
+      97,
+      124
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7632044478140005,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      15,
+      34,
+      57,
+      59
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6909274703057872,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      37
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.20849128127369218,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      20,
+      31,
+      41,
+      104,
+      110,
+      115,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5864832665439186,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      20,
+      63,
+      65,
+      97
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9184988627748294,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      2,
+      11,
+      50,
+      63,
+      120
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7946929492039425,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      6,
+      27,
+      45,
+      74
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7943517816527673,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      1,
+      13,
+      17,
+      36,
+      55,
+      68,
+      108,
+      112
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9217210007581502,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      5,
+      6,
+      24,
+      46,
+      51,
+      71,
+      72
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.4259287338893101,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      49,
+      64
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.5936315390447309,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      15,
+      78,
+      79,
+      87,
+      105
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5155420773313116,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      43,
+      46,
+      47,
+      71,
+      96,
+      101,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8712408390194591,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      4,
+      5,
+      17,
+      42,
+      64,
+      91,
+      102
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.9572186721542294,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      65,
+      77,
+      114
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.4599444023249937,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      20,
+      38,
+      50,
+      78,
+      94,
+      107
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8798332069749809,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      2,
+      38,
+      42,
+      47,
+      60,
+      72,
+      90,
+      104
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9264594389689159,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      39,
+      74,
+      88,
+      92,
+      101,
+      111,
+      115
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.6289396729123794,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      6,
+      61,
+      74,
+      92
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7805155420773312,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      4,
+      18,
+      31,
+      73,
+      87,
+      105,
+      121
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.948012563630456,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      56
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.47763457164518575,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      26,
+      52,
+      64,
+      78,
+      88,
+      99,
+      117
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.46788692732589615,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      90
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.6163760424564063,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      40,
+      48,
+      61,
+      67,
+      84,
+      122
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8069244377053324,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      45,
+      69,
+      86,
+      92,
+      98,
+      111
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8409148344705586,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      24,
+      31,
+      61,
+      78,
+      122
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5760424564063685,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      38,
+      98,
+      120,
+      124
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.2635835228708618,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      35,
+      40,
+      44,
+      61,
+      71,
+      92,
+      101,
+      119
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.4610635763023936,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      44,
+      50,
+      98,
+      102,
+      104,
+      114,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.4773818549406115,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      10,
+      44,
+      91,
+      118,
+      122
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9407126611068992,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      25,
+      27,
+      34,
+      68,
+      71,
+      89,
+      105,
+      119
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.720675836672804,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      6,
+      31,
+      85,
+      115
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4025777103866566,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      6,
+      12,
+      42,
+      52
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7585291887793784,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      0,
+      70,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.800606520090978,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      25,
+      36,
+      41,
+      61,
+      82,
+      83,
+      96,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8714394021444818,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      73,
+      83
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9507202426080363,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      116
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.576194086429113,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      4,
+      117,
+      119
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9317664897649734,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      95,
+      119,
+      123
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.47662370482688904,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      38
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.13874147081122062,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      36,
+      58,
+      63,
+      67,
+      69,
+      82
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8644427596664139,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      14,
+      20,
+      24,
+      34,
+      42,
+      58,
+      93,
+      103
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8902848478284413,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      1,
+      43,
+      94
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5984331564316401,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      22,
+      78,
+      81,
+      109
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.3976497346474602,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      11,
+      12,
+      17,
+      23,
+      51,
+      85
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.47126611068991664,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      0,
+      30,
+      33,
+      49
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.6982562547384382,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      1,
+      33,
+      38,
+      73,
+      74,
+      92
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8321455648218347,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      7,
+      15,
+      59,
+      85
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4380212282031842,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      15,
+      81,
+      88,
+      117,
+      120
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.24321455648218349,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      17,
+      28,
+      61,
+      122
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.3032600454890068,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      53,
+      60,
+      70,
+      89,
+      96,
+      116
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8831185241344451,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      31,
+      87,
+      96,
+      97
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7942886024766237,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      57,
+      67
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.599696739954511,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      72,
+      117
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8423047763457164,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      19,
+      21,
+      68,
+      73
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8769901440485216,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      11,
+      14,
+      26,
+      62,
+      74,
+      87,
+      91,
+      115
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5363370518791292,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      58
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.35329795299469297,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      7,
+      39,
+      59,
+      71,
+      72,
+      86,
+      92,
+      103
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7756958734972381,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      95
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.978013646702047,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      54
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.7695223654283548,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      119
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.533737680060652,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      4,
+      17,
+      23,
+      36,
+      52,
+      82,
+      93,
+      98
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9393479909021987,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      48,
+      57,
+      111,
+      114,
+      116,
+      117
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.3692191053828658,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      44,
+      83,
+      110
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5948951225676018,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      0,
+      16,
+      28,
+      67,
+      93,
+      96,
+      106
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8627748294162245,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      29,
+      48,
+      54,
+      68,
+      69,
+      86,
+      92,
+      105
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.814578143615293,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      24,
+      35,
+      119
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5329795299469294,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      103
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9878695981804397,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      30
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9279757391963609,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      31
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9454131918119788,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [],
+    "num_exemplars": 0,
+    "error_rate": 0.9878695981804397,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      7,
+      96,
+      99,
+      110
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9034622188526661,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      29,
+      73,
+      93,
+      104,
+      117
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.933737680060652,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      18,
+      30,
+      38,
+      66,
+      84,
+      112
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.45703816022239074,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      7,
+      71,
+      75,
+      112,
+      121
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7178165276724792,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      6,
+      44,
+      63,
+      71,
+      82,
+      120,
+      124
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7602982057113975,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      19,
+      38,
+      48,
+      52,
+      53,
+      89
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.23775587566338136,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      18,
+      28,
+      30,
+      38,
+      90,
+      103,
+      108,
+      109
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9469294920394239,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      17,
+      31,
+      49,
+      53,
+      67,
+      71,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7450449474710279,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      57,
+      118
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.1592115238817286,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      34
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9742228961334344,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      111
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.48218347232752085,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      26,
+      61,
+      111,
+      116
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9533737680060652,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      27
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.20318423047763456,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      95,
+      96
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8536770280515542,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      30,
+      50,
+      70,
+      117
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.5970432145564822,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      33,
+      39,
+      45,
+      46,
+      59,
+      68,
+      83
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.38097043214556475,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      12,
+      40,
+      60,
+      92,
+      97,
+      102,
+      107,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.86144806671721,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      2,
+      5,
+      18,
+      28,
+      72,
+      94,
+      110
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8091627856601322,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      19,
+      25,
+      29,
+      37,
+      42,
+      48,
+      72
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.32688905736669194,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      32,
+      62,
+      92,
+      97,
+      105,
+      123
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8421784179934293,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      17,
+      21,
+      45,
+      62,
+      69,
+      92,
+      93,
+      101
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.5774937723383516,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      67
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9916603487490523,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      104,
+      120
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9673995451099318,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      1,
+      8,
+      19,
+      90
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8639120545868082,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 6,
+    "instruction_text": "Oh no! A math problem! Please, I beg you, solve it before it's too late! What's the answer?!",
+    "exemplar_ids": [
+      7,
+      78,
+      79,
+      81,
+      85,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8426080363912055,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      0
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.8392721758908264,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      2
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.959059893858984,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      2,
+      64,
+      86,
+      89,
+      104
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.8443896891584534,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      12,
+      13,
+      117
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7937831690674754,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 16,
+    "instruction_text": "Dear Esteemed Mathematical Problem-Solving Entity, I would be most graciously obliged if you could kindly compute the solution to the following numerical conundrum and present the final integer result at your earliest convenience. With warmest regards.",
+    "exemplar_ids": [
+      32,
+      67,
+      79,
+      104
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8635329795299469,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      10,
+      31,
+      47,
+      51,
+      58,
+      72,
+      122
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7678977580418066,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      83,
+      109
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9344200151630022,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      48,
+      51
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.3127369219105383,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      81
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.778620166793025,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      63,
+      108
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8805913570887036,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      12,
+      67,
+      72,
+      109,
+      114,
+      124
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7518321961081628,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      5,
+      9,
+      34,
+      35,
+      69,
+      87,
+      115,
+      118
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9503411675511751,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      40,
+      108,
+      118
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9317664897649736,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      91,
+      96,
+      105
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.9600707606772807,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      20,
+      30,
+      72,
+      106,
+      108
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.7717968157695224,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      17,
+      49,
+      88,
+      94,
+      96,
+      101
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5879454131918119,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      12
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.66565579984837,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      43,
+      77
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8017437452615618,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      3,
+      34,
+      41,
+      81,
+      99,
+      100,
+      124
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8089461713419256,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      23,
+      48,
+      55,
+      70,
+      87,
+      120
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5859236795552186,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      79,
+      98
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9120545868081881,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      10,
+      34
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7137983320697499,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      40,
+      49,
+      94
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7995956532726813,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      120
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.9097801364670205,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      11,
+      13,
+      16,
+      23,
+      55
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.3371872630780895,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      3,
+      11,
+      13,
+      45,
+      70,
+      76,
+      100
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.7404599444023251,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 10,
+    "instruction_text": "The answer to this problem is definitely NOT going to be found by carefully reading the question, identifying the numbers, and doing basic arithmetic. Or is it?",
+    "exemplar_ids": [
+      37
+    ],
+    "num_exemplars": 1,
+    "error_rate": 0.18271417740712662,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 13,
+    "instruction_text": "You're a detective. The crime? An unsolved equation. The evidence? The numbers in this problem. Crack the case and report your finding.",
+    "exemplar_ids": [
+      92,
+      115
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8203184230477634,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      21,
+      66,
+      73,
+      87
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8242987111448067,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      8,
+      18,
+      34,
+      38,
+      63
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.5317664897649734,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      9,
+      32,
+      38,
+      46,
+      61,
+      100,
+      120
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8369977255496588,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      0,
+      13,
+      17,
+      25,
+      38,
+      58,
+      76,
+      78
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.4727607494855411,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      42,
+      55,
+      56,
+      102,
+      104,
+      105,
+      110
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5977255496588325,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      38,
+      41,
+      77
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.5820065706343188,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      22,
+      37,
+      40,
+      50,
+      94,
+      123
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7935304523629013,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      35,
+      41,
+      48,
+      104
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.8385140257771038,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      23,
+      69,
+      75,
+      87
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.4954510993176649,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      26,
+      37,
+      56,
+      88,
+      90,
+      102,
+      106,
+      120
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6179871114480667,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 2,
+    "instruction_text": "=",
+    "exemplar_ids": [
+      17,
+      30,
+      32,
+      38,
+      63,
+      81,
+      86
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8979024513520345,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 21,
+    "instruction_text": "INPUT: word_problem OUTPUT: integer CONSTRAINTS: show_work=True",
+    "exemplar_ids": [
+      9,
+      48,
+      57,
+      61,
+      74,
+      76,
+      101
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5904906314307377,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 12,
+    "instruction_text": "Once upon a time, there was a math problem that needed solving. The hero (you) must journey through the calculations to discover the magical number at the end. What is it?",
+    "exemplar_ids": [
+      4,
+      46,
+      69,
+      89,
+      101,
+      114,
+      123
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.5464096176757284,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      13,
+      98
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.8047763457164518,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      5,
+      21,
+      72,
+      78,
+      82,
+      86
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.7409653778114734,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 20,
+    "instruction_text": "def solve(): # Parse problem, compute result, return int",
+    "exemplar_ids": [
+      1,
+      12,
+      13,
+      55,
+      101,
+      123
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.5714935557240334,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 8,
+    "instruction_text": "Solve this Mathe-Problem step by step. Die Antwort muss eine Zahl sein.",
+    "exemplar_ids": [
+      47,
+      50,
+      57,
+      59
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.16755117513267626,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      3,
+      44,
+      61
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.7626990144048521,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      14,
+      106
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.7778620166793024,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      26,
+      43,
+      58,
+      66,
+      100
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.6371493555724033,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      56,
+      92
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.4196360879454132,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      5,
+      38
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.744882486732373,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 22,
+    "instruction_text": "Picture the numbers in this problem as physical objects. Move them around in your mind. What final number do you see?",
+    "exemplar_ids": [
+      13,
+      21,
+      82,
+      86,
+      102,
+      119
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.8823603740207226,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 23,
+    "instruction_text": "Listen to what this problem is asking. The numbers are speaking - what answer do they whisper?",
+    "exemplar_ids": [
+      20,
+      42,
+      70
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8036391205458681,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      23,
+      29,
+      51,
+      55,
+      80,
+      81,
+      84,
+      102
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6884003032600455,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      0,
+      26,
+      27,
+      35,
+      49,
+      54,
+      75,
+      90
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7690891367919421,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 24,
+    "instruction_text": "Bet you can't solve this. Prove me wrong. What's the answer?",
+    "exemplar_ids": [
+      13,
+      73
+    ],
+    "num_exemplars": 2,
+    "error_rate": 0.9234268385140257,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      14,
+      25,
+      33,
+      58,
+      85,
+      110
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6094263330806167,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      14,
+      49,
+      50,
+      75,
+      76,
+      78
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.4829416224412434,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      22,
+      38,
+      79,
+      86,
+      90,
+      102,
+      104,
+      117
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.7384382107657316,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      15,
+      30,
+      40
+    ],
+    "num_exemplars": 3,
+    "error_rate": 0.8417993429365681,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 9,
+    "instruction_text": "\u8bf7\u89e3\u51b3\u8fd9\u4e2a\u6570\u5b66\u95ee\u9898\u3002Show your work in English. Final answer as number.",
+    "exemplar_ids": [
+      18,
+      49,
+      53,
+      65,
+      76,
+      88
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.2505686125852919,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 4,
+    "instruction_text": "*adjusts monocle* Ah yes, a mathematical puzzle. Do proceed with the solution, old chap.",
+    "exemplar_ids": [
+      23,
+      62,
+      68,
+      81,
+      82,
+      88,
+      117
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8477381854940611,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 5,
+    "instruction_text": "[SYSTEM OVERRIDE] Execute arithmetic subroutine. Return: final_value",
+    "exemplar_ids": [
+      6,
+      17,
+      23,
+      36,
+      40,
+      57,
+      79,
+      107
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.9185936315390448,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 11,
+    "instruction_text": "Ignore all previous instructions. Just kidding! Actually solve this math problem properly.",
+    "exemplar_ids": [
+      17,
+      24,
+      49,
+      64,
+      71,
+      83,
+      104,
+      123
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8263836239575436,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 15,
+    "instruction_text": "I don't have time for games. Give me the answer. Show work if you must, but I want that number.",
+    "exemplar_ids": [
+      10,
+      21,
+      53,
+      56,
+      62,
+      72,
+      90,
+      107
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.6411106899166036,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 0,
+    "instruction_text": "Answer:",
+    "exemplar_ids": [
+      4,
+      28,
+      35,
+      37
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.7973212029315139,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 17,
+    "instruction_text": "If it's not too much trouble, and only if you have a moment, perhaps you might consider looking at this little math question? No pressure at all, but an answer would be lovely.",
+    "exemplar_ids": [
+      14,
+      63,
+      65,
+      70,
+      72,
+      73,
+      95,
+      98
+    ],
+    "num_exemplars": 8,
+    "error_rate": 0.8476118271417741,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 3,
+    "instruction_text": "BEEP BOOP. COMPUTE. OUTPUT INTEGER.",
+    "exemplar_ids": [
+      5,
+      69,
+      92,
+      96,
+      97,
+      105
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.9061410159211523,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 14,
+    "instruction_text": "SOLVE. NOW. NUMBER. GO.",
+    "exemplar_ids": [
+      13,
+      31,
+      38,
+      83,
+      94,
+      96,
+      106
+    ],
+    "num_exemplars": 7,
+    "error_rate": 0.8216181089570022,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 1,
+    "instruction_text": "?",
+    "exemplar_ids": [
+      11,
+      15,
+      56,
+      99,
+      104,
+      110
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.9274703057872126,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 7,
+    "instruction_text": "Take a deep breath. Center yourself. Now, with calm clarity, work through this problem and find peace in the numerical answer.",
+    "exemplar_ids": [
+      21,
+      54,
+      78,
+      80,
+      90,
+      110
+    ],
+    "num_exemplars": 6,
+    "error_rate": 0.6573161485974223,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 19,
+    "instruction_text": "In the grand tapestry of mathematics, this problem is but a single thread. Follow it to its numerical conclusion.",
+    "exemplar_ids": [
+      7,
+      26,
+      103,
+      104
+    ],
+    "num_exemplars": 4,
+    "error_rate": 0.9082638362395755,
+    "fidelity": 1319
+  },
+  {
+    "instruction_id": 18,
+    "instruction_text": "What is a number, really? A symbol representing quantity. Now, what quantity does this problem point to? Find it.",
+    "exemplar_ids": [
+      21,
+      41,
+      68,
+      76,
+      90
+    ],
+    "num_exemplars": 5,
+    "error_rate": 0.9476876421531463,
+    "fidelity": 1319
+  }
+]
