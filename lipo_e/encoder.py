@@ -23,10 +23,26 @@ class GTREncoder:
 
     def __init__(self, device: str = "cuda"):
         self.device = device
-        self.model = SentenceTransformer(
-            "sentence-transformers/gtr-t5-base",
-            device=device,
-        )
+        try:
+            self.model = SentenceTransformer(
+                "sentence-transformers/gtr-t5-base",
+                device=device,
+            )
+        except OSError as e:
+            if "Connection" in str(e) or "resolve" in str(e) or "404" in str(e):
+                raise RuntimeError(
+                    f"Failed to download GTR-T5-Base model. Check internet connection.\n"
+                    f"If offline, pre-cache with: python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/gtr-t5-base')\"\n"
+                    f"Original error: {e}"
+                ) from e
+            raise
+        except RuntimeError as e:
+            if "CUDA" in str(e) or "cuda" in str(e):
+                raise RuntimeError(
+                    f"CUDA error loading GTR-T5-Base on device '{device}': {e}\n"
+                    f"Try device='cpu' if CUDA is unavailable."
+                ) from e
+            raise
         self.model.eval()
 
     def encode(self, texts: List[str]) -> torch.Tensor:

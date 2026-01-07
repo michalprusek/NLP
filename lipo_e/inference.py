@@ -67,13 +67,26 @@ class LIPOEInference:
         self.device = config.device
 
         # Vec2Text inverter (from lipo.inference)
-        self.inverter = Vec2TextInverter(
-            model_type=config.vec2text_model,
-            beam_width=config.vec2text_beam,
-            max_length=config.vec2text_max_length,
-            device=config.device,
-            num_steps=50,  # Number of correction steps
-        )
+        try:
+            self.inverter = Vec2TextInverter(
+                model_type=config.vec2text_model,
+                beam_width=config.vec2text_beam,
+                max_length=config.vec2text_max_length,
+                device=config.device,
+                num_steps=50,  # Number of correction steps
+            )
+        except OSError as e:
+            raise RuntimeError(
+                f"Failed to load Vec2Text model '{config.vec2text_model}': {e}\n"
+                f"Check internet connection or model cache."
+            ) from e
+        except RuntimeError as e:
+            if "CUDA" in str(e) or "cuda" in str(e):
+                raise RuntimeError(
+                    f"CUDA error loading Vec2Text on device '{config.device}': {e}\n"
+                    f"Try device='cpu' if CUDA is unavailable."
+                ) from e
+            raise
 
         # Best results
         self.best_error = float("inf")
@@ -169,8 +182,24 @@ class LIPOEInference:
             num_ex = num_ex_logits.argmax(dim=-1).item()
             num_ex = min(num_ex, self.config.num_slots)
 
-        # Vec2Text inversion
-        instruction = self.inverter.invert(inst_emb_recon)
+        # Vec2Text inversion with error handling
+        try:
+            instruction = self.inverter.invert(inst_emb_recon)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                torch.cuda.empty_cache()
+                raise RuntimeError(
+                    f"CUDA out of memory during Vec2Text inversion. "
+                    f"Try reducing batch size or using CPU."
+                ) from e
+            raise RuntimeError(f"Vec2Text inversion failed: {e}") from e
+
+        # Validate generated instruction
+        if not instruction or len(instruction.strip()) < 3:
+            raise ValueError(
+                f"Vec2Text generated invalid instruction: '{instruction}'. "
+                f"Embedding may be out of distribution."
+            )
 
         # Compute round-trip cosine similarity
         inst_emb_new = self.gtr_encoder.encode_single(instruction)
@@ -180,8 +209,15 @@ class LIPOEInference:
             dim=0,
         ).item()
 
-        # Get exemplar indices
+        # Get exemplar indices with validation
         exemplar_ids = selected_indices[0, :num_ex].tolist()
+        pool_size = len(self.pool_embeddings)
+        for eid in exemplar_ids:
+            if eid < 0 or eid >= pool_size:
+                raise ValueError(
+                    f"Invalid exemplar ID {eid} (pool size: {pool_size}). "
+                    f"This may indicate a decoder bug."
+                )
 
         return instruction, exemplar_ids, cosine_sim
 

@@ -221,22 +221,40 @@ class GPWithEI:
         patience_counter = 0
         history = {"loss": []}
 
-        for epoch in range(epochs):
-            optimizer.zero_grad()
-            output = self.gp_model(X_norm)
-            loss = -mll(output, y_norm)
-            loss.backward()
-            optimizer.step()
+        try:
+            for epoch in range(epochs):
+                optimizer.zero_grad()
+                output = self.gp_model(X_norm)
+                loss = -mll(output, y_norm)
 
-            history["loss"].append(loss.item())
+                # Check for NaN loss
+                if torch.isnan(loss):
+                    raise ValueError(
+                        f"NaN loss at epoch {epoch}. "
+                        f"Check input data for outliers or duplicate points."
+                    )
 
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    break
+                loss.backward()
+                optimizer.step()
+
+                history["loss"].append(loss.item())
+
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= patience:
+                        break
+        except RuntimeError as e:
+            if "cholesky" in str(e).lower():
+                raise RuntimeError(
+                    f"GP Cholesky decomposition failed at epoch {epoch}. "
+                    f"This often indicates duplicate inputs or ill-conditioned kernel. "
+                    f"Try adding jitter (noise_constraint) or removing duplicate training points.\n"
+                    f"Original error: {e}"
+                ) from e
+            raise
 
         return history
 
@@ -252,7 +270,15 @@ class GPWithEI:
         Returns:
             mean: Predicted error rates (un-negated)
             std: Standard deviations
+
+        Raises:
+            RuntimeError: If GP has not been fit yet
         """
+        if self.gp_model is None or self.likelihood is None:
+            raise RuntimeError(
+                "GP must be fit before predict(). Call fit() first."
+            )
+
         X = X.to(self.device)
         X_norm = self._normalize_X(X)
 

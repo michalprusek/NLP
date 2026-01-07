@@ -66,8 +66,8 @@ def fit_beta_prior(error_rates: List[float]) -> Tuple[float, float]:
     var = errors.var()
 
     # Method of moments
-    if var >= mean * (1 - mean):
-        # Variance too high for Beta - use weak prior
+    if var < 1e-8 or var >= mean * (1 - mean):
+        # Variance too small (all same) or too high for Beta - use weak prior
         return 1.0, 1.0
 
     common = mean * (1 - mean) / var - 1
@@ -368,6 +368,7 @@ class LIPOEHyperband:
         High beta = more exploration.
         """
         if self.gp is None or self.gp.gp_model is None:
+            # GP not trained yet, return neutral UCB value
             return torch.tensor(0.0, device=self.device)
 
         mean, std = self.gp.predict(z.unsqueeze(0))
@@ -470,8 +471,8 @@ class LIPOEHyperband:
             # Get instruction latent
             inst_emb = self.instruction_embeddings[inst_id].unsqueeze(0)
             with torch.no_grad():
-                z_inst = self.vae.instruction_encoder(inst_emb)
-                mu_inst = self.vae.instruction_mu(z_inst)
+                # InstructionEncoder.forward() returns (mu, logvar) tuple
+                mu_inst, _ = self.vae.instruction_encoder(inst_emb)
             z_inst = mu_inst.squeeze()
 
             # Optimize exemplar latent using UCB
@@ -490,7 +491,8 @@ class LIPOEHyperband:
                     )
 
         if best_prompt is None:
-            # Fallback to random
+            # Fallback to random - all candidates were already evaluated
+            print("  [BO] No unevaluated candidates found, falling back to random proposal")
             return self._random_proposal()
 
         return best_prompt
@@ -553,10 +555,12 @@ class LIPOEHyperband:
             # Decode z_ex to selection
             z_ex_batch = z_ex.unsqueeze(0)
 
-            # Get selection logits from decoder
-            selection_logits, num_ex_logits = self.vae.exemplar_decoder(
+            # SlotBasedExemplarDecoder returns (selection_probs, num_ex_logits, selected_indices)
+            # pool_embeddings should be (N_pool, 768), not unsqueezed
+            selection_probs, num_ex_logits, _ = self.vae.exemplar_decoder(
                 z_ex_batch,
-                self.pool_embeddings.unsqueeze(0),
+                self.pool_embeddings,  # Shape: (N_pool, 768)
+                hard=True,  # Use hard selection for discrete indices
             )
 
             # Number of exemplars to select
@@ -567,9 +571,11 @@ class LIPOEHyperband:
             if num_ex == 0:
                 return []
 
-            # Get top-k exemplars
-            selection_probs = torch.softmax(selection_logits.squeeze(0), dim=-1)
-            top_indices = selection_probs.topk(num_ex).indices.tolist()
+            # selection_probs is already softmaxed/gumbel-softmaxed from decoder
+            # Shape: (batch=1, num_slots, N_pool)
+            # Get top-1 index from each of the first num_ex slots
+            selection_probs_squeezed = selection_probs.squeeze(0)  # (num_slots, N_pool)
+            top_indices = selection_probs_squeezed[:num_ex].argmax(dim=-1).tolist()
 
             # Remove duplicates while preserving order
             unique_indices = list(dict.fromkeys(top_indices))
@@ -699,5 +705,26 @@ class LIPOEHyperband:
             "design_data": self.get_design_data_for_vae(),
         }
 
-        with open(output_path, "w") as f:
-            json.dump(results, f, indent=2)
+        try:
+            import os
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(results, f, indent=2)
+        except (OSError, IOError) as e:
+            print(f"ERROR: Failed to save results to {output_path}: {e}")
+            # Try backup location
+            import tempfile
+            from datetime import datetime
+            backup_path = os.path.join(
+                tempfile.gettempdir(),
+                f"hyperband_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            try:
+                with open(backup_path, "w") as f:
+                    json.dump(results, f, indent=2)
+                print(f"Results saved to backup location: {backup_path}")
+            except Exception as backup_e:
+                print(f"CRITICAL: Could not save results anywhere: {backup_e}")
+                raise RuntimeError(
+                    f"Failed to save results. Original error: {e}. Backup error: {backup_e}"
+                ) from e

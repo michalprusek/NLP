@@ -15,6 +15,8 @@ import argparse
 import json
 import os
 import random
+import re
+import traceback
 import torch
 import numpy as np
 from datetime import datetime
@@ -179,6 +181,8 @@ def main():
         shuffle=True,
         seed=config.seed,
     )
+    if not qa_pool:
+        raise ValueError(f"No Q/A pairs loaded from {config.train_data_path}")
     print(f"  Loaded {len(qa_pool)} Q/A pairs from {config.train_data_path}")
 
     # Initialize GTR encoder
@@ -196,8 +200,21 @@ def main():
     print("\n[2/5] Preparing instructions...")
 
     # Load validation data for APE
-    with open(config.validation_path, "r") as f:
-        validation_data = json.load(f)
+    try:
+        with open(config.validation_path, "r", encoding="utf-8") as f:
+            validation_data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Validation file not found: {config.validation_path}"
+        ) from None
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Invalid JSON in validation file: {config.validation_path}\n"
+            f"Parse error at line {e.lineno}: {e.msg}"
+        ) from e
+
+    if not validation_data:
+        raise ValueError(f"Validation file is empty: {config.validation_path}")
     print(f"  Loaded {len(validation_data)} validation samples")
 
     if args.use_ape:
@@ -215,10 +232,28 @@ def main():
     else:
         # Load instructions from file
         if args.instructions.endswith('.json'):
-            with open(args.instructions, 'r') as f:
-                instructions = json.load(f)
+            try:
+                with open(args.instructions, 'r', encoding='utf-8') as f:
+                    instructions = json.load(f)
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    f"Instructions file not found: {args.instructions}\n"
+                    f"Use --use-ape to generate instructions automatically."
+                ) from None
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Invalid JSON in instructions file: {args.instructions}\n"
+                    f"Parse error at line {e.lineno}: {e.msg}"
+                ) from e
+            if not isinstance(instructions, list):
+                raise ValueError(
+                    f"Instructions file must contain a JSON array, got {type(instructions).__name__}"
+                )
         else:
             instructions = load_instructions(args.instructions)
+
+        if not instructions:
+            raise ValueError(f"No instructions loaded from {args.instructions}")
         print(f"  Loaded {len(instructions)} instructions from {args.instructions}")
 
     # Pre-compute instruction embeddings
@@ -251,15 +286,22 @@ def main():
     # =====================================================
     print("\n[4/5] Running Hyperband optimization...")
 
-    # Create evaluator
+    # Create evaluator once (not inside closure for efficiency)
+    hyperband_evaluator = HbBoPsEvaluator(
+        model=config.eval_model,
+        backend=config.eval_backend,
+        validation_path=config.validation_path,
+        device=device,
+    )
+
+    # Number pattern for answer extraction
+    NUMBER_PATTERN = r'[-+]?\d+(?:[.,]\d+)?'
+
     def llm_evaluator(instruction: str, exemplar_text: str, samples: list) -> float:
         """Wrapper for HbBoPsEvaluator."""
-        evaluator = HbBoPsEvaluator(
-            model=config.eval_model,
-            backend=config.eval_backend,
-            validation_path=config.validation_path,
-            device=device,
-        )
+        if not samples:
+            return 1.0
+
         # Build prompts and evaluate
         prompts = []
         for ex in samples:
@@ -269,29 +311,45 @@ def main():
                 prompt = f"Question: {ex['question']}\n\n{instruction}\n\nAnswer:"
             prompts.append(prompt)
 
-        responses = evaluator.llm_client.generate_batch(prompts, max_tokens=1024)
+        # LLM call with error handling
+        try:
+            responses = hyperband_evaluator.llm_client.generate_batch(prompts, max_tokens=1024)
+        except (ConnectionError, TimeoutError) as e:
+            raise RuntimeError(
+                f"Network error during LLM evaluation: {e}\n"
+                f"Check network connection and retry."
+            ) from e
+        except Exception as e:
+            print(f"LLM error during evaluation:\n{traceback.format_exc()}")
+            raise RuntimeError(f"LLM evaluation failed: {e}") from e
 
-        # Score
-        import re
-        NUMBER_PATTERN = r'[-+]?\d+(?:[.,]\d+)?'
+        # Validate response count
+        if len(responses) != len(samples):
+            print(f"  [WARNING] Response count mismatch: got {len(responses)}, expected {len(samples)}")
+
+        # Score - use zip for safe iteration
         errors = 0
-        for i, ex in enumerate(samples):
+        for i, (ex, response) in enumerate(zip(samples, responses)):
             gold_nums = re.findall(NUMBER_PATTERN, ex['answer'])
             gold = gold_nums[-1] if gold_nums else None
 
-            pred_nums = re.findall(NUMBER_PATTERN, responses[i]) if responses[i] else []
+            pred_nums = re.findall(NUMBER_PATTERN, response) if response else []
             pred = pred_nums[-1] if pred_nums else None
 
             if gold is None or pred is None:
                 errors += 1
             else:
                 try:
-                    if abs(float(pred.replace(',', '')) - float(gold.replace(',', ''))) > 1e-6:
+                    pred_float = float(pred.replace(',', ''))
+                    gold_float = float(gold.replace(',', ''))
+                    if abs(pred_float - gold_float) > 1e-6:
                         errors += 1
-                except:
+                except ValueError as e:
+                    # Log failed comparison for debugging
+                    print(f"  [DEBUG] Number parse failed: pred='{pred}', gold='{gold}': {e}")
                     errors += 1
 
-        return errors / len(samples) if samples else 1.0
+        return errors / len(samples)
 
     hyperband = LIPOEHyperband(
         instructions=instructions,

@@ -59,9 +59,24 @@ def parse_exemplar_pool(file_path: str) -> List[QAPair]:
 
     Returns:
         List of QAPair objects (125 pairs for 25 blocks × 5 pairs)
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If no Q/A pairs found in file
     """
-    with open(file_path, "r") as f:
-        content = f.read()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Exemplar pool file not found: {file_path}\n"
+            f"Expected format: Q:/A: pairs separated by '=' dividers.\n"
+            f"See datasets/hbbops/examples_25.txt for reference."
+        ) from None
+    except PermissionError:
+        raise PermissionError(
+            f"Cannot read exemplar pool file (permission denied): {file_path}"
+        ) from None
 
     qa_pairs = []
     pool_id = 0
@@ -105,6 +120,13 @@ def parse_exemplar_pool(file_path: str) -> List[QAPair]:
         if found_qa:
             block_id += 1
 
+    if not qa_pairs:
+        raise ValueError(
+            f"No Q/A pairs found in exemplar file: {file_path}\n"
+            f"Expected format: Lines starting with 'Q:' followed by 'A:'\n"
+            f"Found {len(blocks)} blocks but none contained valid Q/A pairs."
+        )
+
     return qa_pairs
 
 
@@ -124,9 +146,32 @@ def load_qa_pool_from_json(
 
     Returns:
         List of QAPair objects
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If JSON is invalid or has wrong structure
     """
-    with open(file_path, "r") as f:
-        data = json.load(f)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Q/A pool file not found: {file_path}\n"
+            f"Expected format: JSON array of {{'question': ..., 'answer': ...}} objects."
+        ) from None
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Invalid JSON in Q/A pool file: {file_path}\n"
+            f"Parse error at line {e.lineno}: {e.msg}"
+        ) from e
+
+    if not isinstance(data, list):
+        raise ValueError(
+            f"Q/A pool file must contain a JSON array, got {type(data).__name__}: {file_path}"
+        )
+
+    if not data:
+        raise ValueError(f"Q/A pool file is empty: {file_path}")
 
     if shuffle:
         rng = random.Random(seed)
@@ -195,9 +240,19 @@ def load_instructions(file_path: str) -> List[str]:
     """Load instructions from file.
 
     Handles numbered format like "1. Answer:" or plain lines.
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If no instructions found
     """
-    with open(file_path, "r") as f:
-        content = f.read()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Instructions file not found: {file_path}\n"
+            f"Expected format: One instruction per line, optionally numbered."
+        ) from None
 
     instructions = []
     for line in content.split("\n"):
@@ -206,12 +261,14 @@ def load_instructions(file_path: str) -> List[str]:
         if not line or line.startswith("#"):
             continue
         # Remove numbering like "1. " or "25. "
-        import re
         match = re.match(r"^\d+\.\s*(.+)$", line)
         if match:
             instructions.append(match.group(1))
         else:
             instructions.append(line)
+
+    if not instructions:
+        raise ValueError(f"No instructions found in file: {file_path}")
 
     return instructions
 
@@ -275,6 +332,7 @@ class HbBoPsEvaluator:
         backend: str,
         validation_path: str,
         device: str = "cuda",
+        seed: int = 42,
     ):
         self.model = model
         self.backend = backend
@@ -284,8 +342,9 @@ class HbBoPsEvaluator:
         with open(validation_path, "r") as f:
             self.validation_data = json.load(f)
 
-        # Shuffle once for consistent fidelity subsets
-        random.shuffle(self.validation_data)
+        # Shuffle once for consistent fidelity subsets (reproducible with seed)
+        rng = random.Random(seed)
+        rng.shuffle(self.validation_data)
 
         self._llm_client = None
 
@@ -331,9 +390,14 @@ class HbBoPsEvaluator:
         # Generate responses
         try:
             responses = self.llm_client.generate_batch(prompts, max_tokens=1024)
+        except (ConnectionError, TimeoutError) as e:
+            # Network errors - re-raise to let caller decide retry strategy
+            raise RuntimeError(f"Network error during LLM evaluation: {e}") from e
         except Exception as e:
-            print(f"LLM error: {e}")
-            return 1.0
+            # Log the full error and re-raise - don't return fake data
+            import traceback
+            print(f"LLM error during evaluation:\n{traceback.format_exc()}")
+            raise RuntimeError(f"LLM evaluation failed: {e}") from e
 
         # Count errors
         errors = 0
