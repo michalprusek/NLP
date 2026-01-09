@@ -126,6 +126,7 @@ class VLLMClient(LLMClient):
 
         max_new_tokens = kwargs.get('max_new_tokens', 512)
         temperature = kwargs.get('temperature', 0.0)
+        use_tqdm = kwargs.get('use_tqdm', False)  # Default False to reduce log spam
 
         formatted = [self._format_prompt(p) for p in prompts]
 
@@ -135,7 +136,7 @@ class VLLMClient(LLMClient):
             repetition_penalty=1.1,
         )
 
-        outputs = self.llm.generate(formatted, params, use_tqdm=True)
+        outputs = self.llm.generate(formatted, params, use_tqdm=use_tqdm)
         return [out.outputs[0].text for out in outputs]
 
 
