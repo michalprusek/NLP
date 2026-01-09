@@ -1,0 +1,15 @@
+I'm trying to write a prompt for a mathematical reasoning assistant.
+
+My current prompt is:
+"{prompt}"
+
+But it gets the following examples wrong:
+{error_str}
+
+Based on these examples the problem with this prompt is that {gradient}
+
+Write {steps_per_gradient} improved prompt(s) that fix this issue.
+Each prompt must be wrapped with <PROMPT> and </PROMPT> tags.
+Output ONLY the prompt content inside the tags, no explanations or commentary.
+
+The improved prompt(s):
