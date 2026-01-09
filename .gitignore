@@ -157,5 +157,6 @@ lipo/vec2text_finetune/data*/
 lipo/vec2text_finetune/logs/
 .nfs*
 
-# LIPO experiment results
+# Experiment results
+results/
 bolt/results/
