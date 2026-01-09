@@ -2,7 +2,7 @@
 
 Components:
 1. Exemplar pool parsing (individual Q/A pairs from training JSON or txt file)
-2. APE instruction generation (reuses lipo.training.APEGenerator)
+2. APE instruction generation (reuses APEGenerator from lipo module)
 3. VAE training with fixed K=8 exemplars
 4. HbBoPs-style multi-fidelity evaluation
 """
@@ -20,7 +20,7 @@ from tqdm import tqdm
 from bolt.config import BOLTConfig
 from bolt.encoder import GTREncoder, StructureAwareVAE
 
-# Reuse APE generator from lipo
+# Reuse APE generator from lipo module
 from lipo.training import APEGenerator
 
 
@@ -363,6 +363,13 @@ class HbBoPsEvaluator:
         except Exception as e:
             print(f"LLM error during evaluation:\n{traceback.format_exc()}")
             raise RuntimeError(f"LLM evaluation failed: {e}") from e
+
+        # Validate response count matches input
+        if len(responses) != len(subset):
+            raise ValueError(
+                f"Length mismatch: got {len(responses)} responses but {len(subset)} samples. "
+                f"This may indicate LLM API issues or token truncation."
+            )
 
         # Count errors
         errors = 0

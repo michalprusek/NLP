@@ -47,7 +47,7 @@ class IterationRecord:
 
 
 class BOLTInference:
-    """InvBO inference for joint instruction-exemplar optimization."""
+    """BO inference for joint instruction-exemplar optimization."""
 
     def __init__(
         self,
@@ -309,13 +309,11 @@ class BOLTInference:
 
     def save_results(self, output_dir: str) -> None:
         """Save current results to disk."""
+        import tempfile
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        history_path = os.path.join(output_dir, f"history_{timestamp}.json")
-        with open(history_path, "w") as f:
-            json.dump([asdict(r) for r in self.history], f, indent=2)
-
-        best_path = os.path.join(output_dir, "best_result.json")
+        history_data = [asdict(r) for r in self.history]
         best_result = {
             "best_error": self.best_error,
             "best_accuracy": 1 - self.best_error,
@@ -324,5 +322,32 @@ class BOLTInference:
             "best_exemplar_texts": [self.qa_pool[i].format() for i in self.best_exemplars],
             "num_iterations": len(self.history),
         }
-        with open(best_path, "w") as f:
-            json.dump(best_result, f, indent=2)
+
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+
+            history_path = os.path.join(output_dir, f"history_{timestamp}.json")
+            with open(history_path, "w") as f:
+                json.dump(history_data, f, indent=2)
+
+            best_path = os.path.join(output_dir, "best_result.json")
+            with open(best_path, "w") as f:
+                json.dump(best_result, f, indent=2)
+
+            print(f"  Results saved to {output_dir}")
+        except (OSError, IOError) as e:
+            print(f"[WARNING] Failed to save results to {output_dir}: {e}")
+            # Fallback to temp directory
+            fallback_dir = tempfile.gettempdir()
+            try:
+                history_path = os.path.join(fallback_dir, f"bolt_history_{timestamp}.json")
+                with open(history_path, "w") as f:
+                    json.dump(history_data, f, indent=2)
+
+                best_path = os.path.join(fallback_dir, f"bolt_best_{timestamp}.json")
+                with open(best_path, "w") as f:
+                    json.dump(best_result, f, indent=2)
+
+                print(f"  Results saved to fallback: {fallback_dir}")
+            except Exception as fallback_e:
+                print(f"[ERROR] Fallback save also failed: {fallback_e}")

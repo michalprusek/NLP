@@ -1,6 +1,6 @@
-# LIPO-E Pipeline Documentation
+# BOLT Pipeline Documentation
 
-**LIPO-E** = Latent Instruction Prompt Optimization with Exemplars
+**BOLT** = Bayesian Optimization with Latent Transformations
 
 Joint optimization over instruction + exemplar selection using VAE latent space, Gaussian Process, Hyperband multi-fidelity scheduling, and Bayesian Optimization.
 
@@ -16,7 +16,7 @@ Joint optimization over instruction + exemplar selection using VAE latent space,
    - [Exemplar Scorer](#4-exemplar-scorer)
    - [Gaussian Process](#5-gaussian-process-gp)
    - [Hyperband](#6-hyperband-multi-fidelity-optimization)
-   - [InvBO Inference](#7-invbo-inference-loop)
+   - [BO Inference](#7-bo-inference-loop)
 4. [Training Pipeline](#training-pipeline)
 5. [Loss Functions](#loss-functions)
 6. [Dimensions Reference](#dimensions-reference)
@@ -27,11 +27,11 @@ Joint optimization over instruction + exemplar selection using VAE latent space,
 
 ## High-Level Overview
 
-LIPO-E optimizes **prompts for few-shot learning** by jointly searching over:
+BOLT optimizes **prompts for few-shot learning** by jointly searching over:
 1. **Instruction text** - what the model should do (e.g., "Think step by step...")
 2. **Exemplar selection** - which 8 Q/A pairs to include as demonstrations
 
-The key insight is that the optimal exemplars depend on the instruction, and vice versa. LIPO-E learns this joint relationship in a **32-dimensional latent space** and uses **Bayesian Optimization** to find the best combination.
+The key insight is that the optimal exemplars depend on the instruction, and vice versa. BOLT learns this joint relationship in a **32-dimensional latent space** and uses **Bayesian Optimization** to find the best combination.
 
 ### Pipeline Stages
 
@@ -51,7 +51,7 @@ Stage 3: Model Training
   └── GP learns error_rate = f(z_joint) mapping
   └── ExemplarScorer learns which exemplars work with which instructions
 
-Stage 4: InvBO Inference
+Stage 4: BO Inference
   └── Optimize z_joint to minimize predicted error via UCB/LogEI
   └── Decode z_inst → Vec2Text → new instruction text
   └── Decode (z_inst, z_ex) → Scorer → top-8 exemplars
@@ -497,15 +497,15 @@ def propose_prompt():
 
 ---
 
-### 7. InvBO Inference Loop
+### 7. BO Inference Loop
 
 **File:** `inference.py`
 
-After Hyperband, InvBO continues optimization by generating novel prompts via latent space optimization and Vec2Text inversion.
+After Hyperband, BO continues optimization by generating novel prompts via latent space optimization and Vec2Text inversion.
 
 ```
                     ┌─────────────────────────────────────┐
-                    │         INVBO INFERENCE             │
+                    │           BO INFERENCE              │
                     ├─────────────────────────────────────┤
                     │                                     │
                     │  FOR iteration = 1 to N:            │
@@ -591,7 +591,7 @@ instructions = generator.generate(
 ### Stage 2: Hyperband Evaluation
 
 ```python
-hyperband = LIPOEHyperband(
+hyperband = BOLTHyperband(
     instructions=instructions,      # 2000
     qa_pool=qa_pool,               # 6154 Q/A pairs
     validation_data=validation,     # 1319 samples
@@ -704,7 +704,7 @@ L_selection = BCE(scores, target_mask)
 
 ```python
 @dataclass
-class LIPOEConfig:
+class BOLTConfig:
     # === Latent Dimensions ===
     embedding_dim: int = 768
     instruction_latent_dim: int = 16
@@ -763,7 +763,7 @@ class LIPOEConfig:
 ### Full Pipeline
 
 ```bash
-# Full run: APE → Hyperband → VAE → GP → InvBO
+# Full run: APE → Hyperband → VAE → GP → BO
 uv run python -m bolt.run \
     --iterations 50 \
     --qa-pool-size 6154 \
@@ -805,7 +805,7 @@ uv run python -m bolt.run \
 
 ## Expected Results
 
-Based on LIPO baseline (instruction-only):
+Based on instruction-only baseline:
 - Instruction-only accuracy: ~82-85%
 - With 8 exemplars: expected +2-5% improvement
 - **Target: ~87-90% accuracy**

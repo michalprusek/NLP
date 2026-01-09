@@ -100,7 +100,11 @@ def beta_smooth_error(
     Returns:
         Smoothed error rate
     """
-    return (num_errors + alpha) / (fidelity + alpha + beta)
+    denominator = fidelity + alpha + beta
+    if denominator <= 0:
+        # Return neutral value for invalid input (uninformative prior)
+        return 0.5
+    return (num_errors + alpha) / denominator
 
 
 class BOLTHyperband:
@@ -600,12 +604,21 @@ class BOLTHyperband:
                 for _, prompt in uncached
             ]
             samples = self.validation_data[:fidelity]
-            error_rates = self.batch_llm_evaluator(candidates, samples)
-            self.total_llm_calls += len(uncached) * fidelity
 
-            for (idx, prompt), error_rate in zip(uncached, error_rates):
-                results[idx] = (error_rate, int(error_rate * fidelity))
-                self._cache_result(prompt, error_rate, fidelity)
+            try:
+                error_rates = self.batch_llm_evaluator(candidates, samples)
+                self.total_llm_calls += len(uncached) * fidelity
+
+                for (idx, prompt), error_rate in zip(uncached, error_rates):
+                    results[idx] = (error_rate, int(error_rate * fidelity))
+                    self._cache_result(prompt, error_rate, fidelity)
+            except RuntimeError as e:
+                # Batch evaluation failed - fall back to sequential
+                print(f"[WARNING] Batch evaluation failed: {e}")
+                print("  Falling back to sequential evaluation...")
+                for idx, prompt in uncached:
+                    error, num_errors = self.evaluate_prompt(prompt, fidelity)
+                    results[idx] = (error, num_errors)
         else:
             for idx, prompt in uncached:
                 error, num_errors = self.evaluate_prompt(prompt, fidelity)

@@ -1,13 +1,13 @@
 """CLI entry point for BOLT.
 
 Usage:
-    # Full pipeline with APE + Hyperband + InvBO
+    # Full pipeline with APE + Hyperband + BO
     uv run python -m bolt.run --iterations 50
 
     # Skip APE, use cached instructions
     uv run python -m bolt.run --no-use-ape --instructions bolt/data/ape_instructions.json
 
-    # Hyperband only (no InvBO inference)
+    # Hyperband only (no BO inference)
     uv run python -m bolt.run --hyperband-only
 
     # Load saved Hyperband results and run inference
@@ -199,13 +199,13 @@ def main():
 
     # Mode flags
     parser.add_argument("--hyperband-only", action="store_true",
-                        help="Run only Hyperband (no InvBO inference)")
+                        help="Run only Hyperband (no BO inference)")
     parser.add_argument("--load-hyperband", type=str, default="",
                         help="Load Hyperband results from JSON and skip to inference")
 
     # Core parameters
     parser.add_argument("--iterations", type=int, default=50,
-                        help="Number of InvBO iterations (after Hyperband)")
+                        help="Number of BO iterations (after Hyperband)")
 
     # Model parameters
     parser.add_argument("--model", type=str, default="Qwen/Qwen2.5-7B-Instruct",
@@ -262,7 +262,7 @@ def main():
     # Acquisition parameters
     parser.add_argument("--acquisition", type=str, default="ucb",
                         choices=["ucb", "logei"],
-                        help="Acquisition function for InvBO")
+                        help="Acquisition function for BO")
     parser.add_argument("--ucb-beta", type=float, default=8.0,
                         help="UCB exploration parameter")
 
@@ -501,7 +501,10 @@ def main():
                 all_prompts.extend(candidate_prompts)
                 prompt_counts.append(len(candidate_prompts))
 
-            all_responses = hyperband_evaluator.llm_client.generate_batch(all_prompts, max_tokens=1024)
+            try:
+                all_responses = hyperband_evaluator.llm_client.generate_batch(all_prompts, max_tokens=1024)
+            except (ConnectionError, TimeoutError) as e:
+                raise RuntimeError(f"Network error during batch LLM evaluation: {e}") from e
 
             error_rates = []
             offset = 0
@@ -550,9 +553,9 @@ def main():
             return
 
     # =====================================================
-    # Step 5: Run InvBO inference
+    # Step 5: Run BO inference
     # =====================================================
-    print("\n[5/5] Running InvBO inference...")
+    print("\n[5/5] Running BO inference...")
 
     # GP should already be set (either from Hyperband or from loading)
     if gp is None:

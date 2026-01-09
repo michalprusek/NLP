@@ -342,21 +342,48 @@ def main():
         "history": history,
     }
 
-    with open(output_file, "w", encoding='utf-8') as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
+    # Save results with error handling
+    import tempfile
+    saved_to_primary = True
 
-    # Save best prompt to text file
-    prompt_file = output_file.with_suffix('.txt')
-    with open(prompt_file, "w", encoding='utf-8') as f:
-        f.write(f"# ProTeGi Best Prompt\n")
-        f.write(f"# Model: {args.model}\n")
-        f.write(f"# Meta-model: {args.meta_model}\n")
-        f.write(f"# Timestamp: {timestamp}\n")
-        f.write(f"# Test accuracy: {test_accuracy:.2%}\n\n")
-        f.write(best_prompt)
+    try:
+        with open(output_file, "w", encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
 
-    print(f"\nResults saved to: {output_file}")
-    print(f"Best prompt saved to: {prompt_file}")
+        # Save best prompt to text file
+        prompt_file = output_file.with_suffix('.txt')
+        with open(prompt_file, "w", encoding='utf-8') as f:
+            f.write(f"# ProTeGi Best Prompt\n")
+            f.write(f"# Model: {args.model}\n")
+            f.write(f"# Meta-model: {args.meta_model}\n")
+            f.write(f"# Timestamp: {timestamp}\n")
+            f.write(f"# Test accuracy: {test_accuracy:.2%}\n\n")
+            f.write(best_prompt)
+    except (OSError, IOError) as e:
+        print(f"\n[WARNING] Failed to save results to {output_file}: {e}")
+        saved_to_primary = False
+        # Fallback to temp directory
+        fallback_dir = tempfile.gettempdir()
+        try:
+            output_file = Path(fallback_dir) / f"protegi_{timestamp}.json"
+            with open(output_file, "w", encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+
+            prompt_file = output_file.with_suffix('.txt')
+            with open(prompt_file, "w", encoding='utf-8') as f:
+                f.write(f"# ProTeGi Best Prompt\n")
+                f.write(f"# Model: {args.model}\n")
+                f.write(f"# Meta-model: {args.meta_model}\n")
+                f.write(f"# Timestamp: {timestamp}\n")
+                f.write(f"# Test accuracy: {test_accuracy:.2%}\n\n")
+                f.write(best_prompt)
+            print(f"Results saved to fallback: {output_file}")
+        except Exception as fallback_e:
+            print(f"[ERROR] Fallback save also failed: {fallback_e}")
+
+    if saved_to_primary:
+        print(f"\nResults saved to: {output_file}")
+        print(f"Best prompt saved to: {prompt_file}")
 
     # Print summary
     print("\n" + "="*60)
