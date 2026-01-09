@@ -456,6 +456,12 @@ def main():
 
         def count_errors(samples: list, responses: list) -> int:
             """Count errors between samples and LLM responses."""
+            # Validate length match to avoid silent truncation by zip()
+            if len(responses) != len(samples):
+                raise ValueError(
+                    f"Length mismatch: got {len(responses)} responses but {len(samples)} samples. "
+                    f"This may indicate LLM API failures or batch processing issues."
+                )
             errors = 0
             for ex, response in zip(samples, responses):
                 gold = extract_last_number(ex['answer'])
@@ -476,9 +482,7 @@ def main():
             except (ConnectionError, TimeoutError) as e:
                 raise RuntimeError(f"Network error during LLM evaluation: {e}") from e
 
-            if len(responses) != len(samples):
-                print(f"  [WARNING] Response count mismatch: got {len(responses)}, expected {len(samples)}")
-
+            # count_errors will validate length and raise ValueError if mismatch
             return count_errors(samples, responses) / len(samples)
 
         def batch_llm_evaluator(candidates: list, samples: list) -> list:

@@ -35,6 +35,15 @@ class ScoredPrompt:
     visits: int = 0
     total_reward: float = 0.0
 
+    def __post_init__(self):
+        """Validate invariants"""
+        if not 0.0 <= self.score <= 1.0:
+            raise ValueError(f"score must be in [0, 1], got {self.score}")
+        if self.visits < 0:
+            raise ValueError(f"visits must be non-negative, got {self.visits}")
+        if self.total_reward < 0:
+            raise ValueError(f"total_reward must be non-negative, got {self.total_reward}")
+
     def ucb_score(self, total_visits: int, c: float = 2.0) -> float:
         """Calculate UCB score for bandit selection"""
         if self.visits == 0:
@@ -44,7 +53,8 @@ class ScoredPrompt:
         return mean + exploration
 
     def __repr__(self):
-        return f"Score: {self.score:.1%} | Visits: {self.visits} | Prompt: {self.prompt[:50]}..."
+        # Full prompt logging per CLAUDE.md - never truncate
+        return f"Score: {self.score:.1%} | Visits: {self.visits} | Prompt:\n{self.prompt}"
 
 
 @dataclass
@@ -248,8 +258,9 @@ class ProTeGi:
         self.task_budget_used += len(batch)
 
         # Generate answers using Q_end format (instruction after question)
+        # Per CLAUDE.md: Q: {question}\n{instruction}\nA:
         questions = [ex['question'] for ex in batch]
-        formatted_prompts = [f"Question: {q}\n\n{prompt}\n\nAnswer:" for q in questions]
+        formatted_prompts = [f"Q: {q}\n{prompt}\nA:" for q in questions]
         outputs = self.task_llm.generate_batch(
             formatted_prompts, temperature=0.0, max_new_tokens=self.task_max_tokens
         )
@@ -318,12 +329,23 @@ class ProTeGi:
             if verbose:
                 print(f"\n[Gradient] Generating {self.gradients_per_group} gradients for {len(error_group)} errors...")
 
-            # Generate gradients
-            response = self.meta_llm.generate(
-                gradient_prompt,
-                temperature=0.7,
-                max_new_tokens=self.meta_max_tokens
-            )
+            # Generate gradients with error handling
+            try:
+                response = self.meta_llm.generate(
+                    gradient_prompt,
+                    temperature=0.7,
+                    max_new_tokens=self.meta_max_tokens
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to generate textual gradients from meta-LLM.\n"
+                    f"This step analyzes errors to suggest prompt improvements.\n"
+                    f"Error: {type(e).__name__}: {e}\n"
+                    f"Suggestions:\n"
+                    f"  - Check network connectivity\n"
+                    f"  - Verify API key/credentials for meta-model\n"
+                    f"  - Try reducing --gradients to lower API usage"
+                ) from e
             self.meta_calls_gradient += 1
 
             # Parse gradients from response (between <START> and <END>)
@@ -382,14 +404,22 @@ class ProTeGi:
             )
 
             if verbose:
-                print(f"\n[Edit] Applying gradient: {gradient[:60]}...")
+                print(f"\n[Edit] Applying gradient:\n{gradient}")
 
-            # Generate edited prompt
-            response = self.meta_llm.generate(
-                edit_prompt,
-                temperature=0.7,
-                max_new_tokens=500  # Increased for complete prompts
-            )
+            # Generate edited prompt with error handling
+            try:
+                response = self.meta_llm.generate(
+                    edit_prompt,
+                    temperature=0.7,
+                    max_new_tokens=500  # Increased for complete prompts
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to apply gradient edit via meta-LLM.\n"
+                    f"This step generates improved prompts based on feedback.\n"
+                    f"Error: {type(e).__name__}: {e}\n"
+                    f"Gradient being applied:\n{gradient}"
+                ) from e
             self.meta_calls_edit += 1
 
             # Parse edited prompts from <PROMPT> tags only
@@ -435,11 +465,20 @@ class ProTeGi:
                     prompt_instruction=prompt
                 )
 
-                response = self.meta_llm.generate(
-                    para_prompt,
-                    temperature=0.9,  # High temperature for diversity
-                    max_new_tokens=500  # Increased for complete prompts
-                )
+                # Generate paraphrase with error handling
+                try:
+                    response = self.meta_llm.generate(
+                        para_prompt,
+                        temperature=0.9,  # High temperature for diversity
+                        max_new_tokens=500  # Increased for complete prompts
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to generate paraphrase via meta-LLM.\n"
+                        f"This step explores variations of edited prompts.\n"
+                        f"Error: {type(e).__name__}: {e}\n"
+                        f"Original prompt being paraphrased:\n{prompt}"
+                    ) from e
                 self.meta_calls_paraphrase += 1
 
                 # Extract from <PROMPT> tags only
@@ -570,11 +609,14 @@ class ProTeGi:
                 break
 
             score, results = self.evaluate_prompt(prompt)
-            self.beam.append(ScoredPrompt(prompt=prompt, score=score))
+            # Initialize UCB stats with initial evaluation (visits=1, total_reward=score)
+            scored_prompt = ScoredPrompt(prompt=prompt, score=score, visits=1, total_reward=score)
+            self.beam.append(scored_prompt)
 
             if verbose:
                 budget_str = f" [budget: {self.task_budget_used}/{self.total_budget}]" if self.total_budget else ""
-                print(f"Initial: Score {score:.1%} | {prompt[:60] if prompt else '(empty)'}{budget_str}")
+                # Full prompt logging per CLAUDE.md
+                print(f"Initial: Score {score:.1%}{budget_str}\nPrompt:\n{prompt if prompt else '(empty)'}")
 
         # Sort beam by score
         self.beam.sort(key=lambda x: x.score, reverse=True)
@@ -609,8 +651,9 @@ class ProTeGi:
                 break
 
             if verbose:
-                print(f"Selected parent (UCB): {parent.prompt[:60] if parent.prompt else '(empty)'}...")
-                print(f"Parent visits: {parent.visits}, score: {parent.score:.1%}")
+                # Full prompt logging per CLAUDE.md
+                print(f"Selected parent (UCB) - visits: {parent.visits}, score: {parent.score:.1%}")
+                print(f"Prompt:\n{parent.prompt if parent.prompt else '(empty)'}")
 
             # -----------------------------------------------------------------
             # EVALUATE PARENT to get fresh errors
@@ -715,7 +758,9 @@ class ProTeGi:
             if verbose:
                 print(f"\nBeam after step {step + 1}:")
                 for i, sp in enumerate(self.beam[:3]):
-                    print(f"  {i+1}. Score {sp.score:.1%} | {sp.prompt[:50] if sp.prompt else '(empty)'}...")
+                    # Full prompt logging per CLAUDE.md
+                    print(f"  {i+1}. Score {sp.score:.1%}")
+                    print(f"     Prompt:\n{sp.prompt if sp.prompt else '(empty)'}")
 
             # Save iteration details
             if save_details and output_dir:
@@ -775,6 +820,20 @@ class ProTeGi:
             'meta_calls': record.meta_calls,
             'task_calls': record.task_calls
         }
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"  Saved: {filepath}")
+        try:
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"  Saved: {filepath}")
+        except (OSError, IOError) as e:
+            print(f"  [WARNING] Failed to save iteration details to {filepath}: {e}")
+            # Try fallback to temp directory
+            import tempfile
+            fallback_path = os.path.join(tempfile.gettempdir(), f"protegi_step{step:02d}.json")
+            try:
+                with open(fallback_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                print(f"  Saved to fallback: {fallback_path}")
+            except Exception as fallback_e:
+                print(f"  [WARNING] Fallback save also failed: {fallback_e}")

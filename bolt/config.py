@@ -52,7 +52,8 @@ class BOLTConfig:
     ranking_loss_type: str = "listmle"  # "listmle" or "bce"
 
     # === Training Data (Q/A pool from train.json) ===
-    train_data_path: str = "hbbops_improved_2/data/train.json"
+    # Default paths follow datasets/ convention per CLAUDE.md
+    train_data_path: str = "datasets/gsm8k/train.json"  # GSM8K training data
     qa_pool_size: int = 6154  # All Q/A pairs from training set (default: all)
     use_train_json: bool = True  # Use train.json instead of examples_25.txt
 
@@ -125,7 +126,7 @@ class BOLTConfig:
 
     # === Device/Paths ===
     device: str = "cuda"
-    validation_path: str = "hbbops_improved_2/data/validation.json"
+    validation_path: str = "datasets/gsm8k/test.json"  # GSM8K test data for validation
     seed: int = 42
 
     # === Skip Modes ===
@@ -140,13 +141,38 @@ class BOLTConfig:
 
     def __post_init__(self):
         """Validate configuration."""
+        # Dimension validation
+        if self.instruction_latent_dim <= 0:
+            raise ValueError(f"instruction_latent_dim must be positive, got {self.instruction_latent_dim}")
+        if self.exemplar_latent_dim <= 0:
+            raise ValueError(f"exemplar_latent_dim must be positive, got {self.exemplar_latent_dim}")
+        if self.num_exemplars < 1:
+            raise ValueError(f"num_exemplars must be >= 1, got {self.num_exemplars}")
+
+        # Weight validation
         if not 0.0 <= self.vae_mse_weight <= 1.0:
             raise ValueError(f"vae_mse_weight must be in [0, 1], got {self.vae_mse_weight}")
-        if self.instruction_latent_dim <= 0:
-            raise ValueError(f"instruction_latent_dim must be positive")
-        if self.exemplar_latent_dim <= 0:
-            raise ValueError(f"exemplar_latent_dim must be positive")
-        if self.num_exemplars < 1:
-            raise ValueError(f"num_exemplars must be >= 1")
+        if self.vae_beta < 0:
+            raise ValueError(f"vae_beta must be non-negative, got {self.vae_beta}")
+        if self.selection_weight < 0:
+            raise ValueError(f"selection_weight must be non-negative, got {self.selection_weight}")
+
+        # Hyperband validation
+        if self.bmin <= 0:
+            raise ValueError(f"bmin must be positive, got {self.bmin}")
+        if self.eta <= 1:
+            raise ValueError(f"eta must be > 1, got {self.eta}")
+
+        # GP training validation
+        if self.gp_epochs <= 0:
+            raise ValueError(f"gp_epochs must be positive, got {self.gp_epochs}")
+        if self.gp_patience <= 0:
+            raise ValueError(f"gp_patience must be positive, got {self.gp_patience}")
+
+        # UCB validation
         if self.ucb_beta_adaptive and self.ucb_beta_final > self.ucb_beta:
             raise ValueError(f"ucb_beta_final must be <= ucb_beta when adaptive")
+
+        # Ranking loss type validation
+        if self.ranking_loss_type not in ("listmle", "bce"):
+            raise ValueError(f"ranking_loss_type must be 'listmle' or 'bce', got {self.ranking_loss_type}")

@@ -14,6 +14,8 @@ Usage:
 import argparse
 import json
 import os
+import sys
+import traceback
 from pathlib import Path
 from datetime import datetime
 
@@ -290,10 +292,10 @@ def main():
     )
     print(f"Test set: {len(test_evaluator)} examples")
 
-    # Get all test examples
+    # Get all test examples - Q_end format per CLAUDE.md: Q: {question}\n{instruction}\nA:
     test_batch = test_evaluator.get_batch(0, len(test_evaluator))
     test_questions = [ex['question'] for ex in test_batch]
-    test_prompts = [f"Question: {q}\n\n{best_prompt}\n\nAnswer:" for q in test_questions]
+    test_prompts = [f"Q: {q}\n{best_prompt}\nA:" for q in test_questions]
 
     print(f"Evaluating best prompt on test set...")
     test_outputs = task_llm.generate_batch(
@@ -369,4 +371,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nOptimization interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print("ERROR: ProTeGi optimization failed")
+        print(f"{'='*60}")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {e}")
+        print(f"\nFor debugging, run with --debug flag")
+        print(f"\nFull traceback:")
+        traceback.print_exc()
+        sys.exit(1)
