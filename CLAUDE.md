@@ -280,3 +280,4 @@ This ensures:
 - Models <3B struggle with meta-optimization tasks
 - For 16GB RAM systems, use `--model Qwen/Qwen2.5-3B-Instruct`
 - **Always use `--backend vllm`** unless explicitly told otherwise
+- **NEVER stop/kill running processes** (tmux sessions, background jobs) unless user explicitly asks to stop them
