@@ -99,7 +99,7 @@ Stage 4: BO Inference
               │                 │                 │
               ▼                 ▼                 ▼
     ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
-    │ InstructionDec  │ │  GP Model   │ │ ExemplarScorer  │
+    │ InstructionDec  │ │  GP Model   │ │ CrossAttnScorer │
     │ 16→128→256→768  │ │ Matérn 5/2  │ │ (z,pool)→scores │
     │ → inst_emb_recon│ │ → μ(error)  │ │ → top-8 indices │
     └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
@@ -409,29 +409,38 @@ DKL transforms the latent space through a neural network before applying the ker
 
 ```python
 # Feature extractor architecture
-# Separate feature extractors for instruction and exemplar subspaces
-fe_inst = MLP(16 → 32 → 16)  # instruction latent → features
-fe_ex = MLP(8 → 32 → 16)     # exemplar latent → features
+# Single MLP processes joint latent, outputs features for both kernels
+feature_extractor = MLP(24 → 32 → 32 → 32)  # total_dim → hidden → hidden → 2*feature_dim
 
-# Combined features
-φ = [fe_inst(z_inst), fe_ex(z_ex)]  # (batch, 32) total features
+# Example forward pass:
+z_joint = [z_inst, z_ex]          # (batch, 24)
+features = feature_extractor(z_joint)  # (batch, 32)
+# features[:, 0:16]  → instruction features
+# features[:, 16:32] → exemplar features
 
 # GP operates on transformed features
 k(z, z') = k_matern(φ(z), φ(z'))
 ```
 
+Note: With DKL enabled, both instruction and exemplar kernels operate on 16D transformed
+features (not the original 16D/8D latent dimensions).
+
 **Product Kernel Structure:**
 The kernel separates instruction and exemplar subspaces, allowing them to have different smoothness properties:
 
 ```python
+# Without DKL (operates on raw latent):
 # Instruction kernel: dims 0-15 (16D)
 k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
-
 # Exemplar kernel: dims 16-23 (8D)
 k_ex = MaternKernel(nu=2.5, ard_num_dims=8, active_dims=[16:24])
+# Combined: k(z, z') = k_inst(z[0:16]) × k_ex(z[16:24])
 
-# Combined (multiplicative)
-k(z, z') = k_inst(z[0:16], z'[0:16]) × k_ex(z[16:24], z'[16:24])
+# With DKL (operates on transformed features):
+# Both kernels use 16D features from feature_extractor
+k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
+k_ex = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[16:32])
+# Combined: k(z, z') = k_inst(φ(z)[0:16]) × k_ex(φ(z)[16:32])
 ```
 
 **Beta Smoothing (Heteroscedastic Noise):**

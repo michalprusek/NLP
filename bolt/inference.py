@@ -1,7 +1,7 @@
 """Inference pipeline for BOLT.
 
 Optimization loop:
-1. Optimize joint latent (32D) using UCB/LogEI
+1. Optimize joint latent (24D) using UCB/LogEI
 2. Decode instruction via Vec2Text inversion
 3. Decode exemplars via hard selection from pool
 4. Build prompt, evaluate, add to GP, repeat
@@ -19,7 +19,6 @@ import torch.nn.functional as F
 from botorch.acquisition import qLogExpectedImprovement, qUpperConfidenceBound
 from botorch.acquisition.analytic import AnalyticAcquisitionFunction
 from botorch.optim import optimize_acqf
-from botorch.models.model import Model
 
 from bolt.config import BOLTConfig
 
@@ -54,7 +53,17 @@ class AcquisitionWithPriorPenalty(AnalyticAcquisitionFunction):
 
         Returns:
             Penalized acquisition values
+
+        Raises:
+            ValueError: If X has unexpected dimensions (not 2D or 3D)
         """
+        # Validate input shape
+        if X.dim() not in (2, 3):
+            raise ValueError(
+                f"AcquisitionWithPriorPenalty expects input of shape (batch, d) or "
+                f"(batch, q, d), got tensor with {X.dim()} dimensions: shape {tuple(X.shape)}"
+            )
+
         # Get base acquisition value
         base_value = self.base_acq(X)
 

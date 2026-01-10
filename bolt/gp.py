@@ -75,7 +75,8 @@ class JointPromptGP(ExactGP, GPyTorchModel):
     """GP on joint instruction-exemplar latent space.
 
     Uses structure-aware product kernel with separate lengthscales
-    for instruction dims (0:16) and exemplar dims (16:32).
+    for instruction dims (0:16) and exemplar dims (16:24 by default).
+    Dimensions are configurable via instruction_dim and exemplar_dim.
     """
 
     _num_outputs = 1

@@ -314,15 +314,36 @@ class CrossAttentionScorer(nn.Module):
 
         Returns:
             Selected indices (batch, k)
+
+        Raises:
+            ValueError: If k > n_pool (cannot select more than pool size)
         """
         batch_size = scores.shape[0]
         n_pool = scores.shape[1]
         device = scores.device
 
+        # Validate k does not exceed pool size
+        if k > n_pool:
+            raise ValueError(
+                f"Cannot select k={k} exemplars from pool of size {n_pool}. "
+                f"Reduce num_exemplars or expand the exemplar pool."
+            )
+
         # Normalize relevance scores to [0, 1]
         score_min = scores.min(dim=-1, keepdim=True)[0]
         score_max = scores.max(dim=-1, keepdim=True)[0]
-        relevance = (scores - score_min) / (score_max - score_min + 1e-8)
+        score_range = score_max - score_min
+
+        # Warn if scores are degenerate (all identical)
+        if (score_range < 1e-6).any():
+            import warnings
+            warnings.warn(
+                "MMR selection: scores have near-zero range (max-min < 1e-6). "
+                "All exemplars have similar relevance - selection may be arbitrary.",
+                RuntimeWarning,
+            )
+
+        relevance = (scores - score_min) / (score_range + 1e-8)
 
         # Precompute pairwise cosine similarities between pool items
         pool_norm = F.normalize(pool_embeddings, p=2, dim=-1)
@@ -359,9 +380,9 @@ class CrossAttentionScorer(nn.Module):
 class StructureAwareVAE(nn.Module):
     """Simplified VAE for instruction + exemplar optimization.
 
-    Latent Space (32D total):
+    Latent Space (24D total, configurable):
         - z_instruction (16D): Instruction content
-        - z_exemplar (16D): Exemplar set representation
+        - z_exemplar (8D): Exemplar set representation
 
     Architecture features:
         - Set Transformer for permutation-invariant exemplar encoding
