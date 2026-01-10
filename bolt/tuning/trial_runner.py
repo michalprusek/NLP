@@ -43,7 +43,7 @@ from .hyperspace import (
     TuningTier,
 )
 from .artifact_cache import ArtifactCache
-from .pruning import ASHAPruner, SharedASHAPruner
+from .pruning import SharedASHAPruner
 
 
 logger = logging.getLogger(__name__)

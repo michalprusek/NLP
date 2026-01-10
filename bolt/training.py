@@ -8,11 +8,14 @@ Components:
 """
 
 import json
+import logging
 import random
 import re
 import traceback
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import torch
 from tqdm import tqdm
@@ -626,10 +629,16 @@ class VAETrainer:
 
             # ASHA pruning callback
             if epoch_callback is not None:
-                should_stop = epoch_callback(epoch + 1, epoch_losses)
-                if should_stop:
-                    print(f"PRUNED at epoch {epoch + 1} by ASHA")
-                    break
+                try:
+                    should_stop = epoch_callback(epoch + 1, epoch_losses)
+                    if should_stop:
+                        print(f"PRUNED at epoch {epoch + 1} by ASHA")
+                        break
+                except Exception as e:
+                    logger.error(
+                        f"ASHA pruning callback failed at epoch {epoch + 1}: {e}. "
+                        f"Continuing training without pruning check."
+                    )
 
         # Collect training stats
         self._collect_training_stats(

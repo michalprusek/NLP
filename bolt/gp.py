@@ -96,8 +96,15 @@ class JointFeatureExtractor(nn.Module):
         hidden_dim: int = 32,
         output_dim: int = 10,
     ):
+        if input_dim <= 0 or hidden_dim <= 0 or output_dim <= 0:
+            raise ValueError(
+                f"All dimensions must be positive: input={input_dim}, "
+                f"hidden={hidden_dim}, output={output_dim}"
+            )
+
         super().__init__()
         self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
         self.output_dim = output_dim
 
         self.net = nn.Sequential(

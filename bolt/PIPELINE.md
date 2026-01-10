@@ -446,9 +446,9 @@ covar_module = ScaleKernel(
 
 # Legacy product kernel (use_product_kernel=True):
 # Splits 10D output into two halves for separate kernels
-k_inst = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=[0:5])
-k_ex = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=[5:10])
-# k(z, z') = k_inst(φ(z)[0:5]) × k_ex(φ(z)[5:10])
+k_inst = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=list(range(0, 5)))
+k_ex = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=list(range(5, 10)))
+# k(z, z') = k_inst(φ(z)[:5]) × k_ex(φ(z)[5:])
 ```
 
 **Beta Smoothing (Heteroscedastic Noise):**
@@ -1018,21 +1018,21 @@ uv run python -m bolt.tuning.run_tuning \
 ASHA provides early stopping of unpromising trials during VAE training, saving 30-50% GPU time by killing bottom-performing trials at checkpoints.
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │           ASHA Pruning                  │
-                    ├─────────────────────────────────────────┤
-                    │                                         │
-                    │  Rungs: [100, 500, 1000, 2500, 5000]    │
-                    │  Reduction Factor: 2 (kill bottom 50%)  │
-                    │  Direction: maximize (cosine_mean)      │
-                    │  Min trials for pruning: 3              │
-                    │                                         │
-                    │  At each rung epoch:                    │
-                    │    1. Report metric to shared state     │
-                    │    2. Compare to other trials at rung   │
-                    │    3. If in bottom 50% → PRUNE          │
-                    │                                         │
-                    └─────────────────────────────────────────┘
+                    ┌────────────────────────────────────────────────────┐
+                    │                   ASHA Pruning                     │
+                    ├────────────────────────────────────────────────────┤
+                    │                                                    │
+                    │  Rungs: [100, 500, 1000, 2500, 5000, 10000, 25000] │
+                    │  Reduction Factor: 2 (kill bottom 50%)             │
+                    │  Direction: maximize (cosine_mean)                 │
+                    │  Min trials for pruning: 3                         │
+                    │                                                    │
+                    │  At each rung epoch:                               │
+                    │    1. Report metric to shared state                │
+                    │    2. Compare to other trials at rung              │
+                    │    3. If in bottom 50% → PRUNE                     │
+                    │                                                    │
+                    └────────────────────────────────────────────────────┘
 ```
 
 **Inter-Process Communication:**

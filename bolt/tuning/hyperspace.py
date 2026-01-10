@@ -298,7 +298,7 @@ IMPORTANT_PARAMS: List[ParameterSpec] = [
     ),
     ParameterSpec(
         name="use_product_kernel",
-        param_type=ParameterType.DISCRETE,
+        param_type=ParameterType.CATEGORICAL,
         tier=TuningTier.IMPORTANT,
         phases=[TuningPhase.GP],
         description="Use product kernel (legacy) vs single kernel (HbBoPs)",

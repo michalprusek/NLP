@@ -356,6 +356,16 @@ class SharedASHAPruner:
         direction: str = "maximize",
         min_trials_for_pruning: int = 3,
     ):
+        # Validate inputs
+        if reduction_factor <= 0:
+            raise ValueError(f"reduction_factor must be positive, got {reduction_factor}")
+        if grace_period < 0:
+            raise ValueError(f"grace_period must be non-negative, got {grace_period}")
+        if min_trials_for_pruning < 1:
+            raise ValueError(f"min_trials_for_pruning must be >= 1, got {min_trials_for_pruning}")
+        if direction not in ("maximize", "minimize"):
+            raise ValueError(f"direction must be 'maximize' or 'minimize', got {direction!r}")
+
         self.state_path = Path(state_path)
         self.reduction_factor = reduction_factor
         self.grace_period = grace_period
@@ -374,6 +384,12 @@ class SharedASHAPruner:
 
     def _read_state(self) -> Dict[str, Any]:
         """Read state from file with locking."""
+        empty_state = {
+            "reports": {},
+            "pruned": [],
+            "completed": [],
+            "decisions": [],
+        }
         try:
             with open(self.state_path, "r") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH)
@@ -381,13 +397,16 @@ class SharedASHAPruner:
                     return json.load(f)
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {
-                "reports": {},
-                "pruned": [],
-                "completed": [],
-                "decisions": [],
-            }
+        except FileNotFoundError:
+            logger.debug(f"ASHA state file not found at {self.state_path}, using fresh state")
+            return empty_state
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"ASHA state file at {self.state_path} is corrupted "
+                f"(line {e.lineno}, col {e.colno}): {e.msg}. "
+                f"Using fresh state - existing pruning decisions may be lost."
+            )
+            return empty_state
 
     def _write_state(self, state: Dict[str, Any]):
         """Write state to file with locking."""
