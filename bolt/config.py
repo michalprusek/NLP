@@ -25,14 +25,14 @@ class BOLTConfig:
     - Set Transformer for permutation-invariant exemplar encoding
     - ListMLE ranking loss for direct rank optimization
     - Deep Kernel Learning GP for latent space modeling
-    - Fixed K=8 exemplars, joint 32D latent space
+    - Fixed K=8 exemplars, joint 24D latent space (16D inst + 8D ex)
     """
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension (fixed)
     instruction_latent_dim: int = 16  # Instruction VAE latent
-    exemplar_latent_dim: int = 16  # Exemplar VAE latent
-    # Total: 32D joint latent for GP
+    exemplar_latent_dim: int = 8  # Exemplar VAE latent (smaller - exemplars less complex)
+    # Total: 24D joint latent for GP
 
     # === Set Transformer (Exemplar Encoding) ===
     set_transformer_hidden: int = 128  # ISAB hidden dimension
@@ -48,6 +48,10 @@ class BOLTConfig:
     cross_attn_heads: int = 4  # Number of attention heads
     cross_attn_dropout: float = 0.1  # Dropout rate in attention
 
+    # === MMR (Maximal Marginal Relevance) Selection ===
+    use_mmr: bool = True  # Use MMR instead of pure top-k
+    mmr_lambda: float = 0.7  # Balance: 1.0=pure relevance, 0.5=balanced, 0.0=pure diversity
+
     # === Ranking Loss ===
     ranking_loss_type: str = "listmle"  # "listmle" or "bce"
 
@@ -58,9 +62,9 @@ class BOLTConfig:
     use_train_json: bool = True  # Use train.json instead of examples_25.txt
 
     # === VAE Training ===
-    vae_beta: float = 0.005  # KL weight
+    vae_beta: float = 0.02  # KL weight (increased for better regularization)
     vae_mse_weight: float = 0.2  # 20% MSE + 80% cosine
-    selection_weight: float = 1.0  # Exemplar selection loss weight (BCE on scores)
+    selection_weight: float = 0.2  # Exemplar selection loss weight (reduced to not dominate)
     vae_epochs: int = 50000
     vae_annealing_epochs: int = 2500  # 5% for KL warmup
     vae_patience: int = 1000

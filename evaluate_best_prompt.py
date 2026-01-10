@@ -20,19 +20,25 @@ from src.gsm8k_evaluator import GSM8KEvaluator
 
 
 def main():
-    # Best prompt from grid (error_rate: 0.0675, accuracy: 93.25%)
-    best_prompt = (
-        "Identify the problem, solve it, and complete the computation. "
-        "The result is a mathematical expression that can be interpreted in a variety of ways. "
-        "Identify all of the numbers in the problem and solve the equation for each of them. "
-        "The final result is the numerical equivalent of the digits in the answer. Mathematical Problems."
-    )
+    # Load BOLT best result
+    bolt_result_path = "bolt/results/20260110_132806/best_result.json"
+    with open(bolt_result_path) as f:
+        bolt_result = json.load(f)
+
+    best_instruction = bolt_result["best_instruction"]
+    best_exemplars = bolt_result["best_exemplar_texts"]
+    val_accuracy = bolt_result["best_accuracy"]
+    val_error = bolt_result["best_error"]
+
+    # Build exemplar string
+    exemplar_str = "\n\n".join(best_exemplars)
 
     print("=" * 60)
-    print("BEST PROMPT FROM GRID - TEST SET EVALUATION")
+    print("BOLT BEST PROMPT - TEST SET EVALUATION")
     print("=" * 60)
-    print(f"\nPrompt (validation error_rate: 0.0675, accuracy: 93.25%):")
-    print(f"{best_prompt}\n")
+    print(f"\nInstruction: {best_instruction}")
+    print(f"Exemplars: {len(best_exemplars)} examples")
+    print(f"Validation accuracy: {val_accuracy:.2%}")
     print("=" * 60)
 
     # Load model
@@ -43,20 +49,20 @@ def main():
         tensor_parallel_size=1
     )
 
-    # Load test set
-    print("Loading GSM8K test set...")
-    test_evaluator = GSM8KEvaluator(
-        dataset_path="datasets/gsm8k",
-        split="test"
-    )
-    print(f"Test set size: {len(test_evaluator)} examples\n")
+    # Load test set (same source as BOLT validation for consistency)
+    print("Loading test set...")
+    with open("hbbops_improved_2/data/test.json") as f:
+        test_data = json.load(f)
+    print(f"Test set size: {len(test_data)} examples\n")
 
-    # Get all test examples
-    test_batch = test_evaluator.get_batch(0, len(test_evaluator))
-    test_questions = [ex['question'] for ex in test_batch]
+    test_questions = [ex['question'] for ex in test_data]
+    test_answers = [ex['answer'] for ex in test_data]
 
-    # Format prompts in Q_end style (instruction AFTER question)
-    test_prompts = [f"Q: {q}\n{best_prompt}\nA:" for q in test_questions]
+    # Format prompts with exemplars + instruction (Q_end style)
+    test_prompts = [
+        f"{exemplar_str}\n\nQ: {q}\n{best_instruction}\nA:"
+        for q in test_questions
+    ]
 
     print(f"Evaluating on {len(test_prompts)} test examples...")
     test_outputs = llm.generate_batch(
@@ -65,9 +71,36 @@ def main():
         max_new_tokens=2048
     )
 
-    test_indices = [ex['idx'] for ex in test_batch]
-    test_results = test_evaluator.evaluate_batch(test_outputs, test_indices)
-    test_accuracy = test_results['accuracy']
+    # Extract answers and compare
+    from src.gsm8k_evaluator import extract_answer
+
+    correct = 0
+    for i, (output, answer_text) in enumerate(zip(test_outputs, test_answers)):
+        # Extract predicted answer (last number)
+        pred = extract_answer(output)
+        # Extract gold answer (after ####)
+        if "####" in answer_text:
+            gold = answer_text.split("####")[-1].strip()
+            gold = gold.replace(",", "")
+            try:
+                gold = float(gold)
+            except ValueError:
+                gold = None
+        else:
+            gold = extract_answer(answer_text)
+
+        # Ensure both are floats for comparison
+        try:
+            pred_f = float(pred) if pred is not None else None
+            gold_f = float(gold) if gold is not None else None
+        except (ValueError, TypeError):
+            pred_f = None
+            gold_f = None
+
+        if pred_f is not None and gold_f is not None and abs(pred_f - gold_f) < 1e-6:
+            correct += 1
+
+    test_accuracy = correct / len(test_data)
     test_error = 1.0 - test_accuracy
 
     print("\n" + "=" * 60)
@@ -75,23 +108,30 @@ def main():
     print("=" * 60)
     print(f"Test accuracy: {test_accuracy:.4f} ({test_accuracy:.2%})")
     print(f"Test error rate: {test_error:.4f} ({test_error:.2%})")
-    print(f"Correct: {test_results['correct']}/{test_results['total']}")
+    print(f"Correct: {correct}/{len(test_data)}")
+    print(f"\nComparison:")
+    print(f"  Validation accuracy: {val_accuracy:.2%}")
+    print(f"  Test accuracy:       {test_accuracy:.2%}")
+    print(f"  Difference:          {(test_accuracy - val_accuracy)*100:+.2f}%")
     print("=" * 60)
 
     # Save results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results = {
         "timestamp": timestamp,
-        "prompt": best_prompt,
-        "validation_error_rate": 0.0675,
-        "validation_accuracy": 0.9325,
+        "source": "BOLT v2 (24D, beta=0.02)",
+        "instruction": best_instruction,
+        "num_exemplars": len(best_exemplars),
+        "exemplar_ids": bolt_result["best_exemplar_ids"],
+        "validation_error_rate": val_error,
+        "validation_accuracy": val_accuracy,
         "test_accuracy": test_accuracy,
         "test_error_rate": test_error,
-        "test_correct": test_results['correct'],
-        "test_total": test_results['total'],
+        "test_correct": correct,
+        "test_total": len(test_data),
     }
 
-    output_file = f"results/grid_best_test_{timestamp}.json"
+    output_file = f"results/bolt_test_{timestamp}.json"
     try:
         os.makedirs("results", exist_ok=True)
         with open(output_file, "w") as f:

@@ -245,6 +245,31 @@ When `--skip-hbbops` is enabled:
 - Keep dimensions, loss functions, and training parameters in sync with `config.py`
 - **Always update `lipo/run.py` CLI argument defaults** when changing `config.py` defaults - CLI overrides config!
 
+### BOLT - Bayesian Optimization over Latent Templates (`bolt/`)
+
+**Joint instruction + exemplar optimization using VAE latent space and GP:**
+
+```bash
+# Run BOLT with pre-evaluated Hyperband results (DEFAULT - no LLM needed for initial training)
+uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --iterations 30
+
+# Full run with Hyperband evaluation (requires LLM)
+uv run python -m bolt.run --iterations 30
+```
+
+**Architecture:**
+- `StructureAwareVAE`: Joint instruction (16D) + exemplar (8D) VAE = 24D latent
+- `InstructionEncoder`: 768D GTR → 256 → 128 → 16D
+- `ExemplarSetEncoder`: Set Transformer with ISAB/PMA for permutation-invariant encoding
+- `CrossAttentionScorer`: Instruction↔exemplar matching with ListMLE ranking loss
+- Deep Kernel Learning GP on 24D joint latent space
+
+**IMPORTANT - Documentation & Code Quality:**
+- **Always update `bolt/PIPELINE.md`** when making ANY changes to BOLT code (architecture, parameters, losses, dimensions)
+- PIPELINE.md is the single source of truth for BOLT architecture and must stay in sync with code
+- **Always run code-simplifier agent** after implementing changes or modifications to BOLT code
+- Keep dimensions, loss functions, and training parameters in sync with `bolt/config.py`
+
 ## Coding Standards
 
 ### Logging Generated Prompts
