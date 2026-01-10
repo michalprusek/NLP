@@ -260,6 +260,7 @@ class CoordinateDescentTuner:
         quick_test_overrides: Optional[Dict[str, Any]] = None,  # Overrides for quick testing
         enable_cycling: bool = True,  # Enable Cyclic Coordinate Descent
         max_cycles: int = 3,  # Maximum number of cycles
+        use_asha_pruning: bool = True,  # Enable ASHA pruning for early stopping of bad trials
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -274,6 +275,10 @@ class CoordinateDescentTuner:
         # Cyclic Coordinate Descent
         self.enable_cycling = enable_cycling
         self.cycle_state = CycleState(max_cycles=max_cycles)
+
+        # ASHA pruning
+        self.use_asha_pruning = use_asha_pruning
+        self.pruner_state_path = self.output_dir / "asha_pruner_state.json" if use_asha_pruning else None
 
         # Components
         self.hyperspace = HyperparameterSpace()
@@ -354,11 +359,19 @@ class CoordinateDescentTuner:
                 ]
 
             logger.info(f"Phases to run: {[p.value for p in phases_to_run]}")
+            if self.use_asha_pruning:
+                logger.info(f"ASHA pruning ENABLED - bad trials will be stopped early")
 
             # Start executor
+            # Reset pruner state file at the start of each cycle
+            if self.pruner_state_path and self.pruner_state_path.exists():
+                self.pruner_state_path.unlink()
+                logger.info(f"Reset ASHA pruner state for cycle {self.cycle_state.cycle_number}")
+
             self.executor = DualGPUExecutor(
                 output_dir=self.output_dir / f"trials_cycle{self.cycle_state.cycle_number}",
                 gpu_ids=self.gpu_ids,
+                pruner_state_path=self.pruner_state_path,
             )
             self.executor.start()
 

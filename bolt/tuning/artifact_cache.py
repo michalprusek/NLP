@@ -65,8 +65,9 @@ GP_AFFECTING_PARAMS = sorted(VAE_AFFECTING_PARAMS + [
     "gp_lr",
     "gp_patience",
     "use_deep_kernel",
-    "dkl_feature_dim",
+    "dkl_output_dim",
     "dkl_hidden_dim",
+    "use_product_kernel",
 ])
 
 # Inference only affects final optimization, not model training

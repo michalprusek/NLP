@@ -43,6 +43,7 @@ from .hyperspace import (
     TuningTier,
 )
 from .artifact_cache import ArtifactCache
+from .pruning import SharedASHAPruner
 
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class TrialRunner:
         max_inference_iterations: int = 10,  # Quick evaluation during tuning
         hyperband_fidelity: int = 100,  # Reduced fidelity for faster evaluation
         artifact_cache: Optional[ArtifactCache] = None,  # Shared cache for artifacts
+        pruner_state_path: Optional[Path] = None,  # Path to shared ASHA pruner state
     ):
         self.trial_id = trial_id
         self.config = config
@@ -169,6 +171,12 @@ class TrialRunner:
         self.resume_from_checkpoint = resume_from_checkpoint
         self.max_inference_iterations = max_inference_iterations
         self.hyperband_fidelity = hyperband_fidelity
+
+        # Create SharedASHAPruner if state path provided
+        if pruner_state_path is not None:
+            self.pruner = SharedASHAPruner(state_path=pruner_state_path)
+        else:
+            self.pruner = None
 
         # Create output directory
         self.trial_dir = self.output_dir / trial_id
@@ -453,8 +461,28 @@ class TrialRunner:
             config=bolt_config,
         )
 
-        trainer.train(samples=training_samples)
+        # Create ASHA pruning callback if pruner is available
+        pruning_callback = None
+        self._pruned = False
+        if self.pruner is not None:
+            def pruning_callback(epoch: int, metrics: Dict[str, float]) -> bool:
+                # Use cosine reconstruction as the metric for pruning (higher is better)
+                metric_value = metrics.get("cosine_mean", 0.0)
+                should_stop = self.pruner.should_stop(
+                    self.trial_id, epoch, metric_value, metric_name="cosine_mean"
+                )
+                if should_stop:
+                    self._pruned = True
+                    logger.info(f"Trial {self.trial_id} PRUNED at epoch {epoch}")
+                return should_stop
+
+        trainer.train(samples=training_samples, epoch_callback=pruning_callback)
         training_stats = trainer.training_stats
+
+        # If pruned, mark completion and return partial metrics
+        if self._pruned:
+            self.pruner.mark_completed(self.trial_id)
+            logger.info(f"Trial {self.trial_id} was pruned - returning partial metrics")
 
         # Save VAE checkpoint
         vae_path = self.trial_dir / "vae_checkpoint.pt"
@@ -755,8 +783,9 @@ class TrialRunner:
             use_deep_kernel=bolt_config.use_deep_kernel,
             instruction_dim=bolt_config.instruction_latent_dim,
             exemplar_dim=bolt_config.exemplar_latent_dim,
-            dkl_feature_dim=bolt_config.dkl_feature_dim,
+            dkl_output_dim=bolt_config.dkl_output_dim,
             dkl_hidden_dim=bolt_config.dkl_hidden_dim,
+            use_product_kernel=bolt_config.use_product_kernel,
         )
 
         training_stats = gp.fit(
@@ -947,8 +976,9 @@ class TrialRunner:
             use_deep_kernel=bolt_config.use_deep_kernel,
             instruction_dim=bolt_config.instruction_latent_dim,
             exemplar_dim=bolt_config.exemplar_latent_dim,
-            dkl_feature_dim=bolt_config.dkl_feature_dim,
+            dkl_output_dim=bolt_config.dkl_output_dim,
             dkl_hidden_dim=bolt_config.dkl_hidden_dim,
+            use_product_kernel=bolt_config.use_product_kernel,
         )
 
         # Load GP: 1) from cache, 2) from checkpoint
@@ -1200,6 +1230,7 @@ def run_trial(
     phase: str,
     output_dir: str,
     gpu_id: int = 0,
+    pruner_state_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to run a single trial.
@@ -1218,6 +1249,7 @@ def run_trial(
         phase=TuningPhase(phase),
         output_dir=Path(output_dir),
         gpu_id=gpu_id,
+        pruner_state_path=Path(pruner_state_path) if pruner_state_path else None,
     )
 
     result = runner.run()

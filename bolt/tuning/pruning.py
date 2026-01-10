@@ -24,10 +24,14 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -325,3 +329,269 @@ class MedianPruner:
                 return False
 
             return True
+
+
+class SharedASHAPruner:
+    """
+    ASHA Pruner with file-based shared state for multi-process execution.
+
+    Uses file locking to ensure safe concurrent access from multiple processes.
+    Each process reads/writes to a shared JSON file to coordinate pruning decisions.
+
+    Usage:
+        # In coordinator (creates the state file):
+        pruner = SharedASHAPruner(state_path="/path/to/pruner_state.json")
+
+        # In each trial process:
+        pruner = SharedASHAPruner(state_path="/path/to/pruner_state.json")
+        should_stop = pruner.should_stop(trial_id, epoch, metric_value)
+    """
+
+    def __init__(
+        self,
+        state_path: Path,
+        reduction_factor: float = 2.0,
+        grace_period: int = 100,
+        rungs: Optional[List[int]] = None,
+        direction: str = "maximize",
+        min_trials_for_pruning: int = 3,
+    ):
+        # Validate inputs
+        if reduction_factor <= 0:
+            raise ValueError(f"reduction_factor must be positive, got {reduction_factor}")
+        if grace_period < 0:
+            raise ValueError(f"grace_period must be non-negative, got {grace_period}")
+        if min_trials_for_pruning < 1:
+            raise ValueError(f"min_trials_for_pruning must be >= 1, got {min_trials_for_pruning}")
+        if direction not in ("maximize", "minimize"):
+            raise ValueError(f"direction must be 'maximize' or 'minimize', got {direction!r}")
+
+        self.state_path = Path(state_path)
+        self.reduction_factor = reduction_factor
+        self.grace_period = grace_period
+        self.direction = direction
+        self.min_trials_for_pruning = min_trials_for_pruning
+        self.rungs = rungs or [100, 500, 1000, 2500, 5000, 10000, 25000]
+
+        # Initialize state file if it doesn't exist
+        if not self.state_path.exists():
+            self._write_state({
+                "reports": {},  # trial_id -> list of {step, value, timestamp}
+                "pruned": [],   # list of pruned trial_ids
+                "completed": [],  # list of completed trial_ids
+                "decisions": [],  # pruning decision log
+            })
+
+    def _read_state(self) -> Dict[str, Any]:
+        """Read state from file with locking."""
+        empty_state = {
+            "reports": {},
+            "pruned": [],
+            "completed": [],
+            "decisions": [],
+        }
+        try:
+            with open(self.state_path, "r") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                try:
+                    return json.load(f)
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            logger.debug(f"ASHA state file not found at {self.state_path}, using fresh state")
+            return empty_state
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"ASHA state file at {self.state_path} is corrupted "
+                f"(line {e.lineno}, col {e.colno}): {e.msg}. "
+                f"Using fresh state - existing pruning decisions may be lost."
+            )
+            return empty_state
+
+    def _write_state(self, state: Dict[str, Any]):
+        """Write state to file with locking."""
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.state_path, "w") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                json.dump(state, f, indent=2)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    def _atomic_update(self, update_fn: Callable[[Dict], Dict]) -> Dict[str, Any]:
+        """Atomically read, update, and write state."""
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Open for read+write, create if doesn't exist
+        fd = os.open(str(self.state_path), os.O_RDWR | os.O_CREAT)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                # Read current state
+                with os.fdopen(os.dup(fd), "r") as f:
+                    f.seek(0)
+                    content = f.read()
+                    if content:
+                        state = json.loads(content)
+                    else:
+                        state = {
+                            "reports": {},
+                            "pruned": [],
+                            "completed": [],
+                            "decisions": [],
+                        }
+
+                # Apply update
+                new_state = update_fn(state)
+
+                # Write back
+                with os.fdopen(os.dup(fd), "w") as f:
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(new_state, f, indent=2)
+
+                return new_state
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def report(
+        self,
+        trial_id: str,
+        step: int,
+        metric_value: float,
+        metric_name: str = "val_loss",
+    ) -> bool:
+        """
+        Report intermediate metric and check if trial should continue.
+
+        Returns:
+            True if trial should continue, False if pruned
+        """
+        def update(state):
+            # Check if already pruned
+            if trial_id in state["pruned"]:
+                return state
+
+            # Add report
+            if trial_id not in state["reports"]:
+                state["reports"][trial_id] = []
+
+            state["reports"][trial_id].append({
+                "step": step,
+                "value": metric_value,
+                "metric_name": metric_name,
+                "timestamp": time.time(),
+            })
+
+            # Check if at a rung
+            if step in self.rungs and step >= self.grace_period:
+                should_prune = self._should_prune_at_rung(state, trial_id, step, metric_value)
+                if should_prune:
+                    state["pruned"].append(trial_id)
+                    state["decisions"].append({
+                        "step": step,
+                        "trial_id": trial_id,
+                        "value": metric_value,
+                        "action": "pruned",
+                        "timestamp": time.time(),
+                    })
+                    logger.info(
+                        f"PRUNED trial {trial_id} at step {step} "
+                        f"(value={metric_value:.4f}, bottom {int(100/self.reduction_factor)}%)"
+                    )
+
+            return state
+
+        new_state = self._atomic_update(update)
+        return trial_id not in new_state["pruned"]
+
+    def _should_prune_at_rung(
+        self,
+        state: Dict[str, Any],
+        trial_id: str,
+        step: int,
+        value: float,
+    ) -> bool:
+        """Check if trial should be pruned at current rung."""
+        # Get all trials that have reported at this rung
+        rung_values = []
+        for tid, reports in state["reports"].items():
+            if tid in state["pruned"] or tid in state["completed"]:
+                continue
+            # Find report at this rung
+            for r in reversed(reports):
+                if r["step"] == step:
+                    rung_values.append((tid, r["value"]))
+                    break
+
+        if len(rung_values) < self.min_trials_for_pruning:
+            return False
+
+        # Sort by metric value
+        if self.direction == "maximize":
+            rung_values.sort(key=lambda x: -x[1])  # Higher is better
+        else:
+            rung_values.sort(key=lambda x: x[1])  # Lower is better
+
+        # Determine cutoff
+        keep_fraction = 1.0 / self.reduction_factor
+        cutoff_idx = max(1, int(len(rung_values) * keep_fraction))
+
+        # Check if trial is in bottom half
+        bottom_half_ids = {x[0] for x in rung_values[cutoff_idx:]}
+
+        return trial_id in bottom_half_ids
+
+    def should_stop(
+        self,
+        trial_id: str,
+        step: int,
+        metric_value: float,
+        metric_name: str = "val_loss",
+    ) -> bool:
+        """Check if trial should stop (convenience method)."""
+        should_continue = self.report(trial_id, step, metric_value, metric_name)
+        return not should_continue
+
+    def mark_completed(self, trial_id: str):
+        """Mark a trial as completed."""
+        def update(state):
+            if trial_id not in state["completed"]:
+                state["completed"].append(trial_id)
+            if trial_id in state["pruned"]:
+                state["pruned"].remove(trial_id)
+            return state
+
+        self._atomic_update(update)
+
+    def is_pruned(self, trial_id: str) -> bool:
+        """Check if trial was pruned."""
+        state = self._read_state()
+        return trial_id in state["pruned"]
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get pruning statistics."""
+        state = self._read_state()
+        total = len(state["reports"])
+        pruned = len(state["pruned"])
+        completed = len(state["completed"])
+        return {
+            "total_reported": total,
+            "pruned": pruned,
+            "completed": completed,
+            "active": total - pruned - completed,
+            "prune_rate": pruned / max(1, total),
+            "decisions": len(state["decisions"]),
+            "state_path": str(self.state_path),
+        }
+
+    def reset(self):
+        """Reset pruner state."""
+        self._write_state({
+            "reports": {},
+            "pruned": [],
+            "completed": [],
+            "decisions": [],
+        })
