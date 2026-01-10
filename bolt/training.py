@@ -444,6 +444,9 @@ class VAETrainer:
         self.config = config
         self.selection_targets = selection_targets or {}
 
+        # Training stats (populated after train())
+        self.training_stats: dict = {}
+
         # Pre-compute embeddings
         print("Pre-computing pool embeddings...")
         pool_texts = [qa.format() for qa in qa_pool]
@@ -614,4 +617,52 @@ class VAETrainer:
                     f"beta={current_beta:.4f}"
                 )
 
+        # Collect training stats
+        self._collect_training_stats(
+            epochs_trained=epoch + 1,
+            final_loss=best_loss,
+            early_stopped=patience_counter >= self.config.vae_patience,
+            num_samples=len(samples),
+            history=history,
+        )
+
         return history
+
+    def _collect_training_stats(
+        self,
+        epochs_trained: int,
+        final_loss: float,
+        early_stopped: bool,
+        num_samples: int,
+        history: Dict[str, List[float]],
+    ):
+        """Collect training statistics for debugging and analysis."""
+        # Sample history to reduce size (keep ~100 points per metric)
+        sample_rate = max(1, len(history["total"]) // 100)
+
+        self.training_stats = {
+            "epochs_trained": epochs_trained,
+            "final_loss": float(final_loss),
+            "early_stopped": early_stopped,
+            "num_samples": num_samples,
+            "config": {
+                "vae_beta": self.config.vae_beta,
+                "vae_lr": self.config.vae_lr,
+                "instruction_latent_dim": self.config.instruction_latent_dim,
+                "exemplar_latent_dim": self.config.exemplar_latent_dim,
+                "num_exemplars": self.config.num_exemplars,
+            },
+            # Sampled loss curves
+            "loss_history": {
+                "total": history["total"][::sample_rate],
+                "recon": history["recon"][::sample_rate],
+                "kl": history["kl"][::sample_rate],
+                "selection": history["selection"][::sample_rate],
+                "cosine_mean": history["cosine_mean"][::sample_rate],
+            },
+            # Final values
+            "final_recon_loss": history["recon"][-1] if history["recon"] else None,
+            "final_kl_loss": history["kl"][-1] if history["kl"] else None,
+            "final_selection_loss": history["selection"][-1] if history["selection"] else None,
+            "final_cosine_mean": history["cosine_mean"][-1] if history["cosine_mean"] else None,
+        }

@@ -265,6 +265,8 @@ class CrossAttentionScorer(nn.Module):
         z_ex: torch.Tensor,
         pool_embeddings: torch.Tensor,
         k: int = 8,
+        use_mmr: bool = False,
+        mmr_lambda: float = 0.7,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Select top-k exemplars based on scores.
 
@@ -273,22 +275,114 @@ class CrossAttentionScorer(nn.Module):
             z_ex: Exemplar latent (batch, exemplar_latent_dim)
             pool_embeddings: All pool exemplars (N_pool, 768)
             k: Number of exemplars to select
+            use_mmr: If True, use MMR for diverse selection
+            mmr_lambda: MMR balance (1.0=relevance, 0.0=diversity)
 
         Returns:
             indices: (batch, k) - selected pool indices
             scores: (batch, N_pool) - all scores (for training loss)
         """
         scores = self.forward(z_inst, z_ex, pool_embeddings)
-        _, indices = scores.topk(k, dim=-1)
+
+        if not use_mmr:
+            # Original top-k selection
+            _, indices = scores.topk(k, dim=-1)
+        else:
+            # MMR selection for diversity
+            indices = self._select_mmr(
+                scores, pool_embeddings, k, mmr_lambda
+            )
+
         return indices, scores
+
+    def _select_mmr(
+        self,
+        scores: torch.Tensor,
+        pool_embeddings: torch.Tensor,
+        k: int,
+        mmr_lambda: float,
+    ) -> torch.Tensor:
+        """MMR (Maximal Marginal Relevance) selection for diverse exemplars.
+
+        Score = λ·Relevance - (1-λ)·max_sim(to_selected)
+
+        Args:
+            scores: Relevance scores (batch, N_pool)
+            pool_embeddings: Pool embeddings for similarity (N_pool, 768)
+            k: Number to select
+            mmr_lambda: Balance parameter
+
+        Returns:
+            Selected indices (batch, k)
+
+        Raises:
+            ValueError: If k > n_pool (cannot select more than pool size)
+        """
+        batch_size = scores.shape[0]
+        n_pool = scores.shape[1]
+        device = scores.device
+
+        # Validate k does not exceed pool size
+        if k > n_pool:
+            raise ValueError(
+                f"Cannot select k={k} exemplars from pool of size {n_pool}. "
+                f"Reduce num_exemplars or expand the exemplar pool."
+            )
+
+        # Normalize relevance scores to [0, 1]
+        score_min = scores.min(dim=-1, keepdim=True)[0]
+        score_max = scores.max(dim=-1, keepdim=True)[0]
+        score_range = score_max - score_min
+
+        # Warn if scores are degenerate (all identical)
+        if (score_range < 1e-6).any():
+            import warnings
+            warnings.warn(
+                "MMR selection: scores have near-zero range (max-min < 1e-6). "
+                "All exemplars have similar relevance - selection may be arbitrary.",
+                RuntimeWarning,
+            )
+
+        relevance = (scores - score_min) / (score_range + 1e-8)
+
+        # Precompute pairwise cosine similarities between pool items
+        pool_norm = F.normalize(pool_embeddings, p=2, dim=-1)
+        sim_matrix = torch.mm(pool_norm, pool_norm.T)  # (N_pool, N_pool)
+
+        # Greedy MMR selection
+        all_indices = []
+        for b in range(batch_size):
+            selected = []
+            mask = torch.ones(n_pool, dtype=torch.bool, device=device)
+
+            for _ in range(k):
+                if not selected:
+                    # First selection: pure relevance
+                    idx = relevance[b].argmax().item()
+                else:
+                    # MMR: λ·relevance - (1-λ)·max_sim_to_selected
+                    selected_tensor = torch.tensor(selected, device=device)
+                    max_sim = sim_matrix[:, selected_tensor].max(dim=-1)[0]
+
+                    mmr_scores = mmr_lambda * relevance[b] - (1 - mmr_lambda) * max_sim
+                    mmr_scores[~mask] = float("-inf")  # Exclude already selected
+
+                    idx = mmr_scores.argmax().item()
+
+                selected.append(idx)
+                mask[idx] = False
+
+            all_indices.append(torch.tensor(selected, device=device))
+
+        return torch.stack(all_indices, dim=0)
 
 
 class StructureAwareVAE(nn.Module):
     """Simplified VAE for instruction + exemplar optimization.
 
-    Latent Space (32D total):
+    Latent Space (24D total, configurable):
         - z_instruction (16D): Instruction content
-        - z_exemplar (16D): Exemplar set representation
+        - z_exemplar (8D): Exemplar set representation
 
     Architecture features:
         - Set Transformer for permutation-invariant exemplar encoding
@@ -394,7 +488,11 @@ class StructureAwareVAE(nn.Module):
             mu_inst, logvar_inst, mu_ex, logvar_ex
         """
         mu_inst, logvar_inst = self.instruction_encoder(instruction_emb)
-        mu_ex, logvar_ex = self.exemplar_encoder(exemplar_embs, exemplar_mask)
+        # Pass instruction_emb to exemplar encoder for conditioned encoding
+        # This allows z_ex to be aware of the instruction context
+        mu_ex, logvar_ex = self.exemplar_encoder(
+            exemplar_embs, exemplar_mask, instruction_emb=instruction_emb
+        )
         return mu_inst, logvar_inst, mu_ex, logvar_ex
 
     def encode_joint(
@@ -557,7 +655,9 @@ class StructureAwareVAE(nn.Module):
         weighted_log_likelihood = log_likelihood * weights
 
         # Negative log likelihood as loss
-        loss = -weighted_log_likelihood.sum(dim=1).mean()
+        # Normalize by number of selected exemplars (K) to make loss scale-invariant
+        num_selected = weights.sum(dim=1, keepdim=True).clamp(min=1)
+        loss = -(weighted_log_likelihood.sum(dim=1) / num_selected.squeeze()).mean()
 
         return loss
 
@@ -598,10 +698,12 @@ class StructureAwareVAE(nn.Module):
         kl_loss = kl_inst + kl_ex
 
         # 3. Exemplar selection loss (ListMLE or BCE)
+        # Note: ListMLE is normalized by num_selected (K) to be scale-invariant
         if self.ranking_loss_type == "listmle":
             selection_loss = self._compute_listmle_loss(scores, target_exemplar_mask)
         else:
             # Fallback to BCE for backward compatibility
+            # BCE already averages over all elements
             selection_loss = F.binary_cross_entropy_with_logits(
                 scores,
                 target_exemplar_mask.float(),

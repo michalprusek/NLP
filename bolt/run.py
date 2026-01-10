@@ -106,8 +106,12 @@ def train_vae_from_design_data(
     gtr_encoder,
     qa_pool: list,
     config,
-) -> None:
-    """Train VAE on design data from Hyperband results."""
+):
+    """Train VAE on design data from Hyperband results.
+
+    Returns:
+        VAETrainer: The trained trainer (access .training_stats for stats)
+    """
     from bolt.training import VAETrainer, TrainingSample
 
     samples = [
@@ -134,6 +138,7 @@ def train_vae_from_design_data(
     trainer.train(samples=samples)
 
     print("  VAE training complete")
+    return trainer
 
 
 def train_gp_from_design_data(
@@ -250,12 +255,14 @@ def main():
     # VAE parameters
     parser.add_argument("--vae-epochs", type=int, default=50000,
                         help="VAE training epochs")
-    parser.add_argument("--vae-beta", type=float, default=0.005,
-                        help="KL weight")
+    parser.add_argument("--vae-beta", type=float, default=0.02,
+                        help="KL weight (default: 0.02 for better regularization)")
+    parser.add_argument("--selection-weight", type=float, default=0.2,
+                        help="Exemplar selection loss weight (default: 0.2 to not dominate)")
     parser.add_argument("--instruction-latent-dim", type=int, default=16,
                         help="Instruction latent dimension")
-    parser.add_argument("--exemplar-latent-dim", type=int, default=16,
-                        help="Exemplar latent dimension")
+    parser.add_argument("--exemplar-latent-dim", type=int, default=8,
+                        help="Exemplar latent dimension (default: 8, smaller than instruction)")
     parser.add_argument("--num-exemplars", type=int, default=8,
                         help="Number of exemplars to select (fixed K=8)")
 
@@ -297,6 +304,7 @@ def main():
         eta=args.eta,
         vae_epochs=args.vae_epochs,
         vae_beta=args.vae_beta,
+        selection_weight=args.selection_weight,
         instruction_latent_dim=args.instruction_latent_dim,
         exemplar_latent_dim=args.exemplar_latent_dim,
         num_exemplars=args.num_exemplars,
@@ -412,12 +420,16 @@ def main():
     # =====================================================
     # Step 4: Run Hyperband OR Load saved results
     # =====================================================
+    # Track training stats (for debugging/analysis)
+    vae_training_stats = None
+    gp_training_stats = None
+
     if args.load_hyperband:
         print(f"\n[4/5] Loading saved Hyperband results from {args.load_hyperband}...")
         hyperband_results = load_hyperband_results(args.load_hyperband)
 
         print("\n  Training VAE on loaded design data...")
-        train_vae_from_design_data(
+        vae_trainer = train_vae_from_design_data(
             vae=vae,
             design_data=hyperband_results['design_data'],
             instructions=instructions,
@@ -425,6 +437,7 @@ def main():
             qa_pool=qa_pool,
             config=config,
         )
+        vae_training_stats = vae_trainer.training_stats
 
         print("\n  Training GP on loaded design data...")
         gp = train_gp_from_design_data(
@@ -435,6 +448,7 @@ def main():
             config=config,
             device=device,
         )
+        gp_training_stats = gp.training_stats
 
         print(f"\n  Best error from loaded results: {hyperband_results.get('best_error', 1.0):.4f}")
 
@@ -539,6 +553,9 @@ def main():
 
         gp = hyperband.gp
 
+        # Capture GP training stats (VAE is not retrained in Hyperband mode)
+        gp_training_stats = gp.training_stats if gp else None
+
         # Clean up vLLM to free GPU memory before inference
         if hyperband_evaluator._llm_client is not None:
             del hyperband_evaluator._llm_client
@@ -549,6 +566,15 @@ def main():
         print("  Cleaned up Hyperband LLM client to free GPU memory")
 
         if args.hyperband_only:
+            # Save training stats even for hyperband-only mode
+            training_stats = {
+                "vae": vae_training_stats,
+                "gp": gp_training_stats,
+            }
+            stats_path = os.path.join(output_dir, "training_stats.json")
+            with open(stats_path, "w") as f:
+                json.dump(training_stats, f, indent=2)
+            print(f"  Saved training stats to {stats_path}")
             print("\n[DONE] Hyperband complete. Exiting (--hyperband-only).")
             return
 
@@ -584,6 +610,16 @@ def main():
         num_iterations=config.iterations,
         output_dir=output_dir,
     )
+
+    # Save training stats for debugging/analysis
+    training_stats = {
+        "vae": vae_training_stats,
+        "gp": gp_training_stats,
+    }
+    stats_path = os.path.join(output_dir, "training_stats.json")
+    with open(stats_path, "w") as f:
+        json.dump(training_stats, f, indent=2)
+    print(f"  Saved training stats to {stats_path}")
 
     print(f"\nResults saved to: {output_dir}")
 

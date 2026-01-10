@@ -1,7 +1,7 @@
 """Inference pipeline for BOLT.
 
 Optimization loop:
-1. Optimize joint latent (32D) using UCB/LogEI
+1. Optimize joint latent (24D) using UCB/LogEI
 2. Decode instruction via Vec2Text inversion
 3. Decode exemplars via hard selection from pool
 4. Build prompt, evaluate, add to GP, repeat
@@ -17,9 +17,72 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 from botorch.acquisition import qLogExpectedImprovement, qUpperConfidenceBound
+from botorch.acquisition.analytic import AnalyticAcquisitionFunction
 from botorch.optim import optimize_acqf
 
 from bolt.config import BOLTConfig
+
+
+class AcquisitionWithPriorPenalty(AnalyticAcquisitionFunction):
+    """Wraps acquisition function with Gaussian prior penalty.
+
+    Penalizes latent points far from origin to keep optimization
+    in the region where Vec2Text produces coherent text.
+
+    Score(z) = base_acq(z) - weight * 0.5 * ||z||²
+
+    The penalty term is log P(z) where P(z) = N(0, I), so:
+    log P(z) = -0.5 * ||z||² (ignoring constant)
+    """
+
+    def __init__(
+        self,
+        base_acq: AnalyticAcquisitionFunction,
+        distance_weight: float = 2.0,
+    ):
+        # Initialize with the base acquisition function's model
+        super().__init__(model=base_acq.model)
+        self.base_acq = base_acq
+        self.distance_weight = distance_weight
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """Compute acquisition value with prior penalty.
+
+        Args:
+            X: Input tensor of shape (batch, q, d) or (batch, d)
+
+        Returns:
+            Penalized acquisition values
+
+        Raises:
+            ValueError: If X has unexpected dimensions (not 2D or 3D)
+        """
+        # Validate input shape
+        if X.dim() not in (2, 3):
+            raise ValueError(
+                f"AcquisitionWithPriorPenalty expects input of shape (batch, d) or "
+                f"(batch, q, d), got tensor with {X.dim()} dimensions: shape {tuple(X.shape)}"
+            )
+
+        # Get base acquisition value
+        base_value = self.base_acq(X)
+
+        # Compute squared L2 norm of latent points
+        # X shape: (batch, q, d) for q-batch or (batch, d)
+        if X.dim() == 3:
+            # q-batch case: (batch, q, d)
+            squared_norm = (X ** 2).sum(dim=-1).mean(dim=-1)  # (batch,)
+        else:
+            # Standard case: (batch, d)
+            squared_norm = (X ** 2).sum(dim=-1)  # (batch,)
+
+        # Prior penalty: -0.5 * ||z||² (higher norm = more penalty)
+        # We subtract because we want to penalize far-from-origin points
+        prior_penalty = self.distance_weight * 0.5 * squared_norm
+
+        return base_value - prior_penalty
+
+
 from bolt.encoder import GTREncoder, StructureAwareVAE
 from bolt.gp import GPWithEI
 from bolt.training import HbBoPsEvaluator, QAPair
@@ -104,15 +167,24 @@ class BOLTInference:
             ucb_beta = self.config.ucb_beta
 
         if self.config.acquisition_type == "ucb":
-            acq_func = qUpperConfidenceBound(
+            base_acq = qUpperConfidenceBound(
                 model=self.gp.gp_model,
                 beta=ucb_beta,
             )
         else:
-            acq_func = qLogExpectedImprovement(
+            base_acq = qLogExpectedImprovement(
                 model=self.gp.gp_model,
                 best_f=self.gp.best_f,
             )
+
+        # Wrap with prior penalty to keep latent near origin (where Vec2Text works)
+        if self.config.distance_penalty_enabled:
+            acq_func = AcquisitionWithPriorPenalty(
+                base_acq=base_acq,
+                distance_weight=self.config.distance_weight,
+            )
+        else:
+            acq_func = base_acq
 
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -150,7 +222,10 @@ class BOLTInference:
         with torch.no_grad():
             inst_emb_recon = self.vae.instruction_decoder(z_inst)
             selected_indices, _ = self.vae.scorer.select_top_k(
-                z_inst, z_ex, self.pool_embeddings, k=num_exemplars
+                z_inst, z_ex, self.pool_embeddings,
+                k=num_exemplars,
+                use_mmr=self.config.use_mmr,
+                mmr_lambda=self.config.mmr_lambda,
             )
 
         instruction = self.inverter.invert(inst_emb_recon)

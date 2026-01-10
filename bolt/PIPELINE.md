@@ -13,7 +13,7 @@ Joint optimization over instruction + exemplar selection using VAE latent space,
    - [GTR Encoder](#1-gtr-encoder)
    - [Structure-Aware VAE](#2-structure-aware-vae)
    - [Set Transformer](#3-set-transformer-exemplar-encoding)
-   - [Exemplar Scorer](#4-exemplar-scorer)
+   - [CrossAttention Scorer](#4-crossattention-scorer)
    - [Gaussian Process](#5-gaussian-process-gp)
    - [Hyperband](#6-hyperband-multi-fidelity-optimization)
    - [BO Inference](#7-bo-inference-loop)
@@ -31,7 +31,7 @@ BOLT optimizes **prompts for few-shot learning** by jointly searching over:
 1. **Instruction text** - what the model should do (e.g., "Think step by step...")
 2. **Exemplar selection** - which 8 Q/A pairs to include as demonstrations
 
-The key insight is that the optimal exemplars depend on the instruction, and vice versa. BOLT learns this joint relationship in a **32-dimensional latent space** and uses **Bayesian Optimization** to find the best combination.
+The key insight is that the optimal exemplars depend on the instruction, and vice versa. BOLT learns this joint relationship in a **24-dimensional latent space** (16D instruction + 8D exemplar) and uses **Bayesian Optimization** to find the best combination.
 
 ### Pipeline Stages
 
@@ -47,9 +47,9 @@ Stage 2: Hyperband Exploration
   └── Builds design_data for VAE/GP training
 
 Stage 3: Model Training
-  └── VAE learns to encode instructions + exemplars to 32D latent
-  └── GP learns error_rate = f(z_joint) mapping
-  └── ExemplarScorer learns which exemplars work with which instructions
+  └── VAE learns to encode instructions + exemplars to 24D latent
+  └── GP learns error_rate = f(z_joint) mapping (with DKL)
+  └── CrossAttentionScorer learns which exemplars work with which instructions
 
 Stage 4: BO Inference
   └── Optimize z_joint to minimize predicted error via UCB/LogEI
@@ -91,7 +91,7 @@ Stage 4: BO Inference
                                    ▼
                     ┌───────────────────────────────┐
                     │      Joint Refinement         │
-                    │  z = [z_inst ‖ z_ex] (32D)    │
+                    │  z = [z_inst ‖ z_ex] (24D)    │
                     │  z = z + MLP(z)               │
                     └───────────┬───────────────────┘
                                 │
@@ -99,7 +99,7 @@ Stage 4: BO Inference
               │                 │                 │
               ▼                 ▼                 ▼
     ┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
-    │ InstructionDec  │ │  GP Model   │ │ ExemplarScorer  │
+    │ InstructionDec  │ │  GP Model   │ │ CrossAttnScorer │
     │ 16→128→256→768  │ │ Matérn 5/2  │ │ (z,pool)→scores │
     │ → inst_emb_recon│ │ → μ(error)  │ │ → top-8 indices │
     └────────┬────────┘ └──────┬──────┘ └────────┬────────┘
@@ -159,7 +159,7 @@ instruction_embs = gtr.encode(["Think step by step", "Show your work"])
 
 **File:** `encoder.py:268-547`
 
-The VAE compresses high-dimensional embeddings (768D) to a compact latent space (32D) that captures the essential structure for optimization.
+The VAE compresses high-dimensional embeddings (768D) to a compact latent space (24D) that captures the essential structure for optimization.
 
 ```
                     ┌─────────────────────────────────────┐
@@ -184,7 +184,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
                     │            │                        │
                     │            │ reparameterize         │
                     │            ▼                        │
-                    │       z_ex (16D)                    │
+                    │       z_ex (8D)                     │
                     │            │                        │
                     │  ┌─────────┴───────────┐            │
                     │  │  Joint Refinement   │            │
@@ -192,7 +192,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
                     │  │  z = z + MLP(z)     │            │
                     │  └─────────┬───────────┘            │
                     │            │                        │
-                    │       z_joint (32D)                 │
+                    │       z_joint (24D)                 │
                     │            │                        │
                     │     ┌──────┴──────┐                 │
                     │     ▼             ▼                 │
@@ -205,7 +205,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
 
 ```python
 # Encode to latent (for GP training)
-z_joint = vae.encode_joint(inst_emb, ex_embs, ex_mask)  # (batch, 32)
+z_joint = vae.encode_joint(inst_emb, ex_embs, ex_mask)  # (batch, 24)
 
 # Full forward pass with loss
 loss, loss_dict = vae.forward(
@@ -255,13 +255,13 @@ Input: exemplar_embeddings (batch, K, 768)
        │  └──────────────────────────────────────┘  │
        │                    ↓                       │
        │  ┌──────────────────────────────────────┐  │
-       │  │       Linear heads (64→16)           │  │
+       │  │       Linear heads (64→8)            │  │
        │  │  fc_mu, fc_logvar → VAE params       │  │
        │  └──────────────────────────────────────┘  │
        │                                            │
        └────────────────────────────────────────────┘
 
-Output: μ_ex (batch, 16), logvar_ex (batch, 16)
+Output: μ_ex (batch, 8), logvar_ex (batch, 8)
 ```
 
 **Key Insight:** ISAB (Induced Set Attention Block) reduces attention complexity from O(K²) to O(KM) where M=4 inducing points. This allows efficient processing of large exemplar sets.
@@ -272,48 +272,75 @@ Output: μ_ex (batch, 16), logvar_ex (batch, 16)
 - Captures interactions between exemplars
 - Produces fixed-size output for VAE latent
 
+**Instruction-Conditioned Encoding:**
+
+The PMA (Pooling Multihead Attention) now accepts instruction embedding for conditioning:
+
+```python
+# PMA seeds are modulated by instruction context
+# This makes z_ex aware of what instruction it's paired with
+
+# Standard PMA: seeds are learned parameters
+S = self.seeds  # (num_seeds, embed_dim)
+
+# Conditioned PMA: seeds are modulated by instruction
+if instruction_emb is not None:
+    inst_context = instruction_proj(instruction_emb)  # (batch, embed_dim)
+    S = S + inst_context  # Additive modulation
+
+# Then attention: output = MAB(S, X)
+```
+
+**Why instruction conditioning?**
+- z_ex now encodes "exemplars relevant to THIS instruction" vs just "exemplars in general"
+- Creates tighter coupling between instruction and exemplar latents
+- Improves GP's ability to predict accuracy for instruction-exemplar pairs
+
 ---
 
-### 4. Exemplar Scorer
+### 4. CrossAttention Scorer
 
 **File:** `encoder.py:157-266`
 
-The ExemplarScorer learns which exemplars work well with which instructions. Given the joint latent (z_inst, z_ex), it scores all exemplars in the pool and selects the top-8.
+The CrossAttentionScorer learns which exemplars work well with which instructions using attention mechanisms. Given the joint latent (z_inst, z_ex), it scores all exemplars in the pool using cross-attention and selects the top-8.
+
+**Advantages over concat+MLP:**
+- Natural alignment mechanism between instruction and exemplars
+- Attention weights are interpretable (which exemplars match the query)
+- Multi-head attention captures different aspects of matching
 
 ```
                     ┌─────────────────────────────────────┐
-                    │          ExemplarScorer             │
+                    │       CrossAttentionScorer          │
                     ├─────────────────────────────────────┤
                     │                                     │
   z_inst (16D) ─────┤  ┌─────────────────┐                │
-                    │  │ latent_proj     │                │
-  z_ex (16D) ───────┤  │ concat→64D      │                │
-                    │  │ Linear+GELU+LN  │                │
+                    │  │ query_proj      │                │
+  z_ex (8D) ────────┤  │ concat→64D      │                │
+                    │  │ Linear+LayerNorm│                │
                     │  └────────┬────────┘                │
                     │           │                         │
                     │           ▼                         │
-                    │       z_proj (64D)                  │
+                    │       query (64D)                   │
                     │           │                         │
   pool_emb          │  ┌────────┴────────┐                │
-  (N×768D) ─────────┤  │ pool_proj       │                │
-                    │  │ 768→64          │                │
-                    │  │ Linear+GELU+LN  │                │
-                    │  └────────┬────────┘                │
-                    │           │                         │
-                    │           ▼                         │
-                    │      p_proj (N×64D)                 │
-                    │           │                         │
-                    │  ┌────────┴────────┐                │
-                    │  │ Pairwise concat │                │
-                    │  │ [z_proj, p_proj]│                │
-                    │  │ → (batch,N,128) │                │
+  (N×768D) ─────────┤  │ key_proj: 768→64│                │
+                    │  │ value_proj:768→64                │
                     │  └────────┬────────┘                │
                     │           │                         │
                     │  ┌────────┴────────┐                │
-                    │  │ Scorer MLP      │                │
-                    │  │ 128→128→64→1    │                │
-                    │  │ → scores (N,)   │                │
+                    │  │ MultiheadAttention               │
+                    │  │ 4 heads, dropout=0.1             │
+                    │  │ query attends to keys            │
                     │  └────────┬────────┘                │
+                    │           │                         │
+                    │  ┌────────┴────────┐                │
+                    │  │ Score MLP       │                │
+                    │  │ 64→32→1         │                │
+                    │  │ → base_scores   │                │
+                    │  └────────┬────────┘                │
+                    │           │                         │
+                    │  scores = base_scores + attn_weights│
                     │           │                         │
                     │  ┌────────┴────────┐                │
                     │  │ Top-K Selection │                │
@@ -325,16 +352,18 @@ The ExemplarScorer learns which exemplars work well with which instructions. Giv
 ```
 
 **Training Signal:**
-The scorer is trained with **Binary Cross-Entropy** loss, where targets come from Hyperband's best-performing exemplar sets:
+The scorer is trained with **ListMLE** ranking loss, which directly optimizes exemplar ranking:
 
 ```python
-# For each instruction, find best exemplar set → binary mask
-targets = compute_selection_targets(design_data, n_pool)
-# targets[inst_id] = [0,0,1,0,1,1,0,0,1,0,1,0,1,0,1,0,0,1,...]
-#                     ^ these 8 positions are 1.0 (best set)
+# ListMLE: negative log-likelihood of correct ranking order
+# Targets come from Hyperband's best-performing exemplar sets
 
-# BCE loss trains scorer to predict high scores for good exemplars
-loss = F.binary_cross_entropy_with_logits(scores, target_mask)
+# For each instruction, get scores for all exemplars
+scores = scorer(z_inst, z_ex, pool_embs)  # (batch, N_pool)
+
+# Compute ListMLE loss (normalized by K)
+# Loss encourages: scores[good_exemplars] > scores[bad_exemplars]
+loss = listmle_loss(scores, target_mask) / K  # K=8
 ```
 
 ---
@@ -354,11 +383,15 @@ The GP learns the mapping from latent space to error rate: `error = f(z_joint)`.
                     │    X_norm = (X - X_min) / range     │
                     │    y_norm = (y - y_mean) / y_std    │
                     │                                     │
+                    │  Deep Kernel Learning (Optional):   │
+                    │    z (24D) → FeatureExtractor → φ   │
+                    │    φ_inst (16D), φ_ex (16D)         │
+                    │                                     │
                     │  Kernel (Product Structure):        │
-                    │    k(z,z') = k_inst × k_ex          │
+                    │    k(z,z') = k_inst(φ) × k_ex(φ)    │
                     │                                     │
                     │    k_inst: Matérn 5/2, ARD (16 dim) │
-                    │    k_ex:   Matérn 5/2, ARD (16 dim) │
+                    │    k_ex:   Matérn 5/2, ARD (8 dim)  │
                     │                                     │
                     │  Noise Model:                       │
                     │    FixedNoiseGaussianLikelihood     │
@@ -371,18 +404,43 @@ The GP learns the mapping from latent space to error rate: `error = f(z_joint)`.
                     └─────────────────────────────────────┘
 ```
 
+**Deep Kernel Learning (DKL):**
+DKL transforms the latent space through a neural network before applying the kernel, allowing non-stationary relationships:
+
+```python
+# Feature extractor architecture
+# Single MLP processes joint latent, outputs features for both kernels
+feature_extractor = MLP(24 → 32 → 32 → 32)  # total_dim → hidden → hidden → 2*feature_dim
+
+# Example forward pass:
+z_joint = [z_inst, z_ex]          # (batch, 24)
+features = feature_extractor(z_joint)  # (batch, 32)
+# features[:, 0:16]  → instruction features
+# features[:, 16:32] → exemplar features
+
+# GP operates on transformed features
+k(z, z') = k_matern(φ(z), φ(z'))
+```
+
+Note: With DKL enabled, both instruction and exemplar kernels operate on 16D transformed
+features (not the original 16D/8D latent dimensions).
+
 **Product Kernel Structure:**
 The kernel separates instruction and exemplar subspaces, allowing them to have different smoothness properties:
 
 ```python
-# Instruction kernel: dims 0-15
+# Without DKL (operates on raw latent):
+# Instruction kernel: dims 0-15 (16D)
 k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
+# Exemplar kernel: dims 16-23 (8D)
+k_ex = MaternKernel(nu=2.5, ard_num_dims=8, active_dims=[16:24])
+# Combined: k(z, z') = k_inst(z[0:16]) × k_ex(z[16:24])
 
-# Exemplar kernel: dims 16-31
+# With DKL (operates on transformed features):
+# Both kernels use 16D features from feature_extractor
+k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
 k_ex = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[16:32])
-
-# Combined (multiplicative)
-k(z, z') = k_inst(z[0:16], z'[0:16]) × k_ex(z[16:32], z'[16:32])
+# Combined: k(z, z') = k_inst(φ(z)[0:16]) × k_ex(φ(z)[16:32])
 ```
 
 **Beta Smoothing (Heteroscedastic Noise):**
@@ -520,7 +578,7 @@ After Hyperband, BO continues optimization by generating novel prompts via laten
                     │       text = Vec2Text(emb)          │
                     │                                     │
                     │    3. Select exemplars              │
-                    │       z_ex = z_opt[16:32]           │
+                    │       z_ex = z_opt[16:24]           │
                     │       indices = scorer.top_k(       │
                     │         z_inst, z_ex, pool, k=8)    │
                     │                                     │
@@ -550,6 +608,41 @@ UCB(z) = -μ(z) + β × σ(z)
 
 # At iteration 0: β=8.0 (explore widely)
 # At iteration 50: β=2.0 (exploit best regions)
+```
+
+**Distance from Prior Penalty:**
+
+```python
+# Vec2Text produces gibberish when latent optimization strays far from N(0,I)
+# We add a Gaussian prior penalty to keep z near the origin
+
+# Acquisition with penalty
+Score(z) = UCB(z) - λ_dist × 0.5 × ||z||²
+
+# The penalty term is log P(z) where P(z) = N(0, I):
+# log P(z) = -0.5 × ||z||² (ignoring constant)
+
+# Config:
+distance_penalty_enabled: bool = True
+distance_weight: float = 2.0  # λ_dist
+```
+
+**MMR Exemplar Selection (Maximal Marginal Relevance):**
+
+```python
+# Pure top-k can select 8 redundant exemplars (same problem type)
+# MMR balances relevance with diversity
+
+# Score for each candidate:
+MMR_score(ex) = λ × Relevance(ex) - (1-λ) × max_sim(ex, selected_set)
+
+# Greedy selection:
+# 1. First exemplar: pure relevance (highest score)
+# 2. Subsequent: balance relevance vs diversity to already-selected
+
+# Config:
+use_mmr: bool = True
+mmr_lambda: float = 0.7  # 1.0=pure relevance, 0.5=balanced, 0.0=pure diversity
 ```
 
 **Vec2Text Inversion:**
@@ -631,7 +724,7 @@ latents = [vae.encode_joint(inst_emb, ex_embs, mask) for ...]
 errors = [entry['error_rate'] for entry in design_data]
 fidelities = [entry['fidelity'] for entry in design_data]
 
-gp = GPWithEI(instruction_dim=16, exemplar_dim=16)
+gp = GPWithEI(instruction_dim=16, exemplar_dim=8, use_deep_kernel=True)
 gp.fit(X=latents, y=errors, fidelities=fidelities)
 ```
 
@@ -669,14 +762,21 @@ L_KL = KL(q(z_inst|x) || N(0,1)) + KL(q(z_ex|x) || N(0,1))
 β_current = β × min(1, epoch / annealing_epochs)
 ```
 
-### 3. Selection Loss (Exemplar Scorer)
+### 3. Selection Loss (CrossAttention Scorer)
 
 ```python
-# Binary cross-entropy on pool-wide scores
-L_selection = BCE(scores, target_mask)
+# ListMLE: Learns to rank good exemplars above bad ones
+# Normalized by K to make loss scale-invariant
 
-# target_mask[i] = 1 if exemplar i is in best set for this instruction
-# Encourages scorer to give high scores to good exemplars
+# Compute weighted log-likelihood of correct ordering
+weights = target_mask  # (batch, N_pool) - 1 for selected, 0 otherwise
+log_likelihood = -log(softmax(scores))
+weighted_ll = log_likelihood * weights
+
+# Normalize by number of selected exemplars (K=8)
+L_selection = -(weighted_ll.sum(dim=1) / K).mean()
+
+# Encourages: scores[good_exemplars] > scores[bad_exemplars]
 ```
 
 ---
@@ -687,16 +787,17 @@ L_selection = BCE(scores, target_mask)
 |-----------|-----------|-------------|
 | GTR embedding | 768 | SentenceTransformer output |
 | Instruction latent (z_inst) | 16 | VAE encoder output |
-| Exemplar latent (z_ex) | 16 | Set Transformer output |
-| Joint latent (z_joint) | 32 | Concatenation for GP |
+| Exemplar latent (z_ex) | 8 | Set Transformer output (smaller - less complex) |
+| Joint latent (z_joint) | 24 | Concatenation for GP (16 + 8) |
 | ISAB hidden | 128 → 64 | Set Transformer internal |
-| Scorer projection | 64 | Latent → score space |
-| Scorer hidden | 128 | MLP middle layer |
+| CrossAttention hidden | 64 | Query/Key/Value projection dimension |
+| Score MLP | 64 → 32 → 1 | Value representation → score |
 | Number of exemplars | 8 | Fixed K=8 always |
 | Exemplar pool | 6154 | Q/A pairs from train.json |
 | Instructions | 2000 | APE-generated candidates |
 | Validation set | 1319 | GSM8K validation |
 | Inducing points | 4 | ISAB efficiency |
+| DKL feature dim | 16 | Deep Kernel output per component |
 
 ---
 
@@ -708,8 +809,8 @@ class BOLTConfig:
     # === Latent Dimensions ===
     embedding_dim: int = 768
     instruction_latent_dim: int = 16
-    exemplar_latent_dim: int = 16
-    # total_latent_dim = 32
+    exemplar_latent_dim: int = 8   # Smaller - exemplars less complex
+    # total_latent_dim = 24
 
     # === Set Transformer ===
     set_transformer_hidden: int = 128
@@ -720,10 +821,14 @@ class BOLTConfig:
     num_exemplars: int = 8        # Fixed K=8
     scorer_hidden_dim: int = 128
 
+    # === MMR (Maximal Marginal Relevance) Selection ===
+    use_mmr: bool = True
+    mmr_lambda: float = 0.7       # 1.0=relevance, 0.5=balanced, 0.0=diversity
+
     # === VAE Training ===
-    vae_beta: float = 0.005       # KL weight
+    vae_beta: float = 0.02        # KL weight (increased for better regularization)
     vae_mse_weight: float = 0.2   # 20% MSE + 80% cosine
-    selection_weight: float = 1.0
+    selection_weight: float = 0.2 # Reduced to not dominate training
     vae_epochs: int = 50000
     vae_annealing_epochs: int = 2500  # 5% warmup
     vae_lr: float = 0.0006
@@ -749,6 +854,16 @@ class BOLTConfig:
     ucb_beta_final: float = 2.0  # After decay
     cosine_sim_threshold: float = 0.90
     max_rejection_attempts: int = 10
+
+    # === Distance Penalty (keeps latent near N(0,I) for good Vec2Text) ===
+    distance_penalty_enabled: bool = True
+    distance_weight: float = 2.0
+
+    # === Contrastive Loss (DISABLED) ===
+    # Dropout augmentation is too weak for meaningful contrastive learning
+    # Paraphrase-based positives would be needed but require LLM calls
+    use_contrastive: bool = False
+    contrastive_weight: float = 0.0
 
     # === Vec2Text ===
     vec2text_beam: int = 8

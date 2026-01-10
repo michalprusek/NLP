@@ -75,7 +75,8 @@ class JointPromptGP(ExactGP, GPyTorchModel):
     """GP on joint instruction-exemplar latent space.
 
     Uses structure-aware product kernel with separate lengthscales
-    for instruction dims (0:16) and exemplar dims (16:32).
+    for instruction dims (0:16) and exemplar dims (16:24 by default).
+    Dimensions are configurable via instruction_dim and exemplar_dim.
     """
 
     _num_outputs = 1
@@ -206,6 +207,9 @@ class GPWithEI:
 
         # Best observed value (for EI)
         self.best_f: Optional[float] = None
+
+        # Training stats (populated after fit())
+        self.training_stats: dict = {}
 
     def _normalize_X(self, X: torch.Tensor) -> torch.Tensor:
         """Normalize inputs to [0, 1]."""
@@ -356,7 +360,74 @@ class GPWithEI:
                 ) from e
             raise
 
+        # Collect training stats
+        self._collect_training_stats(
+            epochs_trained=epoch + 1,
+            final_loss=best_loss,
+            early_stopped=patience_counter >= patience,
+            num_samples=len(X),
+            loss_history=history["loss"],
+        )
+
         return history
+
+    def _collect_training_stats(
+        self,
+        epochs_trained: int,
+        final_loss: float,
+        early_stopped: bool,
+        num_samples: int,
+        loss_history: list,
+    ):
+        """Collect training statistics for debugging and analysis."""
+        # Get kernel parameters
+        if hasattr(self.gp_model, "covar_module"):
+            covar = self.gp_model.covar_module
+            if hasattr(covar, "base_kernel") and hasattr(covar.base_kernel, "kernels"):
+                # Product kernel case
+                inst_kernel = covar.base_kernel.kernels[0]
+                ex_kernel = covar.base_kernel.kernels[1]
+
+                inst_ls = inst_kernel.lengthscale.detach().cpu().squeeze()
+                ex_ls = ex_kernel.lengthscale.detach().cpu().squeeze()
+
+                self.training_stats = {
+                    "epochs_trained": epochs_trained,
+                    "final_loss": float(final_loss),
+                    "early_stopped": early_stopped,
+                    "num_samples": num_samples,
+                    "instruction_lengthscale_mean": float(inst_ls.mean()),
+                    "instruction_lengthscale_min": float(inst_ls.min()),
+                    "instruction_lengthscale_max": float(inst_ls.max()),
+                    "exemplar_lengthscale_mean": float(ex_ls.mean()),
+                    "exemplar_lengthscale_min": float(ex_ls.min()),
+                    "exemplar_lengthscale_max": float(ex_ls.max()),
+                    "outputscale": float(covar.outputscale.detach().cpu().item()),
+                    "loss_history": loss_history[::max(1, len(loss_history) // 100)],  # Sample 100 points
+                }
+
+                # Find most relevant dims (smallest lengthscale = most important)
+                all_ls = torch.cat([inst_ls, ex_ls])
+                sorted_dims = torch.argsort(all_ls)[:5]
+                self.training_stats["top_5_relevant_dims"] = sorted_dims.tolist()
+                self.training_stats["top_5_lengthscales"] = all_ls[sorted_dims].tolist()
+            else:
+                # Single kernel case
+                self.training_stats = {
+                    "epochs_trained": epochs_trained,
+                    "final_loss": float(final_loss),
+                    "early_stopped": early_stopped,
+                    "num_samples": num_samples,
+                    "loss_history": loss_history[::max(1, len(loss_history) // 100)],
+                }
+        else:
+            self.training_stats = {
+                "epochs_trained": epochs_trained,
+                "final_loss": float(final_loss),
+                "early_stopped": early_stopped,
+                "num_samples": num_samples,
+                "loss_history": loss_history[::max(1, len(loss_history) // 100)],
+            }
 
     def predict(
         self,

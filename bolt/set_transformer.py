@@ -206,6 +206,8 @@ class PoolingMultiheadAttention(nn.Module):
 
     PMA(X) = MAB(S, rFF(X))
     where S are learned seed vectors.
+
+    Optional instruction conditioning: seeds can be modulated by instruction embedding.
     """
 
     def __init__(
@@ -214,12 +216,22 @@ class PoolingMultiheadAttention(nn.Module):
         num_seeds: int = 1,
         num_heads: int = 4,
         dropout: float = 0.1,
+        instruction_dim: int = 768,  # GTR embedding dimension
+        use_instruction_conditioning: bool = True,
     ):
         super().__init__()
         self.num_seeds = num_seeds
+        self.use_instruction_conditioning = use_instruction_conditioning
 
         # Learned seed vectors (queries for pooling)
         self.seeds = nn.Parameter(torch.randn(num_seeds, embed_dim) * 0.02)
+
+        # Instruction conditioning: project instruction to seed modulation
+        if use_instruction_conditioning:
+            self.instruction_proj = nn.Sequential(
+                nn.Linear(instruction_dim, embed_dim),
+                nn.LayerNorm(embed_dim),
+            )
 
         # Pre-pooling feedforward (rFF in paper)
         self.pre_ff = nn.Sequential(
@@ -238,11 +250,13 @@ class PoolingMultiheadAttention(nn.Module):
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        instruction_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Args:
             x: Set elements (batch, K, embed_dim)
             mask: Valid element mask (batch, K), True = valid
+            instruction_emb: Optional instruction embedding (batch, 768) for conditioning
 
         Returns:
             output: Pooled representation (batch, num_seeds, embed_dim)
@@ -265,17 +279,19 @@ class PoolingMultiheadAttention(nn.Module):
 
                 x_valid = x[valid_idx]
                 mask_valid = mask[valid_idx]
+                inst_valid = instruction_emb[valid_idx] if instruction_emb is not None else None
 
-                output_valid = self._forward_impl(x_valid, mask_valid)
+                output_valid = self._forward_impl(x_valid, mask_valid, inst_valid)
                 output[valid_idx] = output_valid
                 return output
 
-        return self._forward_impl(x, mask)
+        return self._forward_impl(x, mask, instruction_emb)
 
     def _forward_impl(
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        instruction_emb: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Internal forward - assumes all samples have at least one valid element."""
         batch_size = x.shape[0]
@@ -285,6 +301,12 @@ class PoolingMultiheadAttention(nn.Module):
 
         # Expand seeds for batch
         S = self.seeds.unsqueeze(0).expand(batch_size, -1, -1)
+
+        # Condition seeds on instruction (if provided and enabled)
+        if instruction_emb is not None and self.use_instruction_conditioning:
+            # Project instruction to seed space and add as modulation
+            inst_context = self.instruction_proj(instruction_emb)  # (batch, embed_dim)
+            S = S + inst_context.unsqueeze(1)  # (batch, num_seeds, embed_dim)
 
         # Convert mask to key_padding_mask
         key_padding_mask = ~mask if mask is not None else None
@@ -356,11 +378,13 @@ class ExemplarSetEncoder(nn.Module):
         self,
         exemplar_embeddings: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        instruction_emb: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             exemplar_embeddings: GTR embeddings (batch, K, 768)
             mask: Validity mask (batch, K), True = valid exemplar
+            instruction_emb: Optional instruction embedding (batch, 768) for conditioning
 
         Returns:
             mu, logvar: VAE parameters (batch, latent_dim)
@@ -392,8 +416,8 @@ class ExemplarSetEncoder(nn.Module):
         h = self.isab1(exemplar_embeddings, mask)  # (batch, K, hidden)
         h = self.isab2(h, mask)  # (batch, K, hidden/2)
 
-        # Pool to fixed size
-        pooled = self.pma(h, mask)  # (batch, 1, hidden/2)
+        # Pool to fixed size (with optional instruction conditioning)
+        pooled = self.pma(h, mask, instruction_emb=instruction_emb)  # (batch, 1, hidden/2)
         pooled = pooled.squeeze(1)  # (batch, hidden/2)
 
         # VAE parameters
