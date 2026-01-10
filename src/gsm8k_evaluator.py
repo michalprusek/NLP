@@ -1,49 +1,116 @@
-"""GSM8K evaluator with simplified answer extraction"""
+"""GSM8K evaluator matching lm-evaluation-harness standard.
+
+Reference: https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/gsm8k/
+"""
 import re
 from typing import Dict, List, Any, Optional
 from datasets import load_from_disk
 
 
-# Simple number pattern - matches integers and decimals (including negative)
-NUMBER_PATTERN = r'[-+]?\d+(?:[.,]\d+)?'
+# Pattern 1: Strict - extract number after #### marker (standard GSM8K format)
+STRICT_PATTERN = r'####\s*(-?[\d,]+\.?\d*)'
+
+# Pattern 2: LaTeX boxed format (common in math models like Qwen)
+BOXED_PATTERN = r'\\boxed\{(-?[\d,]+\.?\d*)\}'
+
+# Pattern 3: Flexible - extract numeric values (fallback)
+FLEXIBLE_PATTERN = r'(-?\$?[\d,]+\.?\d*)'
 
 
-def compare_numbers(predicted: str, ground_truth: str, tolerance: float = 1e-6) -> bool:
-    """Compare two numbers with tolerance."""
-    if predicted == ground_truth:
-        return True
+def normalize_answer(answer: str) -> str:
+    """Normalize answer by removing commas, dollar signs, trailing periods.
 
-    try:
-        # Remove commas (thousands separators) and normalize
-        pred_clean = predicted.replace(',', '')
-        gt_clean = ground_truth.replace(',', '')
-        pred_num = float(pred_clean)
-        gt_num = float(gt_clean)
-        return abs(pred_num - gt_num) <= tolerance
-    except (ValueError, TypeError):
-        return False
+    Matches lm-eval-harness regexes_to_ignore: [",", "\\$", "\\.(?!\\d)"]
+    """
+    if answer is None:
+        return None
+    # Remove commas (thousands separators)
+    answer = answer.replace(',', '')
+    # Remove dollar signs
+    answer = answer.replace('$', '')
+    # Remove trailing period (but not decimal point)
+    answer = re.sub(r'\.(?!\d)', '', answer)
+    return answer.strip()
 
 
 def extract_answer(text: str) -> Optional[str]:
-    """Extract last number from model output."""
+    """Extract answer from model output using robust methodology.
+
+    Priority order (matches Qwen output formats):
+    1. #### (number) - standard GSM8K format
+    2. \\boxed{number} - LaTeX format (common in Qwen math outputs)
+    3. Last number in text - fallback for "The answer is X"
+    """
     if not text:
         return None
 
-    # Find all numbers and return the last one
-    numbers = re.findall(NUMBER_PATTERN, text)
-    return numbers[-1] if numbers else None
+    # Method 1: Try to find #### marker (strict GSM8K format)
+    match = re.search(STRICT_PATTERN, text)
+    if match:
+        return normalize_answer(match.group(1))
+
+    # Method 2: Try to find \boxed{} (LaTeX format, common in Qwen)
+    match = re.search(BOXED_PATTERN, text)
+    if match:
+        return normalize_answer(match.group(1))
+
+    # Method 3: Fallback - extract all numbers, take the last one
+    # This handles "The answer is 42" format
+    numbers = re.findall(FLEXIBLE_PATTERN, text)
+    # Filter out empty matches and pure punctuation
+    numbers = [n for n in numbers if n and re.search(r'\d', n)]
+    if numbers:
+        return normalize_answer(numbers[-1])
+
+    return None
 
 
 def extract_ground_truth(answer_text: str) -> str:
-    """Extract last number from GSM8K answer."""
+    """Extract ground truth from GSM8K answer field.
+
+    GSM8K format: "reasoning steps... #### ANSWER"
+    """
     if not answer_text:
         raise ValueError("Empty ground truth text")
 
-    numbers = re.findall(NUMBER_PATTERN, answer_text)
+    # Standard GSM8K format: answer after ####
+    match = re.search(STRICT_PATTERN, answer_text)
+    if match:
+        return normalize_answer(match.group(1))
+
+    # Fallback: last number in text
+    numbers = re.findall(FLEXIBLE_PATTERN, answer_text)
+    numbers = [n for n in numbers if n and re.search(r'\d', n)]
     if numbers:
-        return numbers[-1]
+        return normalize_answer(numbers[-1])
 
     raise ValueError(f"Could not extract ground truth from: {answer_text!r}")
+
+
+def compare_answers(predicted: str, ground_truth: str) -> bool:
+    """Compare answers using exact string match after normalization.
+
+    Matches lm-eval-harness exact_match metric.
+    """
+    if predicted is None or ground_truth is None:
+        return False
+
+    # Normalize both
+    pred_norm = normalize_answer(predicted)
+    gt_norm = normalize_answer(ground_truth)
+
+    # Exact string match (standard)
+    if pred_norm == gt_norm:
+        return True
+
+    # Numeric comparison for floating point tolerance
+    try:
+        pred_num = float(pred_norm)
+        gt_num = float(gt_norm)
+        # Use small tolerance for float comparison
+        return abs(pred_num - gt_num) < 1e-5
+    except (ValueError, TypeError):
+        return False
 
 
 class GSM8KEvaluator:
@@ -72,7 +139,13 @@ class GSM8KEvaluator:
         self.debug = debug
 
     def evaluate_batch(self, outputs: List[str], indices: List[int]) -> Dict[str, Any]:
-        """Evaluate batch of outputs against ground truth."""
+        """Evaluate batch of outputs against ground truth.
+
+        Uses lm-eval-harness standard:
+        1. Extract answer after #### or last number
+        2. Normalize (remove $, commas, trailing periods)
+        3. Exact string match
+        """
         if len(outputs) != len(indices):
             raise ValueError("outputs and indices must have the same length")
 
@@ -84,7 +157,7 @@ class GSM8KEvaluator:
             gt = extract_ground_truth(example['answer'])
             pred = extract_answer(output)
 
-            is_correct = pred is not None and compare_numbers(pred, gt)
+            is_correct = compare_answers(pred, gt)
             if is_correct:
                 correct += 1
 
