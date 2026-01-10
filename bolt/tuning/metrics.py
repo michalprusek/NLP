@@ -763,7 +763,8 @@ class GPNLLMetric(BaseMetric):
     ) -> float:
         """Compute NLL assuming Gaussian predictions."""
         # NLL = 0.5 * log(2π) + 0.5 * log(σ²) + (y - μ)² / (2σ²)
-        variance = uncertainties ** 2
+        # Add small epsilon to prevent division by zero
+        variance = uncertainties ** 2 + 1e-10
 
         nll = 0.5 * np.log(2 * np.pi * variance) + 0.5 * (actuals - predictions) ** 2 / variance
 

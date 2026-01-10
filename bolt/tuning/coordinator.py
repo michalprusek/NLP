@@ -252,7 +252,7 @@ class CoordinateDescentTuner:
     def __init__(
         self,
         output_dir: Path,
-        gpu_ids: List[int] = [0, 1],
+        gpu_ids: Optional[List[int]] = None,
         phase_configs: Optional[Dict[TuningPhase, PhaseConfig]] = None,
         resume: bool = True,
         sampling_strategy: str = "sobol",  # "random", "grid", "sobol"
@@ -264,7 +264,7 @@ class CoordinateDescentTuner:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.gpu_ids = gpu_ids
+        self.gpu_ids = gpu_ids if gpu_ids is not None else [0, 1]
         self.phase_configs = phase_configs or DEFAULT_PHASE_CONFIGS
         self.resume = resume
         self.sampling_strategy = sampling_strategy

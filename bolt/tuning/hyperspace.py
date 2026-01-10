@@ -16,14 +16,16 @@ Supports:
 from __future__ import annotations
 
 import json
+import logging
 import math
-import random
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class ParameterType(Enum):
@@ -778,6 +780,11 @@ class HyperparameterSpace:
             from scipy.stats import qmc
         except ImportError:
             # Fall back to random sampling
+            logger.warning(
+                "scipy.stats.qmc not available - falling back to random sampling. "
+                "Sobol sequences provide better space coverage. "
+                "Install scipy for improved sampling: pip install scipy"
+            )
             return [
                 self.sample_random(tier, phase, seed=seed + i if seed else None)
                 for i in range(n_samples)

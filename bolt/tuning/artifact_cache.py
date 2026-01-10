@@ -92,7 +92,7 @@ def compute_config_hash(
         param_names: List of parameter names to include in hash
 
     Returns:
-        MD5 hash string (32 chars)
+        SHA-256 hash string (64 chars)
     """
     # Extract only relevant params
     relevant = {}
@@ -108,7 +108,7 @@ def compute_config_hash(
 
     # Sort for determinism
     config_str = json.dumps(relevant, sort_keys=True, default=str)
-    return hashlib.md5(config_str.encode()).hexdigest()
+    return hashlib.sha256(config_str.encode()).hexdigest()
 
 
 @dataclass
@@ -176,20 +176,31 @@ class ArtifactCache:
 
     def _load_index(self) -> Dict[str, Dict[str, CacheEntry]]:
         """Load cache index from disk."""
-        if self._index_path.exists():
-            try:
-                with open(self._index_path) as f:
-                    data = json.load(f)
-                return {
-                    artifact_type: {
-                        hash_key: CacheEntry.from_dict(entry)
-                        for hash_key, entry in entries.items()
-                    }
-                    for artifact_type, entries in data.items()
+        if not self._index_path.exists():
+            return {"vae": {}, "scorer": {}, "gp": {}}
+
+        try:
+            with open(self._index_path) as f:
+                data = json.load(f)
+            return {
+                artifact_type: {
+                    hash_key: CacheEntry.from_dict(entry)
+                    for hash_key, entry in entries.items()
                 }
-            except Exception as e:
-                logger.warning(f"Failed to load cache index: {e}")
-        return {"vae": {}, "scorer": {}, "gp": {}}
+                for artifact_type, entries in data.items()
+            }
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"Cache index is corrupted at {self._index_path}: {e}. "
+                "Consider deleting the cache directory to rebuild."
+            )
+            return {"vae": {}, "scorer": {}, "gp": {}}
+        except PermissionError as e:
+            logger.error(f"Permission denied reading cache index at {self._index_path}: {e}")
+            return {"vae": {}, "scorer": {}, "gp": {}}
+        except Exception as e:
+            logger.error(f"Unexpected error loading cache index: {e}")
+            return {"vae": {}, "scorer": {}, "gp": {}}
 
     def _save_index(self):
         """Save cache index to disk."""
@@ -262,7 +273,7 @@ class ArtifactCache:
         self._index["vae"][hash_key] = entry
         self._save_index()
 
-        logger.info(f"Cached VAE artifact: {hash_key[:8]}... (metrics: {metrics})")
+        logger.info(f"Cached VAE artifact: {hash_key} (metrics: {metrics})")
 
     def load_vae(
         self,
@@ -299,12 +310,20 @@ class ArtifactCache:
             self._save_index()
 
             self._hits += 1
-            logger.info(f"Loaded cached VAE: {hash_key[:8]}... (hit #{entry.accessed_count})")
+            logger.info(f"Loaded cached VAE: {hash_key} (hit #{entry.accessed_count})")
 
             return checkpoint["state_dict"], checkpoint["metrics"]
 
+        except (RuntimeError, pickle.UnpicklingError) as e:
+            logger.error(
+                f"Failed to load cached VAE checkpoint at {path}: {e}. "
+                "The checkpoint may be corrupted or incompatible. "
+                "Consider clearing the cache with cache.clear('vae')."
+            )
+            self._misses += 1
+            return None, None
         except Exception as e:
-            logger.warning(f"Failed to load cached VAE: {e}")
+            logger.error(f"Unexpected error loading VAE from {path}: {e}")
             self._misses += 1
             return None, None
 
@@ -363,7 +382,7 @@ class ArtifactCache:
         self._index["gp"][hash_key] = entry
         self._save_index()
 
-        logger.info(f"Cached GP artifact: {hash_key[:8]}... (metrics: {metrics})")
+        logger.info(f"Cached GP artifact: {hash_key} (metrics: {metrics})")
 
     def load_gp(
         self,
@@ -399,12 +418,20 @@ class ArtifactCache:
             self._save_index()
 
             self._hits += 1
-            logger.info(f"Loaded cached GP: {hash_key[:8]}... (hit #{entry.accessed_count})")
+            logger.info(f"Loaded cached GP: {hash_key} (hit #{entry.accessed_count})")
 
             return checkpoint["model"], checkpoint["metrics"]
 
+        except pickle.UnpicklingError as e:
+            logger.error(
+                f"Failed to unpickle cached GP at {path}: {e}. "
+                "The checkpoint may be corrupted. "
+                "Consider clearing the cache with cache.clear('gp')."
+            )
+            self._misses += 1
+            return None, None
         except Exception as e:
-            logger.warning(f"Failed to load cached GP: {e}")
+            logger.error(f"Unexpected error loading GP from {path}: {e}")
             self._misses += 1
             return None, None
 
@@ -469,5 +496,9 @@ class ArtifactCache:
         try:
             checkpoint = torch.load(best_entry.path, map_location="cpu")
             return checkpoint["state_dict"], checkpoint["metrics"], best_entry.hash_key
-        except Exception:
+        except Exception as e:
+            logger.error(
+                f"Failed to load best available VAE from {best_entry.path}: {e}. "
+                "The checkpoint may be corrupted."
+            )
             return None, None, None

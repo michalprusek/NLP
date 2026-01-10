@@ -918,6 +918,97 @@ uv run python -m bolt.run \
 
 ---
 
+## Hyperparameter Tuning System
+
+**Directory:** `bolt/tuning/`
+
+The tuning system provides automated hyperparameter optimization using Coordinate Descent with Bayesian Optimization guidance.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TuningCoordinator                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │ VAE Phase   │→ │ Scorer Phase│→ │ GP Phase    │→ Inference  │
+│  │ (Tier 1-3)  │  │ (Tier 1-3)  │  │ (Tier 1-3)  │             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+│         ↑                ↑                ↑                     │
+│         └────────────────┴────────────────┘                     │
+│              Cyclic Coordinate Descent                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   ParallelExecutor                              │
+│  ┌────────────┐  ┌────────────┐                                │
+│  │   GPU 0    │  │   GPU 1    │   Process isolation per trial  │
+│  │  Trial A   │  │  Trial B   │   Automatic retry on failure   │
+│  └────────────┘  └────────────┘   Checkpointing every N trials │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    ArtifactCache                                │
+│  SHA-256 hash-based caching: VAE, Scorer, GP checkpoints       │
+│  Skip redundant training when config unchanged                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+| File | Description |
+|------|-------------|
+| `coordinator.py` | Orchestrates phases and cyclic optimization |
+| `parallel_executor.py` | Multi-GPU trial execution with process isolation |
+| `trial_runner.py` | Single trial execution: train VAE/GP, compute metrics |
+| `hyperspace.py` | Parameter definitions with tier/phase organization |
+| `metrics.py` | 25+ metrics across VAE, Scorer, GP, Optimization |
+| `artifact_cache.py` | Hash-based caching to skip redundant training |
+| `pruning.py` | ASHA early stopping for unpromising trials |
+| `results_tracker.py` | JSON/CSV export and statistical analysis |
+| `run_tuning.py` | CLI entry point |
+
+### Tuning Phases
+
+1. **VAE Phase**: Tune VAE architecture and training (latent dims, beta, etc.)
+2. **Scorer Phase**: Tune CrossAttention Scorer (attention heads, hidden dim)
+3. **GP Phase**: Tune Gaussian Process (DKL, kernel params)
+4. **Inference Phase**: Tune BO acquisition (UCB beta, MMR lambda)
+
+### Parameter Tiers
+
+- **Tier 1 (CRITICAL)**: Highest impact, tune first (e.g., latent dims, beta)
+- **Tier 2 (IMPORTANT)**: Medium impact, tune after Tier 1 stable
+- **Tier 3 (FINETUNE)**: Low impact, final polish
+
+### Usage
+
+```bash
+# Run tuning with pre-evaluated Hyperband results
+uv run python -m bolt.tuning.run_tuning \
+    --output-dir bolt/tuning_results \
+    --gpu-ids 0 1 \
+    --resume
+
+# Quick test (reduced iterations)
+uv run python -m bolt.tuning.run_tuning \
+    --output-dir bolt/tuning_test \
+    --quick-test
+```
+
+### Key Metrics
+
+| Category | Metric | Target |
+|----------|--------|--------|
+| VAE | Retrieval Accuracy @ 8 | ≥ 0.85 |
+| VAE | Reconstruction Cosine | ≥ 0.90 |
+| Scorer | NDCG @ 8 | ≥ 0.70 |
+| GP | Spearman Correlation | ≥ 0.30 |
+| End-to-End | Best Error Rate | ≤ 0.15 |
+
+---
+
 ## Expected Results
 
 Based on instruction-only baseline:

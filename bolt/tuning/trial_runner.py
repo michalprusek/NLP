@@ -414,6 +414,11 @@ class TrialRunner:
                 raise ValueError(f"Unexpected instructions format: {type(instr_data)}")
         else:
             # Fallback to a minimal set of instructions
+            logger.warning(
+                f"Instructions file not found at {instructions_path}. "
+                "Using 3 generic fallback instructions. This may affect results quality. "
+                "Consider providing bolt/data/ape_instructions.json with 2000 APE instructions."
+            )
             instructions = [
                 "Let's solve this step by step.",
                 "Think carefully through this problem.",
@@ -553,12 +558,13 @@ class TrialRunner:
             if name in metric_map:
                 metric = metric_map[name]
                 # Create MetricResult from cached value
-                passed = metric.target.check_passed(value) if metric.target else True
+                passed = metric.target.is_passed(value) if metric.target else True
                 results[name] = MetricResult(
-                    metric=metric,
+                    name=name,
                     value=value,
-                    passed=passed,
                     target=metric.target,
+                    passed=passed,
+                    category=metric.category,
                 )
                 logger.info(f"{name}: {value:.4f} (cached, passed: {passed})")
 
@@ -610,6 +616,11 @@ class TrialRunner:
             else:
                 instructions = instr_data
         else:
+            logger.warning(
+                f"Instructions file not found at {instructions_path}. "
+                "Using 10 generic fallback instructions. This may affect results quality. "
+                "Consider providing bolt/data/ape_instructions.json with 2000 APE instructions."
+            )
             instructions = ["Let's solve this step by step."] * 10
         logger.info(f"Using {len(instructions)} instructions")
 
@@ -842,12 +853,13 @@ class TrialRunner:
         for name, value in cached_metrics.items():
             if name in metric_map:
                 metric = metric_map[name]
-                passed = metric.target.check_passed(value) if metric.target else True
+                passed = metric.target.is_passed(value) if metric.target else True
                 results[name] = MetricResult(
-                    metric=metric,
+                    name=name,
                     value=value,
-                    passed=passed,
                     target=metric.target,
+                    passed=passed,
+                    category=metric.category,
                 )
                 logger.info(f"{name}: {value:.4f} (cached, passed: {passed})")
 
@@ -903,6 +915,11 @@ class TrialRunner:
             else:
                 instructions = instr_data[:50]
         else:
+            logger.warning(
+                f"Instructions file not found at {instructions_path}. "
+                "Using 10 generic fallback instructions. This may affect results quality. "
+                "Consider providing bolt/data/ape_instructions.json with 2000 APE instructions."
+            )
             instructions = ["Let's solve this step by step."] * 10
 
         # Initialize VAE

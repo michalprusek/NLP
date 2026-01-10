@@ -177,7 +177,7 @@ class DualGPUExecutor:
     def __init__(
         self,
         output_dir: Path,
-        gpu_ids: List[int] = [0, 1],
+        gpu_ids: Optional[List[int]] = None,
         max_retries: int = 3,
         checkpoint_interval: int = 10,  # Checkpoint every N completed trials
         heartbeat_interval: int = 60,  # Heartbeat every N seconds
@@ -185,7 +185,7 @@ class DualGPUExecutor:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.gpu_ids = gpu_ids
+        self.gpu_ids = gpu_ids if gpu_ids is not None else [0, 1]
         self.max_retries = max_retries
         self.checkpoint_interval = checkpoint_interval
         self.heartbeat_interval = heartbeat_interval
@@ -368,6 +368,21 @@ class DualGPUExecutor:
                 self.gpus[gpu_id].status = GPUStatus.ERROR
                 self.gpus[gpu_id].last_error = str(e)
                 logger.error(f"GPU {gpu_id} error: {e}")
+
+        # Check if at least one GPU is available
+        available_gpus = [
+            gpu_id for gpu_id, info in self.gpus.items()
+            if info.status == GPUStatus.AVAILABLE
+        ]
+        if not available_gpus:
+            error_details = [
+                f"GPU {gpu_id}: {info.last_error or info.status.value}"
+                for gpu_id, info in self.gpus.items()
+            ]
+            raise RuntimeError(
+                f"No GPUs available for execution. Requested GPUs: {self.gpu_ids}. "
+                f"Details: {error_details}"
+            )
 
     def _get_available_gpu(self) -> Optional[int]:
         """Get an available GPU."""
