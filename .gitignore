@@ -160,3 +160,4 @@ lipo/vec2text_finetune/logs/
 # Experiment results
 results/
 bolt/results/
+bolt/tuning/test*
