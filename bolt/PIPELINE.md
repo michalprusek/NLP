@@ -404,43 +404,51 @@ The GP learns the mapping from latent space to error rate: `error = f(z_joint)`.
                     └─────────────────────────────────────┘
 ```
 
-**Deep Kernel Learning (DKL):**
-DKL transforms the latent space through a neural network before applying the kernel, allowing non-stationary relationships:
+**Deep Kernel Learning (DKL) - HbBoPs-Inspired Architecture:**
+
+DKL transforms the VAE latent space through a neural network (JointFeatureExtractor) before
+applying the kernel. Based on HbBoPs paper (Section 3.2) and DKL best practices (2-10D output):
 
 ```python
-# Feature extractor architecture
-# Single MLP processes joint latent, outputs features for both kernels
-feature_extractor = MLP(24 → 32 → 32 → 32)  # total_dim → hidden → hidden → 2*feature_dim
+# JointFeatureExtractor architecture (HbBoPs-inspired)
+# Maps 24D VAE latent → 10D joint representation
+feature_extractor = JointFeatureExtractor(
+    input_dim=24,    # VAE latent (16D inst + 8D ex)
+    hidden_dim=32,   # Single hidden layer
+    output_dim=10,   # Low-dim for GP (DKL best practice: 2-10D)
+)
+
+# Architecture: Lin(24, 32) → ReLU → Lin(32, 10)
 
 # Example forward pass:
 z_joint = [z_inst, z_ex]          # (batch, 24)
-features = feature_extractor(z_joint)  # (batch, 32)
-# features[:, 0:16]  → instruction features
-# features[:, 16:32] → exemplar features
+features = feature_extractor(z_joint)  # (batch, 10)
 
-# GP operates on transformed features
+# GP operates on 10D joint features with single Matern kernel
 k(z, z') = k_matern(φ(z), φ(z'))
 ```
 
-Note: With DKL enabled, both instruction and exemplar kernels operate on 16D transformed
-features (not the original 16D/8D latent dimensions).
+**Why 10D output?**
+- GPyTorch DKL examples use 2D output
+- HbBoPs paper uses 10D joint representation
+- Literature consensus: DKL feature extractors should compress to 2-10D
+- Single kernel on joint features is simpler than product kernel
 
-**Product Kernel Structure:**
-The kernel separates instruction and exemplar subspaces, allowing them to have different smoothness properties:
+**Single vs Product Kernel:**
 
 ```python
-# Without DKL (operates on raw latent):
-# Instruction kernel: dims 0-15 (16D)
-k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
-# Exemplar kernel: dims 16-23 (8D)
-k_ex = MaternKernel(nu=2.5, ard_num_dims=8, active_dims=[16:24])
-# Combined: k(z, z') = k_inst(z[0:16]) × k_ex(z[16:24])
+# HbBoPs-style (default, use_product_kernel=False):
+# Single Matern kernel on 10D joint features
+covar_module = ScaleKernel(
+    MaternKernel(nu=2.5, ard_num_dims=10)
+)
+# k(z, z') = k_matern(φ(z), φ(z'))
 
-# With DKL (operates on transformed features):
-# Both kernels use 16D features from feature_extractor
-k_inst = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[0:16])
-k_ex = MaternKernel(nu=2.5, ard_num_dims=16, active_dims=[16:32])
-# Combined: k(z, z') = k_inst(φ(z)[0:16]) × k_ex(φ(z)[16:32])
+# Legacy product kernel (use_product_kernel=True):
+# Splits 10D output into two halves for separate kernels
+k_inst = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=[0:5])
+k_ex = MaternKernel(nu=2.5, ard_num_dims=5, active_dims=[5:10])
+# k(z, z') = k_inst(φ(z)[0:5]) × k_ex(φ(z)[5:10])
 ```
 
 **Beta Smoothing (Heteroscedastic Noise):**
@@ -797,7 +805,7 @@ L_selection = -(weighted_ll.sum(dim=1) / K).mean()
 | Instructions | 2000 | APE-generated candidates |
 | Validation set | 1319 | GSM8K validation |
 | Inducing points | 4 | ISAB efficiency |
-| DKL feature dim | 16 | Deep Kernel output per component |
+| DKL output dim | 10 | JointFeatureExtractor output (HbBoPs-style) |
 
 ---
 
@@ -844,6 +852,12 @@ class BOLTConfig:
     gp_epochs: int = 10000
     gp_lr: float = 0.0025
     gp_patience: int = 100
+
+    # === Deep Kernel Learning (HbBoPs-inspired) ===
+    use_deep_kernel: bool = True   # Use DKL feature extractor
+    dkl_output_dim: int = 10       # JointFeatureExtractor output (HbBoPs: 10D)
+    dkl_hidden_dim: int = 32       # Hidden layer size
+    use_product_kernel: bool = False  # False=single kernel, True=legacy product
 
     # === Inference ===
     iterations: int = 50
@@ -965,7 +979,7 @@ The tuning system provides automated hyperparameter optimization using Coordinat
 | `hyperspace.py` | Parameter definitions with tier/phase organization |
 | `metrics.py` | 25+ metrics across VAE, Scorer, GP, Optimization |
 | `artifact_cache.py` | Hash-based caching to skip redundant training |
-| `pruning.py` | ASHA early stopping for unpromising trials |
+| `pruning.py` | ASHA early stopping with SharedASHAPruner for multi-process |
 | `results_tracker.py` | JSON/CSV export and statistical analysis |
 | `run_tuning.py` | CLI entry point |
 
@@ -996,6 +1010,136 @@ uv run python -m bolt.tuning.run_tuning \
     --output-dir bolt/tuning_test \
     --quick-test
 ```
+
+### ASHA Pruning (Asynchronous Successive Halving)
+
+**File:** `pruning.py`
+
+ASHA provides early stopping of unpromising trials during VAE training, saving 30-50% GPU time by killing bottom-performing trials at checkpoints.
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │           ASHA Pruning                  │
+                    ├─────────────────────────────────────────┤
+                    │                                         │
+                    │  Rungs: [100, 500, 1000, 2500, 5000]    │
+                    │  Reduction Factor: 2 (kill bottom 50%)  │
+                    │  Direction: maximize (cosine_mean)      │
+                    │  Min trials for pruning: 3              │
+                    │                                         │
+                    │  At each rung epoch:                    │
+                    │    1. Report metric to shared state     │
+                    │    2. Compare to other trials at rung   │
+                    │    3. If in bottom 50% → PRUNE          │
+                    │                                         │
+                    └─────────────────────────────────────────┘
+```
+
+**Inter-Process Communication:**
+
+Since trials run in separate processes (ProcessPoolExecutor), ASHA uses file-based shared state with atomic locking:
+
+```python
+class SharedASHAPruner:
+    """File-based shared state for multi-process ASHA."""
+
+    def __init__(self, state_path: Path):
+        self.state_path = state_path
+        # State structure: {"reports": {}, "pruned": [], "completed": [], "decisions": []}
+
+    def _atomic_update(self, update_fn):
+        """Atomically read, update, write state with fcntl.LOCK_EX."""
+        fd = os.open(str(self.state_path), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)  # Exclusive lock
+        try:
+            state = json.load(...)
+            state = update_fn(state)
+            json.dump(state, ...)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def should_stop(self, trial_id, step, metric_value, metric_name) -> bool:
+        """Report metric and check if trial should be pruned."""
+```
+
+**Integration with VAE Training:**
+
+The pruner integrates via `epoch_callback` parameter in `VAETrainer.train()`:
+
+```python
+# In trial_runner.py
+def _run_vae_phase(self):
+    # Create pruning callback
+    def pruning_callback(epoch: int, metrics: Dict[str, float]) -> bool:
+        metric_value = metrics.get("cosine_mean", 0.0)
+        should_stop = self.pruner.should_stop(
+            self.trial_id, epoch, metric_value, metric_name="cosine_mean"
+        )
+        if should_stop:
+            logger.info(f"Trial {self.trial_id} PRUNED at epoch {epoch}")
+        return should_stop
+
+    # Train with callback
+    trainer.train(samples=training_samples, epoch_callback=pruning_callback)
+
+# In training.py (VAETrainer.train)
+for epoch in range(epochs):
+    train_step()
+
+    # ASHA pruning callback
+    if epoch_callback is not None:
+        should_stop = epoch_callback(epoch + 1, epoch_losses)
+        if should_stop:
+            print(f"PRUNED at epoch {epoch + 1} by ASHA")
+            break
+```
+
+**Coordinator Integration:**
+
+```python
+# In coordinator.py
+class CoordinateDescentTuner:
+    def __init__(self, ..., use_asha_pruning: bool = True):
+        self.pruner_state_path = output_dir / "asha_pruner_state.json"
+
+    def run(self):
+        # Reset pruner state at start of each cycle
+        if self.pruner_state_path.exists():
+            self.pruner_state_path.unlink()
+
+        # Pass pruner path to executor
+        self.executor = DualGPUExecutor(
+            ...,
+            pruner_state_path=self.pruner_state_path,
+        )
+```
+
+**State File Structure:**
+
+```json
+{
+  "reports": {
+    "trial_id_1": [
+      {"step": 100, "value": 0.75, "metric_name": "cosine_mean", "timestamp": ...},
+      {"step": 500, "value": 0.82, "metric_name": "cosine_mean", "timestamp": ...}
+    ],
+    "trial_id_2": [...]
+  },
+  "pruned": ["trial_id_3", "trial_id_5"],
+  "completed": ["trial_id_1", "trial_id_2"],
+  "decisions": [
+    {"trial_id": "trial_id_3", "step": 500, "decision": "pruned", "percentile": 0.25}
+  ]
+}
+```
+
+**Expected Savings:**
+
+| Scenario | Without ASHA | With ASHA | Savings |
+|----------|--------------|-----------|---------|
+| 50 VAE trials | 50 × 50k epochs | ~25 × 50k + 25 × avg 1.5k | ~40% |
+| Bad beta config | 50k epochs wasted | Killed at epoch 500 | 99% |
 
 ### Key Metrics
 

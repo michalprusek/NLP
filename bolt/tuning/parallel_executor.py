@@ -126,6 +126,7 @@ def _run_trial_in_process(
     phase: str,
     output_dir: str,
     gpu_id: int,
+    pruner_state_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run a trial in a separate process.
@@ -147,6 +148,7 @@ def _run_trial_in_process(
             phase=phase,
             output_dir=output_dir,
             gpu_id=gpu_id,
+            pruner_state_path=pruner_state_path,
         )
 
         return result
@@ -181,6 +183,7 @@ class DualGPUExecutor:
         max_retries: int = 3,
         checkpoint_interval: int = 10,  # Checkpoint every N completed trials
         heartbeat_interval: int = 60,  # Heartbeat every N seconds
+        pruner_state_path: Optional[Path] = None,  # Shared ASHA pruner state file
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +192,7 @@ class DualGPUExecutor:
         self.max_retries = max_retries
         self.checkpoint_interval = checkpoint_interval
         self.heartbeat_interval = heartbeat_interval
+        self.pruner_state_path = str(pruner_state_path) if pruner_state_path else None
 
         # GPU tracking
         self.gpus: Dict[int, GPUInfo] = {
@@ -425,6 +429,7 @@ class DualGPUExecutor:
             task.phase.value,
             str(self.output_dir),
             gpu_id,
+            self.pruner_state_path,  # Shared ASHA pruner state
         )
 
         self._futures[future] = (task.trial_id, gpu_id)

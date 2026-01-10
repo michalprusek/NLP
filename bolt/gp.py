@@ -1,12 +1,20 @@
 """Gaussian Process for joint instruction-exemplar latent space.
 
-Uses structure-aware product kernel:
-    k(x, x') = k_inst(x_inst, x'_inst) × k_ex(x_ex, x'_ex)
+Supports two DKL architectures:
 
-This allows different smoothness in instruction vs exemplar subspaces.
+1. **Product Kernel DKL** (legacy):
+   k(x, x') = k_inst(x_inst, x'_inst) × k_ex(x_ex, x'_ex)
+   Uses separate kernels for instruction and exemplar features.
 
-Optional Deep Kernel Learning (DKL):
-    z → FeatureExtractor(z) → Kernel → GP
+2. **Joint Encoder DKL** (HbBoPs-inspired, default):
+   z → JointFeatureExtractor(z) → SingleKernel → GP
+   Maps 24D VAE latent to 10D joint representation with single kernel.
+   Based on HbBoPs paper Section 3.2.
+
+The joint encoder architecture is preferred as:
+- DKL literature shows 2-10D output is optimal for feature extractors
+- Single kernel on joint features is simpler and matches HbBoPs
+- Avoids ad-hoc product kernel splitting
 """
 
 from typing import Optional, Tuple
@@ -71,6 +79,38 @@ def _squeeze_batch_dim(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
+class JointFeatureExtractor(nn.Module):
+    """HbBoPs-inspired joint encoder for DKL.
+
+    Maps VAE latent space to low-dimensional joint representation for GP kernel.
+    Architecture based on HbBoPs paper Section 3.2:
+        ϕ(z): Lin(24, 32) → ReLU → Lin(32, 10)
+
+    The 10D output is within the DKL best-practice range (2-10D) and allows
+    a single kernel to operate on joint instruction-exemplar features.
+    """
+
+    def __init__(
+        self,
+        input_dim: int = 24,
+        hidden_dim: int = 32,
+        output_dim: int = 10,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Map VAE latent to joint feature space."""
+        return self.net(x)
+
+
 class JointPromptGP(ExactGP, GPyTorchModel):
     """GP on joint instruction-exemplar latent space.
 
@@ -109,13 +149,17 @@ class JointPromptGP(ExactGP, GPyTorchModel):
 
 
 class DeepKernelGP(ExactGP, GPyTorchModel):
-    """GP with Deep Kernel Learning (DKL).
+    """GP with Deep Kernel Learning (DKL) using joint encoder.
 
-    Adds a learned feature extractor before the kernel:
-        z -> FeatureExtractor(z) -> Kernel -> GP prediction
+    HbBoPs-inspired architecture:
+        z (24D VAE latent) → JointFeatureExtractor → 10D → SingleKernel → GP
 
-    The feature extractor is trained jointly with the GP hyperparameters
-    by maximizing the marginal log likelihood.
+    The joint encoder maps the full VAE latent to a low-dimensional space
+    where a single Matern kernel operates. This follows DKL best practices
+    (2-10D output) and HbBoPs paper design.
+
+    Legacy mode (use_product_kernel=True) uses separate kernels on
+    instruction and exemplar features for backwards compatibility.
     """
 
     _num_outputs = 1
@@ -127,34 +171,48 @@ class DeepKernelGP(ExactGP, GPyTorchModel):
         likelihood: gpytorch.likelihoods.Likelihood,
         instruction_dim: int = 16,
         exemplar_dim: int = 16,
-        feature_dim: int = 16,
-        hidden_dim: int = 32,
+        dkl_output_dim: int = 10,
+        dkl_hidden_dim: int = 32,
+        use_product_kernel: bool = False,
     ):
         train_y = train_y.squeeze(-1) if train_y.dim() > 1 else train_y
         super().__init__(train_x, train_y, likelihood)
 
         self.instruction_dim = instruction_dim
         self.exemplar_dim = exemplar_dim
-        self.feature_dim = feature_dim
+        self.dkl_output_dim = dkl_output_dim
+        self.use_product_kernel = use_product_kernel
         total_dim = instruction_dim + exemplar_dim
 
-        # Maps total_dim -> feature_dim * 2 (for inst + ex features)
-        self.feature_extractor = nn.Sequential(
-            nn.Linear(total_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, feature_dim * 2),
+        # Joint feature extractor: 24D → 10D
+        self.feature_extractor = JointFeatureExtractor(
+            input_dim=total_dim,
+            hidden_dim=dkl_hidden_dim,
+            output_dim=dkl_output_dim,
         )
 
         self.mean_module = ZeroMean()
 
-        # Kernels operate on learned features with different prior
-        self.instruction_kernel, self.exemplar_kernel, self.covar_module = (
-            _create_product_kernel(
-                feature_dim, feature_dim, lengthscale_prior=GammaPrior(3.0, 6.0)
+        if use_product_kernel:
+            # Legacy: product kernel on split features (for backwards compat)
+            # Splits dkl_output_dim into two halves for inst/ex kernels
+            half_dim = dkl_output_dim // 2
+            self.instruction_kernel, self.exemplar_kernel, self.covar_module = (
+                _create_product_kernel(
+                    half_dim, dkl_output_dim - half_dim,
+                    lengthscale_prior=GammaPrior(3.0, 6.0)
+                )
             )
-        )
+        else:
+            # HbBoPs-style: single Matern kernel on joint 10D features
+            self.covar_module = ScaleKernel(
+                MaternKernel(
+                    nu=2.5,
+                    ard_num_dims=dkl_output_dim,
+                    lengthscale_prior=GammaPrior(3.0, 6.0),
+                ),
+                outputscale_prior=GammaPrior(2.0, 2.0),
+            )
 
     def forward(self, x: torch.Tensor) -> MultivariateNormal:
         """Forward pass through DKL GP."""
@@ -183,8 +241,9 @@ class GPWithEI:
         exemplar_dim: int = 16,
         device: str = "cuda",
         use_deep_kernel: bool = True,
-        dkl_feature_dim: int = 16,
+        dkl_output_dim: int = 10,
         dkl_hidden_dim: int = 32,
+        use_product_kernel: bool = False,
     ):
         self.instruction_dim = instruction_dim
         self.exemplar_dim = exemplar_dim
@@ -193,8 +252,9 @@ class GPWithEI:
 
         # Deep Kernel Learning parameters
         self.use_deep_kernel = use_deep_kernel
-        self.dkl_feature_dim = dkl_feature_dim
+        self.dkl_output_dim = dkl_output_dim
         self.dkl_hidden_dim = dkl_hidden_dim
+        self.use_product_kernel = use_product_kernel
 
         self.gp_model: Optional[ExactGP] = None  # JointPromptGP or DeepKernelGP
         self.likelihood: Optional[gpytorch.likelihoods.Likelihood] = None
@@ -245,8 +305,9 @@ class GPWithEI:
                 likelihood=self.likelihood,
                 instruction_dim=self.instruction_dim,
                 exemplar_dim=self.exemplar_dim,
-                feature_dim=self.dkl_feature_dim,
-                hidden_dim=self.dkl_hidden_dim,
+                dkl_output_dim=self.dkl_output_dim,
+                dkl_hidden_dim=self.dkl_hidden_dim,
+                use_product_kernel=self.use_product_kernel,
             ).to(self.device)
 
         return JointPromptGP(
@@ -411,8 +472,30 @@ class GPWithEI:
                 sorted_dims = torch.argsort(all_ls)[:5]
                 self.training_stats["top_5_relevant_dims"] = sorted_dims.tolist()
                 self.training_stats["top_5_lengthscales"] = all_ls[sorted_dims].tolist()
+            elif hasattr(covar, "base_kernel"):
+                # Single kernel case (HbBoPs-style joint encoder)
+                base_kernel = covar.base_kernel
+                ls = base_kernel.lengthscale.detach().cpu().squeeze()
+
+                self.training_stats = {
+                    "epochs_trained": epochs_trained,
+                    "final_loss": float(final_loss),
+                    "early_stopped": early_stopped,
+                    "num_samples": num_samples,
+                    "kernel_type": "joint_single",
+                    "joint_lengthscale_mean": float(ls.mean()),
+                    "joint_lengthscale_min": float(ls.min()),
+                    "joint_lengthscale_max": float(ls.max()),
+                    "outputscale": float(covar.outputscale.detach().cpu().item()),
+                    "loss_history": loss_history[::max(1, len(loss_history) // 100)],
+                }
+
+                # Find most relevant dims (smallest lengthscale = most important)
+                sorted_dims = torch.argsort(ls)[:5]
+                self.training_stats["top_5_relevant_dims"] = sorted_dims.tolist()
+                self.training_stats["top_5_lengthscales"] = ls[sorted_dims].tolist()
             else:
-                # Single kernel case
+                # Fallback case
                 self.training_stats = {
                     "epochs_trained": epochs_trained,
                     "final_loss": float(final_loss),

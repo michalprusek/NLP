@@ -411,8 +411,9 @@ class BOLTHyperband:
             exemplar_dim=self.config.exemplar_latent_dim,
             device=self.device,
             use_deep_kernel=self.config.use_deep_kernel,
-            dkl_feature_dim=self.config.dkl_feature_dim,
+            dkl_output_dim=self.config.dkl_output_dim,
             dkl_hidden_dim=self.config.dkl_hidden_dim,
+            use_product_kernel=self.config.use_product_kernel,
         )
 
         # Override noise computation with our Beta variance

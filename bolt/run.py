@@ -183,8 +183,9 @@ def train_gp_from_design_data(
         exemplar_dim=config.exemplar_latent_dim,
         device=device,
         use_deep_kernel=config.use_deep_kernel,
-        dkl_feature_dim=config.dkl_feature_dim,
+        dkl_output_dim=config.dkl_output_dim,
         dkl_hidden_dim=config.dkl_hidden_dim,
+        use_product_kernel=config.use_product_kernel,
     )
     gp.fit(
         X=X,

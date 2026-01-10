@@ -84,10 +84,11 @@ class BOLTConfig:
     gp_lr: float = 0.0025
     gp_patience: int = 100
 
-    # === Deep Kernel Learning ===
+    # === Deep Kernel Learning (HbBoPs-inspired) ===
     use_deep_kernel: bool = True  # Use DKL feature extractor before kernel
-    dkl_feature_dim: int = 16  # Output dim of feature extractor (per component)
+    dkl_output_dim: int = 10  # Output dim of joint feature extractor (HbBoPs: 10D)
     dkl_hidden_dim: int = 32  # Hidden layer size in feature extractor
+    use_product_kernel: bool = False  # False=single kernel (HbBoPs), True=legacy product kernel
 
     # === Inference ===
     iterations: int = 50  # BO iterations
