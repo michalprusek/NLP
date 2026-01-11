@@ -481,13 +481,45 @@ class VAETrainer:
             exemplar_embs: (batch, K, 768) - K=8 fixed
             exemplar_mask: (batch, K) - all True for K=8
             target_exemplar_mask: (batch, N_pool) - binary mask of good exemplars
+
+        Raises:
+            ValueError: If samples is empty or contains invalid indices
         """
+        if not samples:
+            raise ValueError("Cannot prepare batch from empty sample list")
+
         batch_size = len(samples)
         K = self.config.num_exemplars  # Fixed K=8
         device = self.pool_embeddings.device
+        n_instructions = self.instruction_embeddings.shape[0]
+        n_pool = self.pool_embeddings.shape[0]
+
+        # Validate instruction IDs are in bounds
+        inst_ids_list = [s.instruction_id for s in samples]
+        invalid_inst = [
+            (i, sid) for i, sid in enumerate(inst_ids_list)
+            if sid < 0 or sid >= n_instructions
+        ]
+        if invalid_inst:
+            raise ValueError(
+                f"Invalid instruction_id(s) in batch: {invalid_inst[:5]}"
+                f"{'...' if len(invalid_inst) > 5 else ''}. "
+                f"Valid range: [0, {n_instructions - 1}]. "
+                f"This may indicate a cache/data mismatch - try clearing the embedding cache."
+            )
+
+        # Validate exemplar IDs are in bounds
+        for i, sample in enumerate(samples):
+            invalid_ex = [eid for eid in sample.exemplar_ids if eid < 0 or eid >= n_pool]
+            if invalid_ex:
+                raise ValueError(
+                    f"Invalid exemplar_id(s) in sample {i} (instruction={sample.instruction_id}): "
+                    f"{invalid_ex[:5]}{'...' if len(invalid_ex) > 5 else ''}. "
+                    f"Valid range: [0, {n_pool - 1}]."
+                )
 
         # Vectorized instruction embeddings
-        inst_ids = torch.tensor([s.instruction_id for s in samples], dtype=torch.long)
+        inst_ids = torch.tensor(inst_ids_list, dtype=torch.long)
         instruction_embs = self.instruction_embeddings[inst_ids]
 
         # Vectorized exemplar embeddings - build index tensor for advanced indexing
@@ -510,7 +542,6 @@ class VAETrainer:
 
         # Vectorized target exemplar mask using scatter
         target_exemplar_mask = torch.zeros(batch_size, self.n_pool, device=device)
-        batch_indices = torch.arange(batch_size, device=device).unsqueeze(1).expand(-1, K)
         target_exemplar_mask.scatter_(1, exemplar_idx, 1.0)
 
         # Override with selection_targets where available

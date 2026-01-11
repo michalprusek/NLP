@@ -384,9 +384,9 @@ class CrossAttentionScorer(nn.Module):
 class StructureAwareVAE(nn.Module):
     """Simplified VAE for instruction + exemplar optimization.
 
-    Latent Space (24D total, configurable):
+    Latent Space (32D total, configurable):
         - z_instruction (16D): Instruction content
-        - z_exemplar (8D): Exemplar set representation
+        - z_exemplar (16D): Exemplar set representation (increased for K×768 capacity)
 
     Architecture features:
         - Set Transformer for permutation-invariant exemplar encoding

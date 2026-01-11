@@ -945,9 +945,16 @@ class ScorerConsistencyMetric(BaseMetric):
 
     This metric samples different exemplar sets for the same instruction,
     encodes them, and checks if scorer selections are consistent.
+
+    Interpretation:
+        - High values (>0.5): Scorer selections are instruction-dependent, not random
+        - Low values (<0.3): Selections may be dominated by exemplar input, not instruction
+        - Note: Perfect consistency (1.0) could indicate mode collapse
     """
 
     def __init__(self, k: int = 8):
+        if k <= 0:
+            raise ValueError(f"k must be positive, got {k}")
         self.k = k
         super().__init__(
             name="e2e_scorer_consistency",
@@ -975,7 +982,22 @@ class ScorerConsistencyMetric(BaseMetric):
         4. Measure Jaccard similarity between selections
 
         Returns mean Jaccard similarity across instructions.
+
+        Raises:
+            ValueError: If n_samples_per_inst < 2 or embeddings are empty/too small
         """
+        # Validate inputs
+        if n_samples_per_inst < 2:
+            raise ValueError(
+                f"n_samples_per_inst must be >= 2 for pairwise comparison, got {n_samples_per_inst}"
+            )
+        if pool_embeddings.shape[0] < self.k:
+            raise ValueError(
+                f"Pool size ({pool_embeddings.shape[0]}) must be >= k ({self.k})"
+            )
+        if instruction_embeddings.shape[0] == 0:
+            raise ValueError("instruction_embeddings cannot be empty")
+
         pool_embeddings = F.normalize(pool_embeddings, dim=-1)
         instruction_embeddings = F.normalize(instruction_embeddings, dim=-1)
         n_pool = pool_embeddings.shape[0]

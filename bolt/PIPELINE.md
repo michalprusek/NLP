@@ -418,10 +418,10 @@ feature_extractor = JointFeatureExtractor(
     output_dim=10,   # Low-dim for GP (DKL best practice: 2-10D)
 )
 
-# Architecture: Lin(24, 32) → ReLU → Lin(32, 10)
+# Architecture: Lin(32, 32) → ReLU → Lin(32, 10)
 
 # Example forward pass:
-z_joint = [z_inst, z_ex]          # (batch, 24)
+z_joint = [z_inst, z_ex]          # (batch, 32)
 features = feature_extractor(z_joint)  # (batch, 10)
 
 # GP operates on 10D joint features with single Matern kernel
@@ -840,7 +840,7 @@ class BOLTConfig:
     vae_epochs: int = 50000
     vae_annealing_epochs: int = 2500  # 5% warmup
     vae_lr: float = 0.0006
-    vae_batch_size: int = 64
+    vae_batch_size: int = 512  # Optimized for L40S (48GB VRAM)
     vae_patience: int = 1000
 
     # === Hyperband ===
@@ -1025,7 +1025,7 @@ ASHA provides early stopping of unpromising trials during VAE training, saving 3
                     │  Rungs: [100, 500, 1000, 2500, 5000, 10000, 25000] │
                     │  Reduction Factor: 2 (kill bottom 50%)             │
                     │  Direction: maximize (composite_score)             │
-                    │  Min trials for pruning: 3                         │
+                    │  Min trials for pruning: 2 (matches 2-GPU setup)   │
                     │                                                    │
                     │  At each rung epoch:                               │
                     │    1. Report metric to shared state                │
