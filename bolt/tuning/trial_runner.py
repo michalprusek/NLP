@@ -927,8 +927,14 @@ class TrialRunner:
             with open(gp_path, "wb") as f:
                 pickle.dump(gp, f)
             self.state.gp_checkpoint_path = str(gp_path)
-        except Exception as e:
-            logger.warning(f"Could not save GP checkpoint: {e}")
+        except OSError as e:
+            import errno
+            if e.errno == errno.ENOSPC:
+                logger.error(f"DISK FULL: Cannot save GP checkpoint to {gp_path}.")
+            else:
+                logger.warning(f"Could not save GP checkpoint ({type(e).__name__}): {e}")
+        except (pickle.PicklingError, TypeError) as e:
+            logger.warning(f"GP checkpoint serialization failed ({type(e).__name__}): {e}")
         self.state.gp_trained = True
 
         # Collect metrics
@@ -1114,8 +1120,16 @@ class TrialRunner:
                 with open(gp_checkpoint, "rb") as f:
                     gp = pickle.load(f)
                 logger.info(f"Loaded GP from checkpoint: {gp_checkpoint}")
-            except Exception as e:
-                logger.warning(f"Could not load GP checkpoint: {e}")
+            except (FileNotFoundError, PermissionError) as e:
+                logger.warning(f"GP checkpoint inaccessible ({type(e).__name__}): {e}")
+            except (pickle.UnpicklingError, AttributeError, ModuleNotFoundError) as e:
+                logger.warning(
+                    f"GP checkpoint incompatible ({type(e).__name__}): {e}. "
+                    f"May need retraining due to code changes."
+                )
+            except MemoryError:
+                logger.error("Out of memory loading GP checkpoint. Cannot proceed.")
+                raise
 
         # Run simplified inference evaluation
         # Instead of full BOLT run, we evaluate the optimization quality
@@ -1167,10 +1181,16 @@ class TrialRunner:
                         error = error + random.gauss(0, pred_std.item() * 0.3)
                         error = max(0.0, min(1.0, error))  # Clamp to valid range
                         logger.debug(f"Iteration {iteration}: GP prediction, error={error:.4f} (std={pred_std.item():.4f})")
-                    except Exception as e:
-                        # Fallback to random error if GP fails
+                    except torch.cuda.OutOfMemoryError:
+                        logger.error("CUDA OOM during GP prediction. Cannot proceed.")
+                        raise
+                    except (RuntimeError, ValueError) as e:
+                        # Fallback to random error if GP fails - log at WARNING level
                         error = random.uniform(0.1, 0.4)
-                        logger.debug(f"Iteration {iteration}: GP failed ({e}), using random error={error:.4f}")
+                        logger.warning(
+                            f"Iteration {iteration}: GP prediction failed ({type(e).__name__}: {e}), "
+                            f"using random fallback error={error:.4f}. This may indicate GP model issues."
+                        )
 
             error_history.append(error)
             total_llm_calls += 1
@@ -1443,8 +1463,14 @@ class TrialRunner:
                 vae.load_state_dict(cached_state)
                 logger.info("Loaded VAE from artifact cache for design data encoding")
                 return vae
-            except Exception as e:
-                logger.warning(f"Failed to load cached VAE state: {e}")
+            except RuntimeError as e:
+                # Shape mismatch indicates config incompatibility
+                logger.warning(
+                    f"Cached VAE state incompatible with current config ({type(e).__name__}): {e}. "
+                    f"This may indicate latent dimension changes."
+                )
+            except (KeyError, TypeError) as e:
+                logger.warning(f"Cached VAE state has missing/invalid keys: {e}")
 
         # Try loading from VAE checkpoint in trial directory
         vae_checkpoint = self.trial_dir / "vae_checkpoint.pt"
@@ -1453,8 +1479,13 @@ class TrialRunner:
                 vae.load_state_dict(torch.load(vae_checkpoint, map_location="cuda:0"))
                 logger.info(f"Loaded VAE from checkpoint: {vae_checkpoint}")
                 return vae
-            except Exception as e:
-                logger.warning(f"Failed to load VAE checkpoint: {e}")
+            except torch.cuda.OutOfMemoryError:
+                logger.error("CUDA OOM loading VAE checkpoint. Cannot proceed.")
+                raise
+            except RuntimeError as e:
+                logger.warning(f"VAE checkpoint incompatible ({type(e).__name__}): {e}")
+            except (KeyError, TypeError) as e:
+                logger.warning(f"VAE checkpoint has invalid structure: {e}")
 
         # Try finding any VAE checkpoint in output directory
         for trial_dir in self.output_dir.glob("vae_*"):
@@ -1464,7 +1495,11 @@ class TrialRunner:
                     vae.load_state_dict(torch.load(checkpoint, map_location="cuda:0"))
                     logger.info(f"Loaded VAE from sibling trial: {checkpoint}")
                     return vae
-                except Exception as e:
+                except torch.cuda.OutOfMemoryError:
+                    logger.error("CUDA OOM loading VAE checkpoint. Cannot proceed.")
+                    raise
+                except (RuntimeError, KeyError, TypeError) as e:
+                    logger.debug(f"Skipping incompatible checkpoint {checkpoint}: {e}")
                     continue  # Try next one
 
         # No trained VAE available - return freshly initialized VAE
@@ -1490,8 +1525,17 @@ class TrialRunner:
         try:
             with open(hyperband_path, 'r') as f:
                 hyperband_results = json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load Hyperband results: {e}")
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Hyperband results file corrupted (line {e.lineno}, col {e.colno}): {e.msg}. "
+                f"Inference will use random error estimates."
+            )
+            return {}
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Cannot read Hyperband results ({type(e).__name__}): {e}")
+            return {}
+        except UnicodeDecodeError as e:
+            logger.warning(f"Hyperband results file has encoding issues: {e}")
             return {}
 
         lookup = {}
