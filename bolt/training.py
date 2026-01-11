@@ -434,11 +434,13 @@ class VAETrainer:
     def __init__(
         self,
         vae: StructureAwareVAE,
-        gtr_encoder: GTREncoder,
+        gtr_encoder: Optional[GTREncoder],
         qa_pool: List[QAPair],
         instructions: List[str],
         config: BOLTConfig,
         selection_targets: Optional[Dict[int, torch.Tensor]] = None,
+        pool_embeddings: Optional[torch.Tensor] = None,
+        instruction_embeddings: Optional[torch.Tensor] = None,
     ):
         self.vae = vae
         self.gtr_encoder = gtr_encoder
@@ -450,58 +452,102 @@ class VAETrainer:
         # Training stats (populated after train())
         self.training_stats: dict = {}
 
-        # Pre-compute embeddings
-        print("Pre-computing pool embeddings...")
-        pool_texts = [qa.format() for qa in qa_pool]
-        self.pool_embeddings = self.gtr_encoder.encode(pool_texts).clone().detach()
-        self.n_pool = len(qa_pool)
+        # Use pre-computed embeddings if provided (much faster for hyperparameter tuning)
+        if pool_embeddings is not None and instruction_embeddings is not None:
+            print("Using pre-computed embeddings (from cache)")
+            self.pool_embeddings = pool_embeddings
+            self.instruction_embeddings = instruction_embeddings
+            self.n_pool = pool_embeddings.shape[0]
+        else:
+            # Compute embeddings (slower, but works standalone)
+            if gtr_encoder is None:
+                raise ValueError("Either provide gtr_encoder or pre-computed embeddings")
+            print("Pre-computing pool embeddings...")
+            pool_texts = [qa.format() for qa in qa_pool]
+            self.pool_embeddings = gtr_encoder.encode(pool_texts).clone().detach()
+            self.n_pool = len(qa_pool)
 
-        print("Pre-computing instruction embeddings...")
-        self.instruction_embeddings = self.gtr_encoder.encode(instructions).clone().detach()
+            print("Pre-computing instruction embeddings...")
+            self.instruction_embeddings = gtr_encoder.encode(instructions).clone().detach()
 
     def prepare_batch(
         self,
         samples: List[TrainingSample],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Prepare batch tensors from samples.
+        """Prepare batch tensors from samples (vectorized for GPU efficiency).
 
         Returns:
             instruction_embs: (batch, 768)
             exemplar_embs: (batch, K, 768) - K=8 fixed
             exemplar_mask: (batch, K) - all True for K=8
             target_exemplar_mask: (batch, N_pool) - binary mask of good exemplars
+
+        Raises:
+            ValueError: If samples is empty or contains invalid indices
         """
+        if not samples:
+            raise ValueError("Cannot prepare batch from empty sample list")
+
         batch_size = len(samples)
         K = self.config.num_exemplars  # Fixed K=8
         device = self.pool_embeddings.device
+        n_instructions = self.instruction_embeddings.shape[0]
+        n_pool = self.pool_embeddings.shape[0]
 
-        # Instruction embeddings
-        inst_ids = [s.instruction_id for s in samples]
+        # Validate instruction IDs are in bounds
+        inst_ids_list = [s.instruction_id for s in samples]
+        invalid_inst = [
+            (i, sid) for i, sid in enumerate(inst_ids_list)
+            if sid < 0 or sid >= n_instructions
+        ]
+        if invalid_inst:
+            raise ValueError(
+                f"Invalid instruction_id(s) in batch: {invalid_inst[:5]}"
+                f"{'...' if len(invalid_inst) > 5 else ''}. "
+                f"Valid range: [0, {n_instructions - 1}]. "
+                f"This may indicate a cache/data mismatch - try clearing the embedding cache."
+            )
+
+        # Validate exemplar IDs are in bounds
+        for i, sample in enumerate(samples):
+            invalid_ex = [eid for eid in sample.exemplar_ids if eid < 0 or eid >= n_pool]
+            if invalid_ex:
+                raise ValueError(
+                    f"Invalid exemplar_id(s) in sample {i} (instruction={sample.instruction_id}): "
+                    f"{invalid_ex[:5]}{'...' if len(invalid_ex) > 5 else ''}. "
+                    f"Valid range: [0, {n_pool - 1}]."
+                )
+
+        # Vectorized instruction embeddings
+        inst_ids = torch.tensor(inst_ids_list, dtype=torch.long)
         instruction_embs = self.instruction_embeddings[inst_ids]
 
-        # Exemplar embeddings (fixed K=8)
-        exemplar_embs = torch.zeros(batch_size, K, 768, device=device)
-        exemplar_mask = torch.ones(batch_size, K, dtype=torch.bool, device=device)
+        # Vectorized exemplar embeddings - build index tensor for advanced indexing
+        # Each sample has exactly K exemplars (padded if needed)
+        exemplar_ids_list = [s.exemplar_ids[:K] for s in samples]
+        # Pad shorter lists (shouldn't happen with fixed K, but safe)
+        exemplar_ids_padded = [
+            ids + [0] * (K - len(ids)) if len(ids) < K else ids
+            for ids in exemplar_ids_list
+        ]
+        exemplar_idx = torch.tensor(exemplar_ids_padded, dtype=torch.long, device=device)
+        # Advanced indexing: (batch, K) -> (batch, K, 768)
+        exemplar_embs = self.pool_embeddings[exemplar_idx]
 
-        # Target exemplar masks for selection loss
+        # Vectorized exemplar mask
+        num_exemplars = torch.tensor([s.num_exemplars for s in samples], device=device)
+        # Create mask: True for valid exemplars, False for padding
+        position_idx = torch.arange(K, device=device).unsqueeze(0)  # (1, K)
+        exemplar_mask = position_idx < num_exemplars.unsqueeze(1)  # (batch, K)
+
+        # Vectorized target exemplar mask using scatter
         target_exemplar_mask = torch.zeros(batch_size, self.n_pool, device=device)
+        target_exemplar_mask.scatter_(1, exemplar_idx, 1.0)
 
+        # Override with selection_targets where available
         for b, sample in enumerate(samples):
-            # Fill exemplar embeddings (pad with zeros if < K)
-            for s, pool_idx in enumerate(sample.exemplar_ids[:K]):
-                exemplar_embs[b, s] = self.pool_embeddings[pool_idx]
-
-            # If sample has fewer than K exemplars, mask out padding
-            if sample.num_exemplars < K:
-                exemplar_mask[b, sample.num_exemplars:] = False
-
-            # Target mask from selection_targets (if available) or from sample
             if sample.instruction_id in self.selection_targets:
                 target_exemplar_mask[b] = self.selection_targets[sample.instruction_id].to(device)
-            else:
-                # Fallback: use this sample's exemplars as target
-                for pool_idx in sample.exemplar_ids:
-                    target_exemplar_mask[b, pool_idx] = 1.0
 
         return instruction_embs, exemplar_embs, exemplar_mask, target_exemplar_mask
 
@@ -546,6 +592,15 @@ class VAETrainer:
         best_loss = float("inf")
         patience_counter = 0
 
+        # Extract unique instructions for dynamic exemplar sampling (cache texts for efficiency)
+        instruction_map = {}  # id -> text
+        for s in samples:
+            if s.instruction_id not in instruction_map:
+                instruction_map[s.instruction_id] = s.instruction_text
+        instruction_ids = list(instruction_map.keys())
+        n_pool = self.pool_embeddings.shape[0]
+        K = self.config.num_exemplars
+
         for epoch in range(self.config.vae_epochs):
             # KL annealing
             if epoch < self.config.vae_annealing_epochs:
@@ -553,8 +608,21 @@ class VAETrainer:
             else:
                 current_beta = self.config.vae_beta
 
-            # Shuffle samples (no curriculum filtering - always K=8)
-            shuffled_samples = samples.copy()
+            # DYNAMIC EXEMPLAR SAMPLING: Re-sample exemplars each epoch
+            # This prevents memorization and forces the model to learn generalizable
+            # instruction↔exemplar matching, not specific (instruction, exemplar_set) pairs
+            shuffled_samples = []
+            for inst_id in instruction_ids:
+                # Fresh random exemplar set each epoch
+                exemplar_ids = random.sample(range(n_pool), K)
+                shuffled_samples.append(TrainingSample(
+                    instruction_id=inst_id,
+                    instruction_text=instruction_map[inst_id],
+                    exemplar_ids=exemplar_ids,
+                    num_exemplars=K,
+                    error_rate=0.0,
+                    fidelity=0,
+                ))
             random.shuffle(shuffled_samples)
 
             epoch_losses = {k: 0.0 for k in history}

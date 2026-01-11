@@ -25,14 +25,14 @@ class BOLTConfig:
     - Set Transformer for permutation-invariant exemplar encoding
     - ListMLE ranking loss for direct rank optimization
     - Deep Kernel Learning GP for latent space modeling
-    - Fixed K=8 exemplars, joint 24D latent space (16D inst + 8D ex)
+    - Fixed K=8 exemplars, joint 32D latent space (16D inst + 16D ex)
     """
 
     # === Latent Dimensions ===
     embedding_dim: int = 768  # GTR embedding dimension (fixed)
     instruction_latent_dim: int = 16  # Instruction VAE latent
-    exemplar_latent_dim: int = 8  # Exemplar VAE latent (smaller - exemplars less complex)
-    # Total: 24D joint latent for GP
+    exemplar_latent_dim: int = 16  # Exemplar VAE latent (increased from 8 - needs capacity for K×768)
+    # Total: 32D joint latent for GP
 
     # === Set Transformer (Exemplar Encoding) ===
     set_transformer_hidden: int = 128  # ISAB hidden dimension
@@ -64,12 +64,12 @@ class BOLTConfig:
     # === VAE Training ===
     vae_beta: float = 0.02  # KL weight (increased for better regularization)
     vae_mse_weight: float = 0.2  # 20% MSE + 80% cosine
-    selection_weight: float = 0.2  # Exemplar selection loss weight (reduced to not dominate)
+    selection_weight: float = 0.5  # Exemplar selection loss weight (increased - selection is the goal)
     vae_epochs: int = 50000
     vae_annealing_epochs: int = 2500  # 5% for KL warmup
     vae_patience: int = 1000
     vae_lr: float = 0.0006
-    vae_batch_size: int = 64
+    vae_batch_size: int = 512  # Optimized for L40S (48GB VRAM)
     vae_grad_clip: float = 1.0
     vae_eta_min: float = 1e-4
 

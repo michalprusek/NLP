@@ -32,7 +32,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class ASHAPruner:
         grace_period: int = 100,  # Minimum steps before pruning
         rungs: Optional[List[int]] = None,  # Steps at which to prune
         direction: str = "maximize",  # "maximize" or "minimize"
-        min_trials_for_pruning: int = 3,  # Need at least 3 trials to compare
+        min_trials_for_pruning: int = 2,  # Need at least 2 trials to compare (matches 2-GPU setup)
     ):
         self.reduction_factor = reduction_factor
         self.grace_period = grace_period
@@ -354,7 +354,7 @@ class SharedASHAPruner:
         grace_period: int = 100,
         rungs: Optional[List[int]] = None,
         direction: str = "maximize",
-        min_trials_for_pruning: int = 3,
+        min_trials_for_pruning: int = 2,  # Matches 2-GPU parallel setup
     ):
         # Validate inputs
         if reduction_factor <= 0:
@@ -485,36 +485,40 @@ class SharedASHAPruner:
                 "timestamp": time.time(),
             })
 
-            # Check if at a rung
+            # Check if at a rung - prune ALL bottom-half trials, not just current one
             if step in self.rungs and step >= self.grace_period:
-                should_prune = self._should_prune_at_rung(state, trial_id, step, metric_value)
-                if should_prune:
-                    state["pruned"].append(trial_id)
-                    state["decisions"].append({
-                        "step": step,
-                        "trial_id": trial_id,
-                        "value": metric_value,
-                        "action": "pruned",
-                        "timestamp": time.time(),
-                    })
-                    logger.info(
-                        f"PRUNED trial {trial_id} at step {step} "
-                        f"(value={metric_value:.4f}, bottom {int(100/self.reduction_factor)}%)"
-                    )
+                trials_to_prune = self._get_trials_to_prune_at_rung(state, step)
+                for prune_trial_id, prune_value in trials_to_prune:
+                    if prune_trial_id not in state["pruned"]:
+                        state["pruned"].append(prune_trial_id)
+                        state["decisions"].append({
+                            "step": step,
+                            "trial_id": prune_trial_id,
+                            "value": prune_value,
+                            "action": "pruned",
+                            "timestamp": time.time(),
+                        })
+                        logger.info(
+                            f"PRUNED trial {prune_trial_id} at step {step} "
+                            f"(value={prune_value:.4f}, bottom {int(100/self.reduction_factor)}%)"
+                        )
 
             return state
 
         new_state = self._atomic_update(update)
         return trial_id not in new_state["pruned"]
 
-    def _should_prune_at_rung(
+    def _get_trials_to_prune_at_rung(
         self,
         state: Dict[str, Any],
-        trial_id: str,
         step: int,
-        value: float,
-    ) -> bool:
-        """Check if trial should be pruned at current rung."""
+    ) -> List[Tuple[str, float]]:
+        """Get all trials that should be pruned at current rung.
+
+        Returns list of (trial_id, value) tuples for trials in the bottom half.
+        This ensures ALL underperforming trials are pruned when a rung is reached,
+        not just the one that happens to report last.
+        """
         # Get all trials that have reported at this rung
         rung_values = []
         for tid, reports in state["reports"].items():
@@ -527,7 +531,7 @@ class SharedASHAPruner:
                     break
 
         if len(rung_values) < self.min_trials_for_pruning:
-            return False
+            return []  # Not enough trials to compare
 
         # Sort by metric value
         if self.direction == "maximize":
@@ -539,10 +543,20 @@ class SharedASHAPruner:
         keep_fraction = 1.0 / self.reduction_factor
         cutoff_idx = max(1, int(len(rung_values) * keep_fraction))
 
-        # Check if trial is in bottom half
-        bottom_half_ids = {x[0] for x in rung_values[cutoff_idx:]}
+        # Return all trials in bottom half
+        return rung_values[cutoff_idx:]
 
-        return trial_id in bottom_half_ids
+    def _should_prune_at_rung(
+        self,
+        state: Dict[str, Any],
+        trial_id: str,
+        step: int,
+        value: float,
+    ) -> bool:
+        """Check if trial should be pruned at current rung (legacy, kept for compatibility)."""
+        trials_to_prune = self._get_trials_to_prune_at_rung(state, step)
+        prune_ids = {t[0] for t in trials_to_prune}
+        return trial_id in prune_ids
 
     def should_stop(
         self,

@@ -280,6 +280,9 @@ class CoordinateDescentTuner:
         self.use_asha_pruning = use_asha_pruning
         self.pruner_state_path = self.output_dir / "asha_pruner_state.json" if use_asha_pruning else None
 
+        # Embedding cache (shared across all trials for efficiency)
+        self.embedding_cache_path = self.output_dir / "embedding_cache.pt"
+
         # Components
         self.hyperspace = HyperparameterSpace()
         self.metrics = MetricRegistry()
@@ -372,6 +375,7 @@ class CoordinateDescentTuner:
                 output_dir=self.output_dir / f"trials_cycle{self.cycle_state.cycle_number}",
                 gpu_ids=self.gpu_ids,
                 pruner_state_path=self.pruner_state_path,
+                embedding_cache_path=self.embedding_cache_path,
             )
             self.executor.start()
 
