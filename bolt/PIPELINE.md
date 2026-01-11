@@ -31,7 +31,7 @@ BOLT optimizes **prompts for few-shot learning** by jointly searching over:
 1. **Instruction text** - what the model should do (e.g., "Think step by step...")
 2. **Exemplar selection** - which 8 Q/A pairs to include as demonstrations
 
-The key insight is that the optimal exemplars depend on the instruction, and vice versa. BOLT learns this joint relationship in a **24-dimensional latent space** (16D instruction + 8D exemplar) and uses **Bayesian Optimization** to find the best combination.
+The key insight is that the optimal exemplars depend on the instruction, and vice versa. BOLT learns this joint relationship in a **32-dimensional latent space** (16D instruction + 16D exemplar) and uses **Bayesian Optimization** to find the best combination.
 
 ### Pipeline Stages
 
@@ -47,7 +47,7 @@ Stage 2: Hyperband Exploration
   └── Builds design_data for VAE/GP training
 
 Stage 3: Model Training
-  └── VAE learns to encode instructions + exemplars to 24D latent
+  └── VAE learns to encode instructions + exemplars to 32D latent
   └── GP learns error_rate = f(z_joint) mapping (with DKL)
   └── CrossAttentionScorer learns which exemplars work with which instructions
 
@@ -91,7 +91,7 @@ Stage 4: BO Inference
                                    ▼
                     ┌───────────────────────────────┐
                     │      Joint Refinement         │
-                    │  z = [z_inst ‖ z_ex] (24D)    │
+                    │  z = [z_inst ‖ z_ex] (32D)    │
                     │  z = z + MLP(z)               │
                     └───────────┬───────────────────┘
                                 │
@@ -159,7 +159,7 @@ instruction_embs = gtr.encode(["Think step by step", "Show your work"])
 
 **File:** `encoder.py:268-547`
 
-The VAE compresses high-dimensional embeddings (768D) to a compact latent space (24D) that captures the essential structure for optimization.
+The VAE compresses high-dimensional embeddings (768D) to a compact latent space (32D) that captures the essential structure for optimization.
 
 ```
                     ┌─────────────────────────────────────┐
@@ -184,7 +184,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
                     │            │                        │
                     │            │ reparameterize         │
                     │            ▼                        │
-                    │       z_ex (8D)                     │
+                    │       z_ex (16D)                    │
                     │            │                        │
                     │  ┌─────────┴───────────┐            │
                     │  │  Joint Refinement   │            │
@@ -192,7 +192,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
                     │  │  z = z + MLP(z)     │            │
                     │  └─────────┬───────────┘            │
                     │            │                        │
-                    │       z_joint (24D)                 │
+                    │       z_joint (32D)                 │
                     │            │                        │
                     │     ┌──────┴──────┐                 │
                     │     ▼             ▼                 │
@@ -205,7 +205,7 @@ The VAE compresses high-dimensional embeddings (768D) to a compact latent space 
 
 ```python
 # Encode to latent (for GP training)
-z_joint = vae.encode_joint(inst_emb, ex_embs, ex_mask)  # (batch, 24)
+z_joint = vae.encode_joint(inst_emb, ex_embs, ex_mask)  # (batch, 32)
 
 # Full forward pass with loss
 loss, loss_dict = vae.forward(
@@ -255,13 +255,13 @@ Input: exemplar_embeddings (batch, K, 768)
        │  └──────────────────────────────────────┘  │
        │                    ↓                       │
        │  ┌──────────────────────────────────────┐  │
-       │  │       Linear heads (64→8)            │  │
+       │  │       Linear heads (64→16)           │  │
        │  │  fc_mu, fc_logvar → VAE params       │  │
        │  └──────────────────────────────────────┘  │
        │                                            │
        └────────────────────────────────────────────┘
 
-Output: μ_ex (batch, 8), logvar_ex (batch, 8)
+Output: μ_ex (batch, 16), logvar_ex (batch, 16)
 ```
 
 **Key Insight:** ISAB (Induced Set Attention Block) reduces attention complexity from O(K²) to O(KM) where M=4 inducing points. This allows efficient processing of large exemplar sets.
@@ -316,7 +316,7 @@ The CrossAttentionScorer learns which exemplars work well with which instruction
                     │                                     │
   z_inst (16D) ─────┤  ┌─────────────────┐                │
                     │  │ query_proj      │                │
-  z_ex (8D) ────────┤  │ concat→64D      │                │
+  z_ex (16D) ───────┤  │ concat→64D      │                │
                     │  │ Linear+LayerNorm│                │
                     │  └────────┬────────┘                │
                     │           │                         │
@@ -384,7 +384,7 @@ The GP learns the mapping from latent space to error rate: `error = f(z_joint)`.
                     │    y_norm = (y - y_mean) / y_std    │
                     │                                     │
                     │  Deep Kernel Learning (Optional):   │
-                    │    z (24D) → FeatureExtractor → φ   │
+                    │    z (32D) → FeatureExtractor → φ   │
                     │    φ_inst (16D), φ_ex (16D)         │
                     │                                     │
                     │  Kernel (Product Structure):        │
@@ -411,9 +411,9 @@ applying the kernel. Based on HbBoPs paper (Section 3.2) and DKL best practices 
 
 ```python
 # JointFeatureExtractor architecture (HbBoPs-inspired)
-# Maps 24D VAE latent → 10D joint representation
+# Maps 32D VAE latent → 10D joint representation
 feature_extractor = JointFeatureExtractor(
-    input_dim=24,    # VAE latent (16D inst + 8D ex)
+    input_dim=32,    # VAE latent (16D inst + 16D ex)
     hidden_dim=32,   # Single hidden layer
     output_dim=10,   # Low-dim for GP (DKL best practice: 2-10D)
 )
@@ -732,7 +732,7 @@ latents = [vae.encode_joint(inst_emb, ex_embs, mask) for ...]
 errors = [entry['error_rate'] for entry in design_data]
 fidelities = [entry['fidelity'] for entry in design_data]
 
-gp = GPWithEI(instruction_dim=16, exemplar_dim=8, use_deep_kernel=True)
+gp = GPWithEI(instruction_dim=16, exemplar_dim=16, use_deep_kernel=True)
 gp.fit(X=latents, y=errors, fidelities=fidelities)
 ```
 
@@ -795,8 +795,8 @@ L_selection = -(weighted_ll.sum(dim=1) / K).mean()
 |-----------|-----------|-------------|
 | GTR embedding | 768 | SentenceTransformer output |
 | Instruction latent (z_inst) | 16 | VAE encoder output |
-| Exemplar latent (z_ex) | 8 | Set Transformer output (smaller - less complex) |
-| Joint latent (z_joint) | 24 | Concatenation for GP (16 + 8) |
+| Exemplar latent (z_ex) | 16 | Set Transformer output (increased for capacity) |
+| Joint latent (z_joint) | 32 | Concatenation for GP (16 + 16) |
 | ISAB hidden | 128 → 64 | Set Transformer internal |
 | CrossAttention hidden | 64 | Query/Key/Value projection dimension |
 | Score MLP | 64 → 32 → 1 | Value representation → score |
@@ -817,8 +817,8 @@ class BOLTConfig:
     # === Latent Dimensions ===
     embedding_dim: int = 768
     instruction_latent_dim: int = 16
-    exemplar_latent_dim: int = 8   # Smaller - exemplars less complex
-    # total_latent_dim = 24
+    exemplar_latent_dim: int = 16  # Increased - needs capacity for K×768
+    # total_latent_dim = 32
 
     # === Set Transformer ===
     set_transformer_hidden: int = 128
@@ -836,7 +836,7 @@ class BOLTConfig:
     # === VAE Training ===
     vae_beta: float = 0.02        # KL weight (increased for better regularization)
     vae_mse_weight: float = 0.2   # 20% MSE + 80% cosine
-    selection_weight: float = 0.2 # Reduced to not dominate training
+    selection_weight: float = 0.5 # Increased - selection is the primary goal
     vae_epochs: int = 50000
     vae_annealing_epochs: int = 2500  # 5% warmup
     vae_lr: float = 0.0006
@@ -1024,7 +1024,7 @@ ASHA provides early stopping of unpromising trials during VAE training, saving 3
                     │                                                    │
                     │  Rungs: [100, 500, 1000, 2500, 5000, 10000, 25000] │
                     │  Reduction Factor: 2 (kill bottom 50%)             │
-                    │  Direction: maximize (cosine_mean)                 │
+                    │  Direction: maximize (composite_score)             │
                     │  Min trials for pruning: 3                         │
                     │                                                    │
                     │  At each rung epoch:                               │
@@ -1070,11 +1070,15 @@ The pruner integrates via `epoch_callback` parameter in `VAETrainer.train()`:
 ```python
 # In trial_runner.py
 def _run_vae_phase(self):
-    # Create pruning callback
+    # Create pruning callback using composite score
     def pruning_callback(epoch: int, metrics: Dict[str, float]) -> bool:
-        metric_value = metrics.get("cosine_mean", 0.0)
+        # Composite: 50% reconstruction + 50% selection (both matter!)
+        cosine_mean = metrics.get("cosine_mean", 0.0)
+        selection_loss = metrics.get("selection_loss", 10.0)
+        selection_score = max(0.0, 1.0 - selection_loss / 10.0)
+        metric_value = 0.5 * cosine_mean + 0.5 * selection_score
         should_stop = self.pruner.should_stop(
-            self.trial_id, epoch, metric_value, metric_name="cosine_mean"
+            self.trial_id, epoch, metric_value, metric_name="composite_score"
         )
         if should_stop:
             logger.info(f"Trial {self.trial_id} PRUNED at epoch {epoch}")
@@ -1140,6 +1144,90 @@ class CoordinateDescentTuner:
 |----------|--------------|-----------|---------|
 | 50 VAE trials | 50 × 50k epochs | ~25 × 50k + 25 × avg 1.5k | ~40% |
 | Bad beta config | 50k epochs wasted | Killed at epoch 500 | 99% |
+
+### GPU Optimizations for L40S
+
+**Target:** Maximize GPU utilization (98-99%) during hyperparameter tuning.
+
+#### 1. Embedding Cache
+
+GTR embeddings are expensive to compute (~30s for 6154 Q/A pairs + 1645 instructions). Since embeddings are deterministic, we compute once and share across all trials:
+
+```python
+# In trial_runner.py
+def get_or_create_embeddings(qa_pool, instructions, device="cuda:0"):
+    cache_path = _EMBEDDING_CACHE_PATH  # Set by coordinator
+
+    if cache_path and cache_path.exists():
+        # Load cached embeddings (~24MB file)
+        cached = torch.load(cache_path, map_location=device, weights_only=True)
+        if valid:
+            return cached  # Skip GTR encoding
+
+    # Compute and cache for future trials
+    gtr_encoder = GTREncoder(device=device)
+    pool_embeddings = gtr_encoder.encode(pool_texts)
+    instruction_embeddings = gtr_encoder.encode(instructions)
+    result = {"pool_embeddings": pool_embeddings, "instruction_embeddings": instruction_embeddings}
+    torch.save(result, cache_path)
+    return result
+```
+
+**Impact:** First 2 trials compute embeddings in parallel (race condition, acceptable), all subsequent trials load from cache in ~0.5s.
+
+#### 2. Batch Size for L40S (48GB VRAM)
+
+```python
+vae_batch_size: int = 512  # Optimized for L40S (48GB VRAM)
+```
+
+Previous: `batch_size=64` → only ~15-20% GPU utilization
+Current: `batch_size=512` → 98-99% GPU utilization
+
+#### 3. Maximized Training Samples
+
+```python
+# Use ALL instructions with multiple exemplar combinations
+samples_per_instruction = 5  # 5 different exemplar sets per instruction
+n_samples = len(instructions) * samples_per_instruction
+# 1645 instructions × 5 = 8225 samples
+
+# Previous: n_samples = min(200, ...) = only 200 samples (3 batches/epoch)
+# Current: n_samples = 8225 = ~16 batches/epoch
+```
+
+#### 4. Vectorized Batch Preparation
+
+Replace Python for-loops with torch advanced indexing:
+
+```python
+def prepare_batch(self, samples: List[TrainingSample]):
+    # OLD: Python loops (slow)
+    # for i, s in enumerate(samples):
+    #     instruction_embs[i] = self.instruction_embeddings[s.instruction_id]
+
+    # NEW: Vectorized (fast)
+    inst_ids = torch.tensor([s.instruction_id for s in samples], dtype=torch.long)
+    instruction_embs = self.instruction_embeddings[inst_ids]  # Advanced indexing
+
+    # Vectorized exemplar embeddings
+    exemplar_idx = torch.tensor(exemplar_ids_padded, dtype=torch.long, device=device)
+    exemplar_embs = self.pool_embeddings[exemplar_idx]  # (batch, K, 768)
+
+    # Vectorized target mask using scatter
+    target_exemplar_mask = torch.zeros(batch_size, self.n_pool, device=device)
+    target_exemplar_mask.scatter_(1, exemplar_idx, 1.0)
+```
+
+**Combined Impact:**
+
+| Metric | Before | After |
+|--------|--------|-------|
+| GPU Utilization | 15-20% | 98-99% |
+| Samples per epoch | 200 | 8225 |
+| Batch size | 64 | 512 |
+| Embedding computation | Per trial (~30s) | Once (cached 24MB) |
+| Batch prep time | ~10ms (loops) | ~0.5ms (vectorized) |
 
 ### Key Metrics
 

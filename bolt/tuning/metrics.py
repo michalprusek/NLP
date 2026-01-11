@@ -271,63 +271,86 @@ class KLDivergenceMetric(BaseMetric):
 
 
 class RetrievalAccuracyMetric(BaseMetric):
-    """Retrieval accuracy: encode K items, decode, retrieve from pool."""
+    """Retrieval accuracy: encode exemplar SET via VAE, select via scorer, measure overlap.
+
+    This metric tests the actual BOLT pipeline:
+    1. Sample instruction + K exemplars (ground truth)
+    2. Encode via VAE (instruction_encoder + exemplar_set_encoder)
+    3. Use scorer to select top-K from pool
+    4. Measure overlap with original K exemplars
+
+    NOTE: This is a SANITY CHECK metric. Low values don't necessarily mean bad model -
+    the scorer is trained to select GOOD exemplars, not to reproduce arbitrary inputs.
+    """
 
     def __init__(self, k: int = 8):
         self.k = k
         super().__init__(
             name=f"vae_retrieval_accuracy_at_{k}",
             category=MetricCategory.VAE,
-            target=MetricTarget(TargetDirection.MAXIMIZE, value=0.85),
-            description=f"Retrieval accuracy @{k} (encode→decode→retrieve)",
+            target=MetricTarget(TargetDirection.MAXIMIZE, value=0.3),  # Lowered - sanity check only
+            description=f"Retrieval accuracy @{k} (sanity check - encode→select→overlap)",
         )
 
     def compute(
         self,
-        vae_encoder: Callable,
-        vae_decoder: Callable,
+        vae: "torch.nn.Module",  # Full StructureAwareVAE
         pool_embeddings: torch.Tensor,
+        instruction_embeddings: torch.Tensor,
         n_trials: int = 100,
         **kwargs,
     ) -> float:
         """
-        Compute retrieval accuracy.
+        Compute retrieval accuracy using the full BOLT pipeline.
+
+        Args:
+            vae: The full StructureAwareVAE model
+            pool_embeddings: (N_pool, 768) embeddings of all Q/A pairs
+            instruction_embeddings: (N_inst, 768) embeddings of instructions
+            n_trials: Number of random trials to average
 
         For n_trials:
-        1. Sample K random items from pool
-        2. Encode to latent
-        3. Decode back to embedding space
-        4. Find K nearest neighbors in pool
-        5. Measure overlap with original K
+        1. Sample random instruction
+        2. Sample K random exemplars from pool (ground truth)
+        3. Encode via VAE (instruction + exemplar set)
+        4. Use scorer to select top-K from pool
+        5. Measure overlap with ground truth K
         """
         pool_embeddings = F.normalize(pool_embeddings, dim=-1)
+        instruction_embeddings = F.normalize(instruction_embeddings, dim=-1)
         n_pool = pool_embeddings.shape[0]
+        n_inst = instruction_embeddings.shape[0]
+        device = pool_embeddings.device
 
         accuracies = []
-        for _ in range(n_trials):
-            # Sample K random indices
-            indices = torch.randperm(n_pool)[:self.k]
-            original_embs = pool_embeddings[indices]
+        vae.eval()
 
-            # Encode and decode
-            with torch.no_grad():
-                z = vae_encoder(original_embs)
-                if isinstance(z, tuple):
-                    z = z[0]  # Handle (mu, logvar) output
-                reconstructed = vae_decoder(z)
-                reconstructed = F.normalize(reconstructed, dim=-1)
+        with torch.no_grad():
+            for _ in range(n_trials):
+                # 1. Sample random instruction
+                inst_idx = torch.randint(0, n_inst, (1,)).item()
+                inst_emb = instruction_embeddings[inst_idx].unsqueeze(0)  # (1, 768)
 
-            # Find nearest neighbors for each reconstructed embedding
-            retrieved_indices = set()
-            for recon_emb in reconstructed:
-                similarities = torch.matmul(pool_embeddings, recon_emb)
-                top_idx = similarities.argmax().item()
-                retrieved_indices.add(top_idx)
+                # 2. Sample K random exemplars (ground truth)
+                target_indices = torch.randperm(n_pool, device=device)[:self.k]
+                target_embs = pool_embeddings[target_indices].unsqueeze(0)  # (1, K, 768)
 
-            # Compute overlap
-            original_set = set(indices.tolist())
-            overlap = len(original_set & retrieved_indices)
-            accuracies.append(overlap / self.k)
+                # 3. Create mask (all valid)
+                mask = torch.ones(1, self.k, dtype=torch.bool, device=device)
+
+                # 4. Encode via VAE
+                mu_inst, _, mu_ex, _ = vae.encode(inst_emb, target_embs, mask)
+
+                # 5. Use scorer to select top-K from pool
+                selected_indices, _ = vae.scorer.select_top_k(
+                    mu_inst, mu_ex, pool_embeddings, k=self.k, use_mmr=False
+                )
+
+                # 6. Measure overlap
+                target_set = set(target_indices.tolist())
+                selected_set = set(selected_indices[0].tolist())
+                overlap = len(target_set & selected_set)
+                accuracies.append(overlap / self.k)
 
         return float(np.mean(accuracies))
 
@@ -910,8 +933,92 @@ class ConvergenceSpeedMetric(BaseMetric):
 
 
 # =============================================================================
-# END-TO-END METRICS (4 metrics)
+# END-TO-END METRICS (5 metrics)
 # =============================================================================
+
+class ScorerConsistencyMetric(BaseMetric):
+    """Measures scorer consistency: same instruction → similar exemplar selections.
+
+    A good VAE+Scorer should:
+    1. Map similar instructions to similar z_inst
+    2. Produce consistent exemplar selections for the same instruction
+
+    This metric samples different exemplar sets for the same instruction,
+    encodes them, and checks if scorer selections are consistent.
+    """
+
+    def __init__(self, k: int = 8):
+        self.k = k
+        super().__init__(
+            name="e2e_scorer_consistency",
+            category=MetricCategory.END_TO_END,
+            target=MetricTarget(TargetDirection.MAXIMIZE, value=0.5),
+            description="Scorer consistency (same instruction → similar selections)",
+        )
+
+    def compute(
+        self,
+        vae: "torch.nn.Module",
+        pool_embeddings: torch.Tensor,
+        instruction_embeddings: torch.Tensor,
+        n_instructions: int = 50,
+        n_samples_per_inst: int = 5,
+        **kwargs,
+    ) -> float:
+        """
+        Compute scorer consistency.
+
+        For each instruction:
+        1. Sample different random exemplar sets
+        2. Encode each via VAE
+        3. Use scorer to select top-K
+        4. Measure Jaccard similarity between selections
+
+        Returns mean Jaccard similarity across instructions.
+        """
+        pool_embeddings = F.normalize(pool_embeddings, dim=-1)
+        instruction_embeddings = F.normalize(instruction_embeddings, dim=-1)
+        n_pool = pool_embeddings.shape[0]
+        n_inst = instruction_embeddings.shape[0]
+        device = pool_embeddings.device
+
+        consistencies = []
+        vae.eval()
+
+        with torch.no_grad():
+            for _ in range(n_instructions):
+                # Sample random instruction
+                inst_idx = torch.randint(0, n_inst, (1,)).item()
+                inst_emb = instruction_embeddings[inst_idx].unsqueeze(0)
+
+                # Sample multiple different exemplar sets for this instruction
+                selections = []
+                for _ in range(n_samples_per_inst):
+                    # Random exemplar set
+                    ex_indices = torch.randperm(n_pool, device=device)[:self.k]
+                    ex_embs = pool_embeddings[ex_indices].unsqueeze(0)
+                    mask = torch.ones(1, self.k, dtype=torch.bool, device=device)
+
+                    # Encode and select
+                    mu_inst, _, mu_ex, _ = vae.encode(inst_emb, ex_embs, mask)
+                    selected, _ = vae.scorer.select_top_k(
+                        mu_inst, mu_ex, pool_embeddings, k=self.k, use_mmr=False
+                    )
+                    selections.append(set(selected[0].tolist()))
+
+                # Compute pairwise Jaccard similarities
+                jaccard_sims = []
+                for i in range(len(selections)):
+                    for j in range(i + 1, len(selections)):
+                        intersection = len(selections[i] & selections[j])
+                        union = len(selections[i] | selections[j])
+                        jaccard_sims.append(intersection / union if union > 0 else 0.0)
+
+                if jaccard_sims:
+                    consistencies.append(np.mean(jaccard_sims))
+
+        return float(np.mean(consistencies)) if consistencies else 0.0
+
 
 class FinalAccuracyMetric(BaseMetric):
     """Final accuracy achieved (1 - best_error)."""
@@ -1096,7 +1203,8 @@ class OptimizationMetrics:
 class EndToEndMetrics:
     """Collection of end-to-end metrics."""
 
-    def __init__(self):
+    def __init__(self, consistency_k: int = 8):
+        self.scorer_consistency = ScorerConsistencyMetric(k=consistency_k)
         self.final_accuracy = FinalAccuracyMetric()
         self.sample_efficiency = SampleEfficiencyMetric()
         self.wall_clock_time = WallClockTimeMetric()
@@ -1104,6 +1212,7 @@ class EndToEndMetrics:
 
     def all_metrics(self) -> List[BaseMetric]:
         return [
+            self.scorer_consistency,
             self.final_accuracy,
             self.sample_efficiency,
             self.wall_clock_time,

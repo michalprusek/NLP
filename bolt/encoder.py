@@ -238,24 +238,28 @@ class CrossAttentionScorer(nn.Module):
         keys = keys.unsqueeze(0).expand(batch_size, -1, -1)  # (batch, N_pool, hidden_dim)
         values = values.unsqueeze(0).expand(batch_size, -1, -1)  # (batch, N_pool, hidden_dim)
 
-        # Cross-attention
-        _, attn_weights = self.cross_attn(
+        # Compute query-key dot product scores directly (before softmax)
+        # This gives us the raw alignment between query and each pool item
+        query_expanded = query.expand(-1, keys.shape[1], -1)  # (batch, N_pool, hidden_dim)
+        dot_scores = (query_expanded * keys).sum(dim=-1)  # (batch, N_pool)
+
+        # Scale by sqrt(hidden_dim) for stable gradients
+        dot_scores = dot_scores / (self.hidden_dim ** 0.5)
+
+        # Also run cross-attention for value-based scoring
+        attn_output, attn_weights = self.cross_attn(
             query=query,
             key=keys,
             value=values,
         )
-        # attn_weights: (batch, 1, N_pool)
+        # attn_output: (batch, 1, hidden_dim)
 
-        # Project values through score head
-        # Each pool item gets a base score from its representation
-        base_scores = self.score_proj(values).squeeze(-1)  # (batch, N_pool)
+        # Project attention output to a single scalar bias
+        attn_bias = self.score_proj(attn_output).squeeze(-1).squeeze(-1)  # (batch,)
 
-        # Modulate by attention weights (focus on relevant items)
-        # Attention weights indicate query-key alignment
-        attn_scores = attn_weights.squeeze(1) * self.temperature  # (batch, N_pool)
-
-        # Combine base scores with attention-based relevance
-        scores = base_scores + attn_scores
+        # Final scores: query-key alignment + global bias from attention
+        # The dot_scores are purely query-dependent, making selections vary with input
+        scores = dot_scores * self.temperature + attn_bias.unsqueeze(-1)
 
         return scores
 

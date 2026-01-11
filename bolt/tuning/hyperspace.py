@@ -176,9 +176,9 @@ CRITICAL_PARAMS: List[ParameterSpec] = [
         param_type=ParameterType.DISCRETE,
         tier=TuningTier.CRITICAL,
         phases=[TuningPhase.VAE, TuningPhase.SCORER],
-        description="Exemplar VAE latent dimension",
-        values=[8, 12, 16, 24],
-        default=8,
+        description="Exemplar VAE latent dimension (increased - needs capacity for K×768)",
+        values=[12, 16, 24, 32],
+        default=16,
     ),
 
     # Exploration vs Exploitation
@@ -222,11 +222,11 @@ CRITICAL_PARAMS: List[ParameterSpec] = [
         param_type=ParameterType.CONTINUOUS,
         tier=TuningTier.CRITICAL,
         phases=[TuningPhase.VAE, TuningPhase.SCORER],
-        description="Weight of exemplar selection loss in VAE training",
-        low=0.05,
-        high=0.4,
+        description="Weight of exemplar selection loss in VAE training (increased - selection is key)",
+        low=0.3,
+        high=1.0,
         scale=ScaleType.LINEAR,
-        default=0.2,
+        default=0.5,
     ),
 ]
 

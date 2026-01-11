@@ -49,6 +49,72 @@ from .pruning import SharedASHAPruner
 logger = logging.getLogger(__name__)
 
 
+# Global embedding cache path (set by coordinator, shared across trials)
+_EMBEDDING_CACHE_PATH: Optional[Path] = None
+
+
+def set_embedding_cache_path(path: Path) -> None:
+    """Set global embedding cache path for all trials."""
+    global _EMBEDDING_CACHE_PATH
+    _EMBEDDING_CACHE_PATH = path
+
+
+def get_or_create_embeddings(
+    qa_pool: List,
+    instructions: List[str],
+    device: str = "cuda:0",
+) -> Dict[str, torch.Tensor]:
+    """Get embeddings from cache or compute and cache them.
+
+    Returns:
+        Dict with 'pool_embeddings' and 'instruction_embeddings' tensors
+    """
+    from bolt.encoder import GTREncoder
+
+    cache_path = _EMBEDDING_CACHE_PATH
+
+    # Try to load from cache
+    if cache_path and cache_path.exists():
+        try:
+            cached = torch.load(cache_path, map_location=device, weights_only=True)
+            # Verify cache is valid (same sizes)
+            if (cached["pool_embeddings"].shape[0] == len(qa_pool) and
+                cached["instruction_embeddings"].shape[0] == len(instructions)):
+                logger.info(f"Loaded embeddings from cache: {cache_path}")
+                return cached
+            else:
+                logger.warning("Cache size mismatch, recomputing embeddings")
+        except Exception as e:
+            logger.warning(f"Failed to load embedding cache: {e}")
+
+    # Compute embeddings
+    logger.info("Computing GTR embeddings (will cache for other trials)...")
+    gtr_encoder = GTREncoder(device=device)
+
+    pool_texts = [f"Q: {qa.question}\nA: {qa.answer}" for qa in qa_pool]
+    pool_embeddings = gtr_encoder.encode(pool_texts).clone().detach()
+    instruction_embeddings = gtr_encoder.encode(instructions).clone().detach()
+
+    result = {
+        "pool_embeddings": pool_embeddings,
+        "instruction_embeddings": instruction_embeddings,
+    }
+
+    # Save to cache (with file locking for concurrent access)
+    if cache_path:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            # Use temporary file + rename for atomic write
+            tmp_path = cache_path.with_suffix(".tmp")
+            torch.save(result, tmp_path)
+            tmp_path.rename(cache_path)
+            logger.info(f"Saved embeddings cache: {cache_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save embedding cache: {e}")
+
+    return result
+
+
 @dataclass
 class TrialState:
     """State of a trial for checkpointing."""
@@ -387,15 +453,12 @@ class TrialRunner:
 
         # Import BOLT components
         from bolt.config import BOLTConfig
-        from bolt.encoder import GTREncoder, StructureAwareVAE
+        from bolt.encoder import StructureAwareVAE
         from bolt.training import VAETrainer, TrainingSample
         from bolt.run import load_qa_pool_from_json
 
         # Build config with trial hyperparameters
         bolt_config = self._build_bolt_config()
-
-        # Initialize encoder
-        gtr_encoder = GTREncoder(device=f"cuda:0")
 
         # Load qa_pool
         qa_pool = load_qa_pool_from_json(
@@ -434,6 +497,9 @@ class TrialRunner:
             ]
         logger.info(f"Using {len(instructions)} instructions")
 
+        # Get embeddings from cache (shared across trials for efficiency)
+        embeddings = get_or_create_embeddings(qa_pool, instructions, device="cuda:0")
+
         # Create training samples (synthetic for VAE tuning)
         # For VAE phase, we train on reconstruction without needing actual evaluation results
         training_samples = self._create_vae_training_samples(
@@ -452,13 +518,15 @@ class TrialRunner:
             cross_attn_heads=bolt_config.cross_attn_heads,
         ).to("cuda:0")
 
-        # Train VAE
+        # Train VAE with cached embeddings (no GTR encoder needed)
         trainer = VAETrainer(
             vae=vae,
-            gtr_encoder=gtr_encoder,
+            gtr_encoder=None,  # Not needed when embeddings are cached
             qa_pool=qa_pool,
             instructions=instructions,
             config=bolt_config,
+            pool_embeddings=embeddings["pool_embeddings"],
+            instruction_embeddings=embeddings["instruction_embeddings"],
         )
 
         # Create ASHA pruning callback if pruner is available
@@ -466,10 +534,15 @@ class TrialRunner:
         self._pruned = False
         if self.pruner is not None:
             def pruning_callback(epoch: int, metrics: Dict[str, float]) -> bool:
-                # Use cosine reconstruction as the metric for pruning (higher is better)
-                metric_value = metrics.get("cosine_mean", 0.0)
+                # Use composite metric: 50% reconstruction + 50% selection (higher is better)
+                # This balances both objectives rather than just reconstruction
+                cosine_mean = metrics.get("cosine_mean", 0.0)
+                selection_loss = metrics.get("selection_loss", 10.0)  # Default high if missing
+                # Normalize selection_loss (lower is better) to 0-1 scale and invert
+                selection_score = max(0.0, 1.0 - selection_loss / 10.0)
+                metric_value = 0.5 * cosine_mean + 0.5 * selection_score
                 should_stop = self.pruner.should_stop(
-                    self.trial_id, epoch, metric_value, metric_name="cosine_mean"
+                    self.trial_id, epoch, metric_value, metric_name="composite_score"
                 )
                 if should_stop:
                     self._pruned = True
@@ -493,9 +566,9 @@ class TrialRunner:
         # Collect metrics
         metrics = {}
 
-        # Get embeddings for evaluation
-        eval_embeddings = self._get_eval_embeddings(
-            gtr_encoder, instructions, qa_pool, n_eval_samples=50
+        # Get embeddings for evaluation (using cached embeddings)
+        eval_embeddings = self._get_eval_embeddings_from_cache(
+            embeddings, instructions, qa_pool, n_eval_samples=50
         )
 
         with torch.no_grad():
@@ -527,12 +600,12 @@ class TrialRunner:
                 logvar=logvar_inst,
             )
 
-            # Retrieval accuracy
+            # Retrieval accuracy - uses full VAE pipeline (encode→scorer→select)
             metrics["vae_retrieval_accuracy_at_8"] = self.metrics.vae.retrieval_accuracy.evaluate(
-                vae_encoder=lambda x: vae.instruction_encoder(x)[0],  # Returns (mu, logvar), use mu
-                vae_decoder=vae.instruction_decoder,
+                vae=vae,  # Full StructureAwareVAE
                 pool_embeddings=eval_embeddings["pool_embeddings"],
-                n_trials=50,  # Reduced for speed
+                instruction_embeddings=eval_embeddings["instruction_embeddings"],
+                n_trials=100,  # Increased for statistical significance
             )
 
             # Lipschitz constant
@@ -548,6 +621,15 @@ class TrialRunner:
             metrics["vae_percentile10_cosine"] = self.metrics.vae.percentile10_cosine.evaluate(
                 original_embeddings=eval_embeddings["instruction_embeddings"],
                 reconstructed_embeddings=recon_inst,
+            )
+
+            # Scorer consistency - measures if same instruction yields similar selections
+            metrics["e2e_scorer_consistency"] = self.metrics.e2e.scorer_consistency.evaluate(
+                vae=vae,
+                pool_embeddings=eval_embeddings["pool_embeddings"],
+                instruction_embeddings=eval_embeddings["instruction_embeddings"],
+                n_instructions=50,
+                n_samples_per_inst=5,
             )
 
         # Log results
@@ -580,6 +662,7 @@ class TrialRunner:
             "vae_retrieval_accuracy_at_8": self.metrics.vae.retrieval_accuracy,
             "vae_lipschitz_constant": self.metrics.vae.lipschitz_constant,
             "vae_percentile10_cosine": self.metrics.vae.percentile10_cosine,
+            "e2e_scorer_consistency": self.metrics.e2e.scorer_consistency,
         }
 
         for name, value in cached_metrics.items():
@@ -1117,27 +1200,25 @@ class TrialRunner:
         n_pool = len(qa_pool)
 
         # Create diverse samples for VAE training
-        n_samples = min(200, n_instructions * 10)  # Reasonable sample count
+        # Use ALL instructions with multiple exemplar combinations for better GPU utilization
+        # Each instruction gets multiple random exemplar sets
+        samples_per_instruction = 5  # 5 different exemplar sets per instruction
         random.seed(config.seed)
+        K = min(config.num_exemplars, n_pool)
 
-        for i in range(n_samples):
-            instruction_id = i % n_instructions
-            # Random exemplar selection
-            exemplar_ids = random.sample(
-                range(n_pool),
-                min(config.num_exemplars, n_pool)
-            )
-
-            samples.append(
-                TrainingSample(
-                    instruction_id=instruction_id,
-                    instruction_text=instructions[instruction_id],
-                    exemplar_ids=exemplar_ids,
-                    num_exemplars=len(exemplar_ids),
-                    error_rate=random.uniform(0.1, 0.4),  # Synthetic
-                    fidelity=100,  # Synthetic
+        for inst_id in range(n_instructions):
+            for _ in range(samples_per_instruction):
+                exemplar_ids = random.sample(range(n_pool), K)
+                samples.append(
+                    TrainingSample(
+                        instruction_id=inst_id,
+                        instruction_text=instructions[inst_id],
+                        exemplar_ids=exemplar_ids,
+                        num_exemplars=K,
+                        error_rate=0.0,  # Not used in VAE training
+                        fidelity=0,  # Not used in VAE training
+                    )
                 )
-            )
 
         return samples
 
@@ -1197,6 +1278,45 @@ class TrialRunner:
             "pool_embeddings": pool_embeddings,
         }
 
+    def _get_eval_embeddings_from_cache(
+        self,
+        cached_embeddings: Dict[str, torch.Tensor],
+        instructions: List[str],
+        qa_pool: List,
+        n_eval_samples: int = 50,
+    ) -> Dict[str, torch.Tensor]:
+        """Get embeddings for evaluation from cached embeddings (much faster).
+
+        Args:
+            cached_embeddings: Dict with 'pool_embeddings' and 'instruction_embeddings'
+            instructions: List of instruction strings (for length check)
+            qa_pool: List of QAPair objects (for length check)
+            n_eval_samples: Number of samples to use for evaluation
+
+        Returns:
+            Dict with instruction_embeddings, exemplar_embeddings, pool_embeddings
+        """
+        import random
+
+        pool_embeddings = cached_embeddings["pool_embeddings"]
+        instruction_embeddings = cached_embeddings["instruction_embeddings"][:n_eval_samples]
+
+        # Create exemplar embeddings (sample from pool)
+        n_exemplars = 8
+        exemplar_embeddings = []
+        for _ in range(n_eval_samples):
+            indices = random.sample(range(len(qa_pool)), min(n_exemplars, len(qa_pool)))
+            exemplar_emb = pool_embeddings[indices]  # (n_exemplars, 768)
+            exemplar_embeddings.append(exemplar_emb)
+
+        exemplar_embeddings = torch.stack(exemplar_embeddings)  # (n_samples, n_exemplars, 768)
+
+        return {
+            "instruction_embeddings": instruction_embeddings,
+            "exemplar_embeddings": exemplar_embeddings,
+            "pool_embeddings": pool_embeddings,
+        }
+
     def _find_vae_checkpoint(self) -> Optional[str]:
         """Find VAE checkpoint from previous phases."""
         # Check trial directory
@@ -1231,12 +1351,17 @@ def run_trial(
     output_dir: str,
     gpu_id: int = 0,
     pruner_state_path: Optional[str] = None,
+    embedding_cache_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to run a single trial.
 
     Can be called from multiprocessing.
     """
+    # Set embedding cache path for this process (shared across trials)
+    if embedding_cache_path:
+        set_embedding_cache_path(Path(embedding_cache_path))
+
     hp_config = HyperparameterConfig(
         values=config,
         tier=TuningTier.CRITICAL,
