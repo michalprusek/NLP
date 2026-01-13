@@ -33,11 +33,11 @@
 │                            │                  │                                 │
 │  DECODING (Latent → Text)  ▼                  ▼                                 │
 │  ────────────────────────────────────────────────────────────────               │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐      │
-│  │     VAE     │───▶│   Latent    │───▶│   GritLM    │───▶│    Text     │      │
-│  │   Decoder   │    │  Projector  │    │   Decoder   │    │   Output    │      │
-│  │  (32→768)   │    │ (768→4×4K)  │    │    (7B)     │    │             │      │
-│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘      │
+│  ┌─────────────┐    ┌───────────────────────────────────────────┐              │
+│  │     VAE     │───▶│ Latent Projector (768→4×4K prefix tokens) │───▶ Text    │
+│  │   Decoder   │    │     + GritLM Decoder (7B, autoregressive) │    Output   │
+│  │  (32→768)   │    └───────────────────────────────────────────┘              │
+│  └─────────────┘      (projector.generate() wraps both internally)             │
 │                                                                                 │
 │  EVALUATION (Score Prediction)                                                  │
 │  ─────────────────────────────                                                  │
@@ -94,7 +94,7 @@
 
 ### Encoder Mode
 - **Input**: Text instruction
-- **Output**: 768D normalized embedding
+- **Output**: 768D normalized embedding (→ VAE compression to 32D, see Section 2)
 - **Pooling**: Latent Attention (4 queries × 4096D → 768D)
 - **Normalization**: L2 normalized
 
@@ -556,7 +556,7 @@ uv run python -m lido_pp.run optimize \
 
 **This is one of the most important principles for architecture stability.**
 
-During task-specific training (e.g., GSM8K), **ONLY train FlowDiT and Value Head**. The Latent Projector must be **FROZEN** after pre-training.
+During task-specific training (e.g., GSM8K), **ONLY train FlowDiT and Value Head/GP**. The VAE and Latent Projector must be **FROZEN** after pre-training.
 
 ### Component Training Status
 
