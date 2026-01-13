@@ -20,12 +20,12 @@ Reference:
 - DiT: Diffusion Transformer (ICCV 2023)
 """
 
+import logging
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
-import logging
-import math
 
 logger = logging.getLogger(__name__)
 
@@ -161,29 +161,6 @@ class CrossAttentionProjector(nn.Module):
 
         return keys, values
 
-    def get_conditioning_params(
-        self, latent: torch.Tensor
-    ) -> dict:
-        """
-        Get conditioning parameters for decoder integration.
-
-        This method provides a convenient interface for integrating
-        with various decoder architectures.
-
-        Args:
-            latent: (B, latent_dim) compact latent
-
-        Returns:
-            Dictionary with 'keys', 'values', and metadata
-        """
-        keys, values = self.forward(latent)
-        return {
-            "keys": keys,
-            "values": values,
-            "num_slots": self.num_slots,
-            "hidden_dim": self.hidden_dim,
-        }
-
 
 class CrossAttentionLayer(nn.Module):
     """
@@ -232,6 +209,16 @@ class CrossAttentionLayer(nn.Module):
         # Scaling factor for attention
         self.scale = self.head_dim ** -0.5
 
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        """Reshape (B, seq, hidden) to (B, num_heads, seq, head_dim)."""
+        B, seq_len, _ = x.shape
+        return x.view(B, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+        """Reshape (B, num_heads, seq, head_dim) to (B, seq, hidden)."""
+        B, _, seq_len, _ = x.shape
+        return x.transpose(1, 2).contiguous().view(B, seq_len, self.hidden_dim)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -251,24 +238,14 @@ class CrossAttentionLayer(nn.Module):
         Returns:
             (B, seq_len, hidden_dim) conditioned hidden states
         """
-        B, seq_len, _ = hidden_states.shape
-        num_slots = memory_keys.shape[1]
-
         # Pre-norm
         residual = hidden_states
         hidden_states = self.norm(hidden_states)
 
-        # Project queries from decoder states
-        Q = self.q_proj(hidden_states)  # (B, seq_len, hidden_dim)
-
-        # Reshape for multi-head attention
-        # Q: (B, seq_len, num_heads, head_dim) → (B, num_heads, seq_len, head_dim)
-        Q = Q.view(B, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # K, V are already projected by CrossAttentionProjector
-        # Just reshape for multi-head: (B, num_slots, hidden_dim) → (B, num_heads, num_slots, head_dim)
-        K = memory_keys.view(B, num_slots, self.num_heads, self.head_dim).transpose(1, 2)
-        V = memory_values.view(B, num_slots, self.num_heads, self.head_dim).transpose(1, 2)
+        # Reshape Q, K, V to multi-head format: (B, num_heads, seq, head_dim)
+        Q = self._split_heads(self.q_proj(hidden_states))
+        K = self._split_heads(memory_keys)
+        V = self._split_heads(memory_values)
 
         # Compute attention scores: (B, num_heads, seq_len, num_slots)
         attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
@@ -284,15 +261,11 @@ class CrossAttentionLayer(nn.Module):
         attn_probs = F.softmax(attn_scores, dim=-1)
         attn_probs = self.dropout(attn_probs)
 
-        # (B, num_heads, seq_len, head_dim)
-        attn_output = torch.matmul(attn_probs, V)
+        # Apply attention to values and merge heads
+        attn_output = self._merge_heads(torch.matmul(attn_probs, V))
 
-        # Reshape back: (B, seq_len, hidden_dim)
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, seq_len, self.hidden_dim)
-
-        # Output projection
-        attn_output = self.out_proj(attn_output)
-        attn_output = self.dropout(attn_output)
+        # Output projection with dropout
+        attn_output = self.dropout(self.out_proj(attn_output))
 
         # Residual connection
         return residual + attn_output

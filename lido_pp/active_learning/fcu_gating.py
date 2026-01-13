@@ -23,6 +23,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Dict, Tuple, List, Union
 from dataclasses import dataclass, field
+from collections import deque
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,6 @@ class FCUGatingResult:
     # Binary mask: which samples need LLM evaluation
     needs_llm_eval: torch.Tensor  # (B,) bool
 
-    # GP predictions for confident samples (where needs_llm_eval=False)
-    gp_predictions: Optional[torch.Tensor] = None  # (B,)
-
     # Trajectory for visualization (optional)
     trajectory: Optional[torch.Tensor] = None  # (T, B, D)
 
@@ -59,15 +57,15 @@ class FCUStatistics:
     llm_evaluations: int = 0
     gp_predictions: int = 0
 
-    # Running statistics for adaptive threshold
-    fcu_history: List[float] = field(default_factory=list)
+    # Running statistics for adaptive threshold (using deque for automatic size limiting)
     max_history: int = 1000
+    fcu_history: deque = field(default_factory=lambda: deque(maxlen=1000))
 
     @property
     def llm_ratio(self) -> float:
         """Fraction of samples that required LLM evaluation."""
         if self.total_samples == 0:
-            return 1.0
+            return float("nan")  # Explicitly undefined when no samples processed
         return self.llm_evaluations / self.total_samples
 
     @property
@@ -87,10 +85,8 @@ class FCUStatistics:
         self.gp_predictions += int(batch_size - llm_count)
 
     def add_fcu_values(self, fcu: torch.Tensor):
-        """Add FCU values to history."""
+        """Add FCU values to history (auto-truncates via deque maxlen)."""
         self.fcu_history.extend(fcu.tolist())
-        if len(self.fcu_history) > self.max_history:
-            self.fcu_history = self.fcu_history[-self.max_history:]
 
 
 class FlowCurvatureUncertainty(nn.Module):
@@ -125,6 +121,13 @@ class FlowCurvatureUncertainty(nn.Module):
             min_fcu_for_eval: Minimum absolute FCU to trigger evaluation
         """
         super().__init__()
+
+        # Validate percentile threshold
+        if not 0 <= percentile_threshold <= 100:
+            raise ValueError(
+                f"percentile_threshold must be in [0, 100], got {percentile_threshold}"
+            )
+
         self.flowdit = flowdit
         self.num_steps = num_steps
         self.percentile_threshold = percentile_threshold
@@ -214,6 +217,7 @@ class FlowCurvatureUncertainty(nn.Module):
         if len(self.stats.fcu_history) < 50:
             return self.min_fcu
 
+        # Use numpy-style percentile calculation
         sorted_fcu = sorted(self.stats.fcu_history)
         idx = int(len(sorted_fcu) * self.percentile_threshold / 100)
         idx = min(idx, len(sorted_fcu) - 1)
@@ -253,7 +257,6 @@ class FlowCurvatureUncertainty(nn.Module):
             latents=x_final,
             fcu_values=fcu,
             needs_llm_eval=needs_llm,
-            gp_predictions=None,  # Will be filled by AdaptiveEvaluationGate
             trajectory=trajectory,
             threshold=threshold,
         )
@@ -283,7 +286,7 @@ class AdaptiveEvaluationGate(nn.Module):
     1. Generate latents via flow matching
     2. Compute FCU along trajectory
     3. If FCU > threshold: Use expensive LLM evaluation
-    4. If FCU ≤ threshold: Use cheap GP prediction
+    4. If FCU <= threshold: Use cheap GP prediction
 
     This provides significant compute savings (20-50%) by avoiding
     redundant LLM evaluations in confident regions.
@@ -300,8 +303,8 @@ class AdaptiveEvaluationGate(nn.Module):
 
         Args:
             fcu_module: FCU computation module
-            gp_model: Optional GP model for predictions
-            value_head: Optional value head for predictions (alternative to GP)
+            gp_model: Optional GP model for predictions (uses .predict() interface)
+            value_head: Optional value head for predictions (uses forward() interface)
         """
         super().__init__()
         self.fcu = fcu_module
@@ -311,13 +314,41 @@ class AdaptiveEvaluationGate(nn.Module):
         # Tracking for analysis
         self.evaluation_log: List[Dict] = []
 
-    def set_gp_model(self, gp_model: nn.Module):
+    def set_gp_model(self, gp_model: nn.Module) -> None:
         """Set GP model for predictions."""
         self.gp = gp_model
 
-    def set_value_head(self, value_head: nn.Module):
+    def set_value_head(self, value_head: nn.Module) -> None:
         """Set value head for predictions."""
         self.value_head = value_head
+
+    def _predict_scores(self, latents: torch.Tensor) -> torch.Tensor:
+        """
+        Predict scores for latents using GP or value head.
+
+        Args:
+            latents: (N, D) latent vectors to score
+
+        Returns:
+            scores: (N,) predicted scores
+
+        Raises:
+            RuntimeError: If no predictor is available
+        """
+        if self.gp is not None:
+            mean, _ = self.gp.predict(latents)
+            return mean
+
+        if self.value_head is not None:
+            self.value_head.eval()
+            return self.value_head(latents).squeeze(-1)
+
+        raise RuntimeError(
+            f"Cannot score {latents.shape[0]} confident samples: "
+            "No GP model or value head available. Either call set_gp_model() or "
+            "set_value_head(), or lower the FCU threshold to ensure all samples "
+            "get LLM evaluation."
+        )
 
     def evaluate(
         self,
@@ -335,46 +366,39 @@ class AdaptiveEvaluationGate(nn.Module):
         Args:
             x_0: (B, D) starting noise
             context: Optional conditioning
-            llm_evaluator: Callable that evaluates latents → scores
+            llm_evaluator: Callable that evaluates latents -> scores
             return_trajectory: Whether to return trajectory
 
         Returns:
             latents: (B, D) generated latents
             scores: (B,) predicted or evaluated scores
         """
-        # Get FCU gating result
         result = self.fcu(x_0, context, return_trajectory)
 
         batch_size = result.latents.shape[0]
         scores = torch.zeros(batch_size, device=result.latents.device)
 
-        # GP/Value head predictions for confident samples
         confident_mask = ~result.needs_llm_eval
 
+        # Predict scores for confident samples using GP or value head
         if confident_mask.any():
-            confident_latents = result.latents[confident_mask]
-
-            if self.gp is not None:
-                with torch.no_grad():
-                    mean, _ = self.gp.predict(confident_latents)
-                scores[confident_mask] = mean
-            elif self.value_head is not None:
-                with torch.no_grad():
-                    self.value_head.eval()
-                    scores[confident_mask] = self.value_head(confident_latents).squeeze(-1)
-            else:
-                logger.warning("No GP or value head available for confident samples")
+            with torch.no_grad():
+                scores[confident_mask] = self._predict_scores(
+                    result.latents[confident_mask]
+                )
 
         # LLM evaluation for uncertain samples
-        if result.needs_llm_eval.any() and llm_evaluator is not None:
-            uncertain_latents = result.latents[result.needs_llm_eval]
-            llm_scores = llm_evaluator(uncertain_latents)
-            scores[result.needs_llm_eval] = llm_scores
+        if result.needs_llm_eval.any():
+            if llm_evaluator is None:
+                raise ValueError(
+                    f"{result.needs_llm_eval.sum().item()} samples need LLM evaluation "
+                    "but no llm_evaluator was provided. Either provide an evaluator "
+                    "or raise the FCU threshold to reduce uncertain samples."
+                )
+            scores[result.needs_llm_eval] = llm_evaluator(
+                result.latents[result.needs_llm_eval]
+            )
 
-        # Update result with predictions
-        result.gp_predictions = scores
-
-        # Log for analysis
         self.evaluation_log.append({
             "batch_size": batch_size,
             "llm_evals": result.needs_llm_eval.sum().item(),
@@ -465,7 +489,7 @@ if __name__ == "__main__":
         def predict(self, z):
             out = self.net(z)
             mean = torch.sigmoid(out[:, 0])
-            std = torch.softplus(out[:, 1]) * 0.1
+            std = torch.nn.functional.softplus(out[:, 1]) * 0.1
             return mean, std
 
     flowdit = MockFlowDiT().to(device)

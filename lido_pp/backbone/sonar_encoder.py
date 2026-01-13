@@ -70,10 +70,12 @@ class SONAREncoder(nn.Module):
             from sonar.inference_pipelines.text import TextToEmbeddingModelPipeline
 
             logger.info("Initializing SONAR text encoder...")
+            # Convert device string to torch.device (fairseq2 requirement)
+            device = torch.device(self.device) if isinstance(self.device, str) else self.device
             self._pipeline = TextToEmbeddingModelPipeline(
                 encoder="text_sonar_basic_encoder",
                 tokenizer="text_sonar_basic_encoder",
-                device=self.device,
+                device=device,
             )
             self._initialized = True
             logger.info("SONAR encoder initialized successfully")
@@ -211,10 +213,12 @@ class SONARTextDecoder(nn.Module):
             from sonar.inference_pipelines.text import EmbeddingToTextModelPipeline
 
             logger.info("Initializing SONAR text decoder...")
+            # Convert device string to torch.device (fairseq2 requirement)
+            device = torch.device(self.device) if isinstance(self.device, str) else self.device
             self._pipeline = EmbeddingToTextModelPipeline(
                 decoder="text_sonar_basic_decoder",
                 tokenizer="text_sonar_basic_decoder",
-                device=self.device,
+                device=device,
             )
             self._initialized = True
             logger.info("SONAR decoder initialized successfully")

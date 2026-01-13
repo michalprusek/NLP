@@ -21,13 +21,51 @@ Time-dependent scheduling is critical:
 Reference: Classifier-Free Guidance (Ho & Salimans, 2021), but for GP acquisition
 """
 
+import math
+from dataclasses import dataclass
+from typing import Literal, Optional, Tuple, List
+import logging
+
 import torch
 import torch.nn as nn
-from typing import Callable, Literal, Optional, Tuple, List
-import logging
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def compute_acquisition_reward(
+    mean: torch.Tensor,
+    std: torch.Tensor,
+    acquisition: Literal["ucb", "ei", "neg_error"],
+    ucb_beta: float = 2.0,
+    best_value: Optional[float] = None,
+) -> torch.Tensor:
+    """
+    Compute acquisition function reward for minimization.
+
+    Args:
+        mean: (B,) GP mean predictions (error rate)
+        std: (B,) GP std predictions
+        acquisition: Acquisition function type
+        ucb_beta: UCB exploration parameter
+        best_value: Best observed value for EI (uses mean.min() if None)
+
+    Returns:
+        (B,) reward values (higher is better)
+    """
+    if acquisition == "ucb":
+        return -mean + ucb_beta * std
+
+    if acquisition == "ei":
+        best = best_value if best_value is not None else mean.min().item()
+        improvement = best - mean
+        Z = improvement / (std + 1e-8)
+        normal = torch.distributions.Normal(0, 1)
+        cdf = normal.cdf(Z)
+        pdf = normal.log_prob(Z).exp()
+        return improvement * cdf + std * pdf
+
+    # neg_error - pure exploitation
+    return -mean
 
 
 @dataclass
@@ -110,29 +148,21 @@ class GPGuidedFlowGenerator(nn.Module):
         Returns:
             Weight in [0, 1] for guidance strength
         """
-        if self.schedule == "linear":
-            # Linear ramp: 0 at t=0, 1 at t=1
-            return t
+        schedules = {
+            "linear": lambda: t,
+            "cosine": lambda: (1 - math.cos(t * math.pi)) / 2,
+            "sqrt": lambda: t**0.5,
+            "warmup": lambda: 0.0 if t < 0.2 else (t - 0.2) / 0.8,
+            "constant": lambda: 1.0,
+        }
 
-        elif self.schedule == "cosine":
-            # Smooth cosine ramp
-            return (1 - torch.cos(torch.tensor(t) * torch.pi).item()) / 2
+        if self.schedule not in schedules:
+            raise ValueError(
+                f"Unknown guidance schedule '{self.schedule}'. "
+                f"Valid options: {', '.join(schedules.keys())}"
+            )
 
-        elif self.schedule == "sqrt":
-            # Faster initial ramp, slower at end
-            return t**0.5
-
-        elif self.schedule == "warmup":
-            # No guidance until t=0.2, then linear
-            return 0.0 if t < 0.2 else (t - 0.2) / 0.8
-
-        elif self.schedule == "constant":
-            # Full guidance at all times (not recommended)
-            return 1.0
-
-        else:
-            logger.warning(f"Unknown schedule '{self.schedule}', using linear")
-            return t
+        return schedules[self.schedule]()
 
     def _compute_acquisition_gradient(
         self,
@@ -143,10 +173,13 @@ class GPGuidedFlowGenerator(nn.Module):
         Compute gradient of acquisition function.
 
         For prompt optimization, we want to minimize error rate.
-        GP predicts error rate, so:
-        - UCB: R = -mean + β·std (minimize error + explore)
+        GP predicts error rate (NOT accuracy), so:
+        - UCB: R = -mean + beta*std (minimize error + explore)
         - EI: Expected improvement for minimization
         - neg_error: R = -mean (pure exploitation)
+
+        IMPORTANT: If your GP predicts accuracy instead of error rate,
+        flip the sign: R = mean + beta*std
 
         Args:
             z: (B, latent_dim) current latent positions
@@ -154,46 +187,34 @@ class GPGuidedFlowGenerator(nn.Module):
 
         Returns:
             (B, latent_dim) gradient of acquisition w.r.t. z
+
+        Raises:
+            RuntimeError: If GP model is not set
         """
         if self.gp is None:
-            return torch.zeros_like(z)
+            raise RuntimeError(
+                "Cannot compute acquisition gradient: GP model not set. "
+                "Call set_gp_model() before using GP-guided generation."
+            )
 
-        # Enable gradients for z
         z_grad = z.detach().requires_grad_(True)
-
-        # Get GP predictions
         mean, std = self.gp.predict(z_grad)
 
-        # Compute reward based on acquisition function
-        if acquisition == "ucb":
-            # UCB for minimization: want low mean (error) + high std (exploration)
-            # R = -mean + β·std
-            reward = -mean + self.ucb_beta * std
+        best_value = getattr(self.gp, "best_error_rate", None)
+        reward = compute_acquisition_reward(
+            mean, std, acquisition, self.ucb_beta, best_value
+        )
 
-        elif acquisition == "ei":
-            # Expected Improvement for minimization
-            if hasattr(self.gp, "best_error_rate"):
-                best = self.gp.best_error_rate
-            else:
-                best = mean.min().item()
-
-            # EI = E[max(best - Y, 0)]
-            improvement = best - mean
-            Z = improvement / (std + 1e-8)
-
-            # EI = improvement · Φ(Z) + std · φ(Z)
-            normal = torch.distributions.Normal(0, 1)
-            cdf = normal.cdf(Z)
-            pdf = normal.log_prob(Z).exp()
-            reward = improvement * cdf + std * pdf
-
-        else:  # neg_error - pure exploitation
-            reward = -mean
-
-        # Backpropagate to get gradient
         reward.sum().backward()
-        grad = z_grad.grad.detach()
 
+        if z_grad.grad is None:
+            raise RuntimeError(
+                "Gradient computation failed: z_grad.grad is None. "
+                "Ensure GP model supports gradient computation."
+            )
+
+        grad = z_grad.grad.detach().clone()
+        z_grad.grad = None
         return grad
 
     def guided_step(
@@ -333,7 +354,6 @@ class GPGuidedFlowGenerator(nn.Module):
         Returns:
             (batch_size, latent_dim) diverse high-quality latents
         """
-        # Generate more candidates than needed
         result = self.generate(
             batch_size=num_candidates,
             num_steps=num_steps,
@@ -343,47 +363,36 @@ class GPGuidedFlowGenerator(nn.Module):
 
         candidates = result.latents
 
-        # Score by acquisition (lower error = better)
         if result.acquisition_values is not None:
-            scores = -result.acquisition_values  # Negate so higher = better
+            scores = -result.acquisition_values
         else:
+            logger.warning(
+                "No acquisition values available for quality-based selection. "
+                "Selecting based on diversity only. Set GP model for quality-aware selection."
+            )
             scores = torch.zeros(num_candidates, device=candidates.device)
 
-        # Greedy selection with diversity
-        selected_indices = []
-        remaining = list(range(num_candidates))
+        selected_indices: List[int] = []
+        remaining = set(range(num_candidates))
 
-        for _ in range(batch_size):
-            if not remaining:
-                break
-
+        for _ in range(min(batch_size, num_candidates)):
             if not selected_indices:
-                # First selection: just pick best score
-                best_idx = remaining[scores[remaining].argmax()]
+                best_idx = scores.argmax().item()
             else:
-                # Subsequent: balance score and diversity
-                best_score = float("-inf")
-                best_idx = remaining[0]
-
+                remaining_list = list(remaining)
+                remaining_candidates = candidates[remaining_list]
                 selected_latents = candidates[selected_indices]
 
-                for idx in remaining:
-                    # Quality score
-                    quality = scores[idx].item()
+                # Vectorized: compute min distance from each remaining to selected
+                # (R, S, D) -> (R, S) -> (R,)
+                dist_matrix = torch.cdist(remaining_candidates, selected_latents)
+                min_distances = dist_matrix.min(dim=1).values
 
-                    # Diversity: min distance to selected
-                    distances = (candidates[idx] - selected_latents).norm(dim=-1)
-                    diversity = distances.min().item()
-
-                    # Combined score
-                    combined = quality + diversity_weight * diversity
-
-                    if combined > best_score:
-                        best_score = combined
-                        best_idx = idx
+                combined = scores[remaining_list] + diversity_weight * min_distances
+                best_idx = remaining_list[combined.argmax().item()]
 
             selected_indices.append(best_idx)
-            remaining.remove(best_idx)
+            remaining.discard(best_idx)
 
         return candidates[selected_indices]
 
@@ -426,22 +435,21 @@ class AcquisitionGradientGuide(nn.Module):
             (B, D) acquisition gradients
         """
         z = z.detach().requires_grad_(True)
-
         mean, std = self.gp.predict(z)
 
-        if self.acquisition == "ucb":
-            reward = -mean + self.ucb_beta * std
-        elif self.acquisition == "ei":
-            best = getattr(self.gp, "best_error_rate", mean.min().item())
-            improvement = best - mean
-            Z = improvement / (std + 1e-8)
-            normal = torch.distributions.Normal(0, 1)
-            reward = improvement * normal.cdf(Z) + std * normal.log_prob(Z).exp()
-        else:
-            reward = -mean
+        best_value = getattr(self.gp, "best_error_rate", None)
+        reward = compute_acquisition_reward(
+            mean, std, self.acquisition, self.ucb_beta, best_value
+        )
 
         reward.sum().backward()
-        return z.grad.detach()
+
+        if z.grad is None:
+            raise RuntimeError("Gradient computation failed: z.grad is None")
+
+        grad = z.grad.detach().clone()
+        z.grad = None
+        return grad
 
 
 def create_guided_generator(
@@ -449,7 +457,7 @@ def create_guided_generator(
     gp_model: Optional[nn.Module] = None,
     latent_dim: int = 128,
     guidance_scale: float = 1.0,
-    schedule: str = "linear",
+    schedule: Literal["linear", "cosine", "warmup", "sqrt", "constant"] = "linear",
     ucb_beta: float = 2.0,
 ) -> GPGuidedFlowGenerator:
     """
@@ -513,7 +521,7 @@ if __name__ == "__main__":
         def predict(self, z):
             out = self.net(z)
             mean = torch.sigmoid(out[:, 0])  # Error rate in [0, 1]
-            std = torch.softplus(out[:, 1]) * 0.1  # Small std
+            std = torch.nn.functional.softplus(out[:, 1]) * 0.1  # Small std
             return mean, std
 
     flowdit = MockFlowDiT().to(device)

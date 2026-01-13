@@ -18,11 +18,13 @@ Reference:
 - CoBO: Coordinate-wise Bayesian Optimization (NeurIPS 2023)
 """
 
+import math
+import warnings
+from typing import Dict, Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple, Dict
-import math
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -41,10 +43,7 @@ class SinusoidalPositionalEncoding(nn.Module):
         Returns:
             encoding: (B, dim) sinusoidal encoding
         """
-        if t.dim() == 0:
-            t = t.unsqueeze(0)
-        if t.dim() == 1:
-            t = t.unsqueeze(-1)  # (B, 1)
+        t = t.reshape(-1, 1)  # Handles scalar, 1D, and already-shaped inputs
 
         half_dim = self.dim // 2
         freqs = torch.exp(
@@ -147,15 +146,18 @@ class TextFlowAutoencoder(nn.Module):
     simulation-free flow matching. This enables efficient Bayesian
     Optimization in the latent space.
 
-    Architecture:
-        1024D → proj(256) → Flow[0→1] → proj(128) → 128D
+    Architecture (training is simulation-free, inference uses ODE):
+        Encode: SONAR 1024D → enc_proj → 256D → [Flow t=1→0] → 256D → to_latent → 128D
+        Decode: 128D → from_latent → 256D → [Flow t=0→1] → 256D → dec_proj → 1024D
+
+    Flow operates in 256D intermediate space, with 128D bottleneck at t=0.
 
     Training: Simulation-free Flow Matching (no ODE solver!)
     Inference: ODE integration for encode/decode
 
     Flow direction:
-        t=0: noise/latent space (x_0 ~ N(0,I) or from latent)
-        t=1: data space (x_1 = projected SONAR embedding)
+        t=0: latent space (flow endpoint, then projected to 128D)
+        t=1: data space (projected SONAR embedding in 256D)
 
     Novel contribution: First FM autoencoder for text reconstruction.
     """
@@ -288,7 +290,6 @@ class TextFlowAutoencoder(nn.Module):
     def compute_flow_matching_loss(
         self,
         x_input: torch.Tensor,
-        sigma_min: float = 0.001,
     ) -> Dict[str, torch.Tensor]:
         """
         Compute simulation-free Flow Matching loss.
@@ -298,11 +299,19 @@ class TextFlowAutoencoder(nn.Module):
 
         Args:
             x_input: (B, input_dim) input embeddings
-            sigma_min: Minimum noise for numerical stability
 
         Returns:
             dict with loss components and intermediates
+
+        Raises:
+            ValueError: If input contains NaN or Inf values
         """
+        # Validate input
+        if torch.isnan(x_input).any():
+            raise ValueError("NaN detected in input embeddings")
+        if torch.isinf(x_input).any():
+            raise ValueError("Inf detected in input embeddings")
+
         batch_size = x_input.shape[0]
         device = x_input.device
 
@@ -329,6 +338,13 @@ class TextFlowAutoencoder(nn.Module):
 
         # 7. Flow Matching loss (MSE between predicted and target velocity)
         loss_fm = F.mse_loss(v_t, u_t)
+
+        # Validate loss
+        if torch.isnan(loss_fm):
+            raise RuntimeError(
+                f"NaN loss detected. Stats: v_t norm={v_t.norm():.4f}, "
+                f"u_t norm={u_t.norm():.4f}, x_1 norm={x_1.norm():.4f}"
+            )
 
         return {
             "loss_fm": loss_fm,
@@ -409,55 +425,15 @@ def compute_lipschitz_loss(
     output_change = (x_recon_perturbed - x_recon).norm(dim=-1)
     input_change = noise.norm(dim=-1)
 
-    lipschitz_ratio = output_change / (input_change + 1e-8)
+    # Use dtype-appropriate epsilon and clamp ratios for stability
+    eps = max(torch.finfo(output_change.dtype).eps * 10, 1e-8)
+    lipschitz_ratio = output_change / input_change.clamp(min=eps)
+    lipschitz_ratio = lipschitz_ratio.clamp(max=1e6)  # Prevent extreme values
 
     # Penalize ratios above bound
     loss = F.relu(lipschitz_ratio - lip_bound).mean()
 
     return loss
-
-
-def compute_correlation_loss(
-    model: TextFlowAutoencoder,
-    x_input: torch.Tensor,
-    objectives: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """
-    Correlation loss between latent distances and objective differences.
-
-    Encourages: ||z_i - z_j|| ~ |y_i - y_j|
-    Target correlation > 0.7 for effective GP modeling.
-
-    Args:
-        model: TextFlowAutoencoder
-        x_input: (B, input_dim) input embeddings
-        objectives: (B,) objective values (e.g., error rates)
-
-    Returns:
-        Negative correlation loss (minimize to maximize correlation)
-    """
-    if objectives is None:
-        return torch.tensor(0.0, device=x_input.device)
-
-    # Encode to latent
-    z = model.encode(x_input)  # (B, latent_dim)
-
-    # Pairwise latent distances
-    z_dist = torch.cdist(z, z).flatten()
-
-    # Pairwise objective differences
-    obj_diff = (objectives.unsqueeze(0) - objectives.unsqueeze(1)).abs().flatten()
-
-    # Pearson correlation (want high positive correlation)
-    z_centered = z_dist - z_dist.mean()
-    obj_centered = obj_diff - obj_diff.mean()
-
-    correlation = (z_centered * obj_centered).sum() / (
-        z_centered.norm() * obj_centered.norm() + 1e-8
-    )
-
-    # Maximize correlation (minimize negative)
-    return 1.0 - correlation
 
 
 # =============================================================================
@@ -499,31 +475,30 @@ def flow_matching_loss(
         x_input, fm_result["x_1"], fm_result["x_0"]
     )
 
+    # Start with core losses
+    total = loss_fm + lambda_recon * loss_recon
+    gw_value = 0.0
+    lip_value = 0.0
+
     # GW loss (optional, for manifold preservation)
-    loss_gw = torch.tensor(0.0, device=x_input.device)
     if lambda_gw > 0:
         z = model.to_latent(fm_result["x_0"])  # Approximate latent
         loss_gw = sliced_gw_distance(x_input, z)
+        total = total + lambda_gw * loss_gw
+        gw_value = loss_gw.item()
 
-    # Lipschitz regularization (NEW - for BO-friendly latent space)
-    loss_lip = torch.tensor(0.0, device=x_input.device)
+    # Lipschitz regularization (for BO-friendly latent space)
     if lambda_lip > 0:
         loss_lip = compute_lipschitz_loss(model, x_input)
-
-    # Total loss
-    total = (
-        loss_fm
-        + lambda_recon * loss_recon
-        + lambda_gw * loss_gw
-        + lambda_lip * loss_lip
-    )
+        total = total + lambda_lip * loss_lip
+        lip_value = loss_lip.item()
 
     return {
         "loss": total,
         "fm": loss_fm.item(),
         "recon": loss_recon.item(),
-        "gw": loss_gw.item() if lambda_gw > 0 else 0.0,
-        "lip": loss_lip.item() if lambda_lip > 0 else 0.0,
+        "gw": gw_value,
+        "lip": lip_value,
     }
 
 
@@ -550,12 +525,24 @@ def sliced_gw_distance(
 # LEGACY ALIASES FOR BACKWARD COMPATIBILITY
 # =============================================================================
 
-# Keep old name as alias
-CoupledFlowEncoder = TextFlowAutoencoder
 
-# Legacy function alias
+def CoupledFlowEncoder(*args, **kwargs):
+    """DEPRECATED: Use TextFlowAutoencoder instead."""
+    warnings.warn(
+        "CoupledFlowEncoder is deprecated, use TextFlowAutoencoder",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return TextFlowAutoencoder(*args, **kwargs)
+
+
 def cfm_loss(*args, **kwargs):
-    """Legacy alias for flow_matching_loss."""
+    """DEPRECATED: Use flow_matching_loss instead."""
+    warnings.warn(
+        "cfm_loss is deprecated, use flow_matching_loss",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return flow_matching_loss(*args, **kwargs)
 
 

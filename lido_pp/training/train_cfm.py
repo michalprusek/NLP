@@ -40,11 +40,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lido_pp.backbone.cfm_encoder import (
     TextFlowAutoencoder,
     flow_matching_loss,
-    compute_lipschitz_loss,
-    sliced_gw_distance,
-    # Legacy aliases
-    CoupledFlowEncoder,
-    cfm_loss,
 )
 
 
@@ -240,15 +235,15 @@ def main():
 
     # Validate input dimensions
     if input_dim == 1024:
-        print("✓ SONAR embeddings detected (1024D)")
+        print("[OK] SONAR embeddings detected (1024D)")
     elif input_dim == 4096:
-        print("WARNING: GritLM embeddings detected (4096D)")
+        print("[WARNING] GritLM embeddings detected (4096D)")
         print("For FlowPO, use SONAR embeddings with --encoder sonar")
     elif input_dim == 768:
-        print("WARNING: GTR embeddings detected (768D)")
+        print("[WARNING] GTR embeddings detected (768D)")
         print("For FlowPO, use SONAR embeddings with --encoder sonar")
     else:
-        print(f"WARNING: Unexpected embedding dimension {input_dim}D")
+        print(f"[WARNING] Unexpected embedding dimension {input_dim}D")
 
     # Split data
     dataset = TensorDataset(embeddings)

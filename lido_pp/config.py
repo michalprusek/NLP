@@ -107,7 +107,8 @@ class FlowPOConfig:
     lipschitz_bound: float = 10.0  # Maximum Lipschitz constant
 
     # === OAT-FM (Optimal Acceleration Transport) ===
-    oat_enabled: bool = True
+    # NOTE: OAT is not yet implemented in train_cfm.py
+    oat_enabled: bool = False  # TODO: Not yet implemented
     oat_weight: float = 0.1  # λ in L_CFM + λ·L_OAT
     oat_steps: int = 10  # Steps for acceleration estimation
     sigma_min: float = 0.001  # Minimum noise for numerical stability
