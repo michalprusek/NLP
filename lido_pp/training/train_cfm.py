@@ -7,14 +7,15 @@ space (128D) via simulation-free flow matching with Lipschitz regularization.
 The TFA is a core component of FlowPO (Novel Contribution #1).
 
 Usage:
-    # Pre-compute SONAR embeddings first
-    uv run python -m lido_pp.training.precompute_embeddings \
-        --encoder sonar --output lido_pp/data/sonar_embeddings.pt
-
-    # Train TFA
+    # Single GPU
     uv run python -m lido_pp.training.train_cfm \
         --data lido_pp/data/sonar_embeddings.pt \
-        --epochs 10000 --batch-size 64
+        --epochs 10000 --batch-size 512
+
+    # Multi-GPU (DDP)
+    uv run torchrun --nproc_per_node=2 -m lido_pp.training.train_cfm \
+        --data lido_pp/data/sonar_embeddings.pt \
+        --epochs 10000 --batch-size 512
 
 Architecture:
     SONAR 1024D → Linear(256) → ODE Flow → Linear(128) → 128D
@@ -29,6 +30,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from pathlib import Path
 from datetime import datetime
@@ -41,6 +45,29 @@ from lido_pp.backbone.cfm_encoder import (
     TextFlowAutoencoder,
     flow_matching_loss,
 )
+
+
+def setup_ddp():
+    """Initialize DDP if running with torchrun."""
+    if "RANK" in os.environ:
+        rank = int(os.environ["RANK"])
+        local_rank = int(os.environ["LOCAL_RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        dist.init_process_group("nccl")
+        torch.cuda.set_device(local_rank)
+        return rank, local_rank, world_size
+    return 0, 0, 1
+
+
+def cleanup_ddp():
+    """Cleanup DDP."""
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_main_process():
+    """Check if this is the main process."""
+    return not dist.is_initialized() or dist.get_rank() == 0
 
 
 def parse_args():
@@ -206,44 +233,59 @@ def validate(
 def main():
     args = parse_args()
 
-    # Set seed
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
+    # Setup DDP if running with torchrun
+    rank, local_rank, world_size = setup_ddp()
+    use_ddp = world_size > 1
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    # Set seed
+    torch.manual_seed(args.seed + rank)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed + rank)
+
+    # Set device based on DDP or single GPU
+    if use_ddp:
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+
+    if is_main_process():
+        print(f"Device: {device}" + (f" (DDP: {world_size} GPUs)" if use_ddp else ""))
 
     # Create checkpoint directory
     checkpoint_dir = Path(args.checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process():
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Load data
-    print(f"Loading embeddings from {args.data}...")
+    if is_main_process():
+        print(f"Loading embeddings from {args.data}...")
     data = torch.load(args.data, weights_only=False)
 
     if isinstance(data, dict):
         embeddings = data["embeddings"]
         metadata = data.get("metadata", {})
-        print(f"Metadata: {metadata}")
+        if is_main_process():
+            print(f"Metadata: {metadata}")
     else:
         embeddings = data
         metadata = {}
 
-    print(f"Embeddings shape: {embeddings.shape}")
+    if is_main_process():
+        print(f"Embeddings shape: {embeddings.shape}")
     input_dim = embeddings.shape[1]
 
     # Validate input dimensions
-    if input_dim == 1024:
-        print("[OK] SONAR embeddings detected (1024D)")
-    elif input_dim == 4096:
-        print("[WARNING] GritLM embeddings detected (4096D)")
-        print("For FlowPO, use SONAR embeddings with --encoder sonar")
-    elif input_dim == 768:
-        print("[WARNING] GTR embeddings detected (768D)")
-        print("For FlowPO, use SONAR embeddings with --encoder sonar")
-    else:
-        print(f"[WARNING] Unexpected embedding dimension {input_dim}D")
+    if is_main_process():
+        if input_dim == 1024:
+            print("✓ SONAR embeddings detected (1024D)")
+        elif input_dim == 4096:
+            print("WARNING: GritLM embeddings detected (4096D)")
+            print("For FlowPO, use SONAR embeddings with --encoder sonar")
+        elif input_dim == 768:
+            print("WARNING: GTR embeddings detected (768D)")
+            print("For FlowPO, use SONAR embeddings with --encoder sonar")
+        else:
+            print(f"WARNING: Unexpected embedding dimension {input_dim}D")
 
     # Split data
     dataset = TensorDataset(embeddings)
@@ -254,13 +296,18 @@ def main():
         generator=torch.Generator().manual_seed(args.seed)
     )
 
-    print(f"Train: {train_size}, Val: {val_size}")
+    if is_main_process():
+        print(f"Train: {train_size}, Val: {val_size}")
 
-    # Create dataloaders
+    # Create dataloaders with DDP sampler if needed
+    train_sampler = DistributedSampler(train_dataset, shuffle=True) if use_ddp else None
+    val_sampler = DistributedSampler(val_dataset, shuffle=False) if use_ddp else None
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=(train_sampler is None),
+        sampler=train_sampler,
         num_workers=4,
         pin_memory=True,
     )
@@ -268,6 +315,7 @@ def main():
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
+        sampler=val_sampler,
         num_workers=4,
         pin_memory=True,
     )
@@ -280,12 +328,18 @@ def main():
         num_ode_steps=args.ode_steps,  # Only used during inference
     ).to(device)
 
+    # Wrap in DDP if multi-GPU
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank])
+
     num_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {num_params:,} ({num_params / 1e6:.2f}M)")
+    if is_main_process():
+        print(f"Model parameters: {num_params:,} ({num_params / 1e6:.2f}M)")
 
     # Compression ratio
     compression_ratio = input_dim / args.latent_dim
-    print(f"Compression ratio: {compression_ratio:.1f}:1 ({input_dim}D → {args.latent_dim}D)")
+    if is_main_process():
+        print(f"Compression ratio: {compression_ratio:.1f}:1 ({input_dim}D → {args.latent_dim}D)")
 
     # Optimizer
     optimizer = torch.optim.AdamW(
@@ -307,24 +361,29 @@ def main():
     epochs_without_improvement = 0
     start_time = datetime.now()
 
-    print("\n" + "=" * 70)
-    print("FlowPO: Text Flow Autoencoder (TFA) Training")
-    print("Novel Contribution #1: Simulation-free FM for text autoencoding")
-    print("=" * 70)
-    print(f"Input dim: {input_dim}D (SONAR)")
-    print(f"Flow dim: {args.flow_dim}D")
-    print(f"Latent dim: {args.latent_dim}D")
-    print(f"Compression: {compression_ratio:.1f}:1")
-    print(f"ODE steps (inference): {args.ode_steps}")
-    print(f"Lambda recon: {args.lambda_recon}")
-    print(f"Lambda GW: {args.lambda_gw}")
-    print(f"Lambda Lipschitz: {args.lambda_lip} (BO-friendly regularization)")
-    print("-" * 70)
-    print("Training: Simulation-free (no ODE solver)")
-    print("Inference: Euler integration for encode/decode")
-    print("=" * 70 + "\n")
+    if is_main_process():
+        print("\n" + "=" * 70)
+        print("FlowPO: Text Flow Autoencoder (TFA) Training")
+        print("Novel Contribution #1: Simulation-free FM for text autoencoding")
+        print("=" * 70)
+        print(f"Input dim: {input_dim}D (SONAR)")
+        print(f"Flow dim: {args.flow_dim}D")
+        print(f"Latent dim: {args.latent_dim}D")
+        print(f"Compression: {compression_ratio:.1f}:1")
+        print(f"ODE steps (inference): {args.ode_steps}")
+        print(f"Lambda recon: {args.lambda_recon}")
+        print(f"Lambda GW: {args.lambda_gw}")
+        print(f"Lambda Lipschitz: {args.lambda_lip} (BO-friendly regularization)")
+        print("-" * 70)
+        print("Training: Simulation-free (no ODE solver)")
+        print("Inference: Euler integration for encode/decode")
+        print("=" * 70 + "\n")
 
     for epoch in range(1, args.epochs + 1):
+        # Set epoch for distributed sampler
+        if use_ddp:
+            train_sampler.set_epoch(epoch)
+
         # Warmup LR
         if epoch <= args.warmup_epochs:
             warmup_factor = epoch / args.warmup_epochs
@@ -347,24 +406,26 @@ def main():
             best_val_loss = val_metrics["loss"]
             epochs_without_improvement = 0
 
-            # Save best model
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "val_loss": best_val_loss,
-                "val_cos_ode": best_val_cos,
-                "args": vars(args),
-                "metadata": metadata,
-                "architecture": "TextFlowAutoencoder",
-                "input_dim": input_dim,
-                "latent_dim": args.latent_dim,
-            }, checkpoint_dir / "tfa_best.pt")
+            # Save best model (only on main process)
+            if is_main_process():
+                model_to_save = model.module if use_ddp else model
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model_to_save.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "val_loss": best_val_loss,
+                    "val_cos_ode": best_val_cos,
+                    "args": vars(args),
+                    "metadata": metadata,
+                    "architecture": "TextFlowAutoencoder",
+                    "input_dim": input_dim,
+                    "latent_dim": args.latent_dim,
+                }, checkpoint_dir / "tfa_best.pt")
         else:
             epochs_without_improvement += 1
 
-        # Logging
-        if epoch % args.log_interval == 0 or epoch == 1:
+        # Logging (only on main process)
+        if is_main_process() and (epoch % args.log_interval == 0 or epoch == 1):
             lr = optimizer.param_groups[0]["lr"]
             elapsed = datetime.now() - start_time
             print(
@@ -378,11 +439,12 @@ def main():
                 f"Time: {elapsed}"
             )
 
-        # Periodic checkpoint
-        if epoch % args.checkpoint_interval == 0:
+        # Periodic checkpoint (only on main process)
+        if is_main_process() and epoch % args.checkpoint_interval == 0:
+            model_to_save = model.module if use_ddp else model
             torch.save({
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": model_to_save.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": val_metrics["loss"],
                 "val_cos_ode": val_metrics["cos_ode"],
@@ -391,7 +453,8 @@ def main():
 
         # Early stopping
         if epochs_without_improvement >= args.patience:
-            print(f"\nEarly stopping at epoch {epoch} (no improvement for {args.patience} epochs)")
+            if is_main_process():
+                print(f"\nEarly stopping at epoch {epoch} (no improvement for {args.patience} epochs)")
             break
 
     # Final summary
