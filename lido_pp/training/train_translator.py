@@ -69,11 +69,11 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--vae-lr", type=float, default=1e-4, help="VAE learning rate")
+    parser.add_argument("--vae-lr", type=float, default=1e-4, help="VAE learning rate (ignored if --frozen-vae)")
     parser.add_argument("--proj-lr", type=float, default=1e-4, help="Projector learning rate")
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--latent-dim", type=int, default=32)
-    parser.add_argument("--num-prefix-tokens", type=int, default=4)
+    parser.add_argument("--num-prefix-tokens", type=int, default=8)  # Increased from 4 for better capacity
     parser.add_argument("--max-length", type=int, default=128)
     parser.add_argument("--vae-beta", type=float, default=0.001, help="VAE KL weight (lower for reconstruction)")
     parser.add_argument("--gritlm-model", type=str, default="GritLM/GritLM-7B")
@@ -88,8 +88,10 @@ def parse_args():
     parser.add_argument("--gradient-accumulation", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda:0")
-    # Resume from checkpoint
-    parser.add_argument("--resume-vae", type=str, default=None, help="Resume VAE from checkpoint")
+    # VAE options
+    parser.add_argument("--frozen-vae", type=str, default=None,
+                        help="Path to frozen VAE checkpoint. If set, VAE is frozen and only Projector is trained.")
+    parser.add_argument("--resume-vae", type=str, default=None, help="Resume VAE from checkpoint (ignored if --frozen-vae)")
     parser.add_argument("--resume-proj", type=str, default=None, help="Resume Projector from checkpoint")
     return parser.parse_args()
 
@@ -103,6 +105,10 @@ class TranslatorTrainer:
 
     We want Text ≈ Text' so that when FlowDiT manipulates latents,
     the Projector can faithfully reconstruct the intended text.
+
+    Supports two modes:
+    1. Joint training (default): Both VAE and Projector are trainable
+    2. Frozen VAE mode: VAE is frozen, only Projector is trained
     """
 
     def __init__(
@@ -114,6 +120,7 @@ class TranslatorTrainer:
         encoder,  # GritLM encoder for embeddings
         args,
         device: str = "cuda:0",
+        vae_frozen: bool = False,
     ):
         self.vae = vae
         self.projector = projector
@@ -122,6 +129,7 @@ class TranslatorTrainer:
         self.encoder = encoder  # For encoding text to embeddings
         self.args = args
         self.device = device
+        self.vae_frozen = vae_frozen
 
         # Freeze GritLM
         for param in self.model.parameters():
@@ -131,17 +139,29 @@ class TranslatorTrainer:
         self.embed_tokens = self.model.get_input_embeddings()
         self.hidden_dim = self.model.config.hidden_size
 
-        # Optimizers - separate for VAE and Projector
-        self.vae_optimizer = torch.optim.AdamW(
-            vae.parameters(), lr=args.vae_lr, weight_decay=args.weight_decay
-        )
-        self.proj_optimizer = torch.optim.AdamW(
-            projector.parameters(), lr=args.proj_lr, weight_decay=args.weight_decay
-        )
+        if vae_frozen:
+            # Frozen VAE mode: only train Projector
+            self.vae.eval()
+            for param in self.vae.parameters():
+                param.requires_grad = False
+            print("[Trainer] VAE is FROZEN - only training Projector")
 
-        # Schedulers
-        self.vae_scheduler = CosineAnnealingLR(self.vae_optimizer, T_max=args.epochs, eta_min=1e-6)
-        self.proj_scheduler = CosineAnnealingLR(self.proj_optimizer, T_max=args.epochs, eta_min=1e-6)
+            self.vae_optimizer = None
+            self.vae_scheduler = None
+            self.proj_optimizer = torch.optim.AdamW(
+                projector.parameters(), lr=args.proj_lr, weight_decay=args.weight_decay
+            )
+            self.proj_scheduler = CosineAnnealingLR(self.proj_optimizer, T_max=args.epochs, eta_min=1e-6)
+        else:
+            # Joint training mode
+            self.vae_optimizer = torch.optim.AdamW(
+                vae.parameters(), lr=args.vae_lr, weight_decay=args.weight_decay
+            )
+            self.proj_optimizer = torch.optim.AdamW(
+                projector.parameters(), lr=args.proj_lr, weight_decay=args.weight_decay
+            )
+            self.vae_scheduler = CosineAnnealingLR(self.vae_optimizer, T_max=args.epochs, eta_min=1e-6)
+            self.proj_scheduler = CosineAnnealingLR(self.proj_optimizer, T_max=args.epochs, eta_min=1e-6)
 
         # Mixed precision
         self.scaler = torch.amp.GradScaler('cuda')
@@ -173,9 +193,17 @@ class TranslatorTrainer:
             embeddings = self.encode_texts(texts)  # (B, 768)
 
         # Step 2-3: VAE forward (encode + decode)
-        x_recon, mu, log_var, z = self.vae(embeddings)  # All (B, *)
+        if self.vae_frozen:
+            # For frozen VAE: use deterministic encoding (no reparameterize noise)
+            with torch.no_grad():
+                mu, log_var = self.vae.encode(embeddings)
+                z = mu  # Deterministic: use mean directly
+                x_recon = self.vae.decode(z)
+        else:
+            # For trainable VAE: use full forward with reparameterization
+            x_recon, mu, log_var, z = self.vae(embeddings)  # All (B, *)
 
-        # VAE losses
+        # VAE losses (cosine for reconstruction quality)
         vae_recon_loss = 1 - F.cosine_similarity(embeddings, x_recon, dim=-1).mean()
         vae_kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).sum(dim=-1).mean()
 
@@ -256,13 +284,15 @@ class TranslatorTrainer:
 
     def train_epoch(self, dataloader: DataLoader, epoch: int, use_precomputed: bool = False) -> Dict[str, float]:
         """Train for one epoch."""
-        self.vae.train()
+        if not self.vae_frozen:
+            self.vae.train()
         self.projector.train()
 
         total_metrics = {k: 0.0 for k in ["total_loss", "ce_loss", "vae_recon", "vae_kl", "perplexity", "embedding_cosine"]}
         n_batches = 0
 
-        self.vae_optimizer.zero_grad()
+        if not self.vae_frozen:
+            self.vae_optimizer.zero_grad()
         self.proj_optimizer.zero_grad()
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}")
@@ -295,19 +325,23 @@ class TranslatorTrainer:
             # Gradient step
             if (step + 1) % self.args.gradient_accumulation == 0:
                 # Unscale and clip
-                self.scaler.unscale_(self.vae_optimizer)
+                if not self.vae_frozen:
+                    self.scaler.unscale_(self.vae_optimizer)
                 self.scaler.unscale_(self.proj_optimizer)
 
                 if self.args.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(self.vae.parameters(), self.args.grad_clip)
+                    if not self.vae_frozen:
+                        torch.nn.utils.clip_grad_norm_(self.vae.parameters(), self.args.grad_clip)
                     torch.nn.utils.clip_grad_norm_(self.projector.parameters(), self.args.grad_clip)
 
                 # Step
-                self.scaler.step(self.vae_optimizer)
+                if not self.vae_frozen:
+                    self.scaler.step(self.vae_optimizer)
                 self.scaler.step(self.proj_optimizer)
                 self.scaler.update()
 
-                self.vae_optimizer.zero_grad()
+                if not self.vae_frozen:
+                    self.vae_optimizer.zero_grad()
                 self.proj_optimizer.zero_grad()
 
         # Average metrics
@@ -339,15 +373,18 @@ class TranslatorTrainer:
     def save_checkpoint(self, path: str, epoch: int, metrics: Dict):
         """Save both VAE and Projector."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
+        ckpt = {
             "epoch": epoch,
             "vae_state_dict": self.vae.state_dict(),
             "projector_state_dict": self.projector.state_dict(),
-            "vae_optimizer": self.vae_optimizer.state_dict(),
             "proj_optimizer": self.proj_optimizer.state_dict(),
             "metrics": metrics,
             "args": vars(self.args),
-        }, path)
+            "vae_frozen": self.vae_frozen,
+        }
+        if not self.vae_frozen and self.vae_optimizer is not None:
+            ckpt["vae_optimizer"] = self.vae_optimizer.state_dict()
+        torch.save(ckpt, path)
         print(f"[Checkpoint] Saved to {path}")
 
 
@@ -385,18 +422,37 @@ def main():
         beta=args.vae_beta,
     ).to(device)
 
-    if args.resume_vae:
-        print(f"Loading VAE from {args.resume_vae}")
+    # Determine if VAE should be frozen
+    vae_frozen = args.frozen_vae is not None
+
+    if args.frozen_vae:
+        print(f"Loading FROZEN VAE from {args.frozen_vae}")
+        ckpt = torch.load(args.frozen_vae, map_location=device, weights_only=False)
+        vae.load_state_dict(ckpt["model_state_dict"])
+        # Get VAE metrics from checkpoint if available
+        vae_cosine = ckpt.get("val_cosine", "N/A")
+        vae_epoch = ckpt.get("epoch", "N/A")
+        print(f"  VAE checkpoint: epoch={vae_epoch}, val_cosine={vae_cosine}")
+        print(f"  VAE will be FROZEN during training (only Projector trains)")
+    elif args.resume_vae:
+        print(f"Loading VAE from {args.resume_vae} (trainable)")
         ckpt = torch.load(args.resume_vae, map_location=device, weights_only=False)
         vae.load_state_dict(ckpt["model_state_dict"])
 
-    # Create Projector
+    # Create Projector with ResBlock architecture
     print("Creating Projector...")
     projector = LatentProjector(
         latent_dim=768,  # Takes VAE decoder output (768D)
         hidden_dim=hidden_dim,
         num_prefix_tokens=args.num_prefix_tokens,
+        use_resblocks=True,  # New ResBlock architecture
+        resblock_dim=1024,
+        num_resblocks=2,
     ).to(device)
+
+    proj_params = sum(p.numel() for p in projector.parameters())
+    print(f"  Projector parameters: {proj_params:,} ({proj_params/1e6:.2f}M)")
+    print(f"  Architecture: ResBlock (768 → 1024 → ResBlock×2 → {args.num_prefix_tokens}×4096)")
 
     if args.resume_proj:
         print(f"Loading Projector from {args.resume_proj}")
@@ -476,16 +532,22 @@ def main():
         encoder=encoder,
         args=args,
         device=device,
+        vae_frozen=vae_frozen,
     )
 
     # Training loop
-    print(f"\nStarting Translator training (VAE + Projector):")
+    mode_str = "Projector-only (VAE frozen)" if vae_frozen else "VAE + Projector (joint)"
+    print(f"\nStarting Translator training ({mode_str}):")
     print(f"  Epochs: {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
     print(f"  Gradient accumulation: {args.gradient_accumulation}")
     print(f"  Effective batch: {args.batch_size * args.gradient_accumulation}")
-    print(f"  VAE LR: {args.vae_lr}, Projector LR: {args.proj_lr}")
-    print(f"  VAE beta (KL weight): {args.vae_beta}")
+    if vae_frozen:
+        print(f"  Projector LR: {args.proj_lr}")
+        print(f"  VAE: FROZEN (from {args.frozen_vae})")
+    else:
+        print(f"  VAE LR: {args.vae_lr}, Projector LR: {args.proj_lr}")
+        print(f"  VAE beta (KL weight): {args.vae_beta}")
     print(f"  Precomputed embeddings: {use_precomputed}")
     print(f"  Num prefix tokens: {args.num_prefix_tokens}")
 
@@ -497,7 +559,8 @@ def main():
         train_metrics = trainer.train_epoch(train_loader, epoch, use_precomputed=use_precomputed)
 
         # Update schedulers
-        trainer.vae_scheduler.step()
+        if not vae_frozen:
+            trainer.vae_scheduler.step()
         trainer.proj_scheduler.step()
 
         # Validate

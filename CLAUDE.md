@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
+CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
+
 Prompt optimization framework implementing **ProTeGi**, **OPRO**, **LIPO**, and **BOLT** algorithms for automatic prompt engineering on GSM8K (math reasoning) dataset.
 
 ## Commands

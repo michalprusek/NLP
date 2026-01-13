@@ -1,4 +1,12 @@
-"""Rectified Flow Matching modules for LID-O++."""
+"""
+FlowPO: Flow Matching modules.
+
+Components:
+- Flow-DiT: Transformer-based velocity field
+- ODE Solvers: Euler, midpoint, RK4 integration
+- Reflow: Trajectory straightening for 1-step inference
+- GP-Guided Flow: Acquisition gradient injection (Novel Contribution #2)
+"""
 
 from lido_pp.flow.timestep_embed import TimestepEmbedding
 from lido_pp.flow.flow_dit import FlowDiT, AdaLayerNorm, FlowTransformerBlock
@@ -22,6 +30,12 @@ from lido_pp.flow.reflow import (
     ReflowConfig,
     ReflowResult,
     verify_one_step_inference,
+)
+from lido_pp.flow.gp_guided_flow import (
+    GPGuidedFlowGenerator,
+    GuidedGenerationResult,
+    AcquisitionGradientGuide,
+    create_guided_generator,
 )
 
 __all__ = [
@@ -49,4 +63,9 @@ __all__ = [
     "ReflowConfig",
     "ReflowResult",
     "verify_one_step_inference",
+    # GP-Guided Flow (Novel Contribution #2)
+    "GPGuidedFlowGenerator",
+    "GuidedGenerationResult",
+    "AcquisitionGradientGuide",
+    "create_guided_generator",
 ]

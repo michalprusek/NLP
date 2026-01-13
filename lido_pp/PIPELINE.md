@@ -1,841 +1,388 @@
-# LID-O++ Pipeline Documentation
+# FlowPO: Flow Matching for Prompt Optimization
 
-**Latent Instruction Diffusion Optimization++** for NeurIPS 2026
+**NeurIPS 2026 Submission**
+
+FlowPO is a unified framework for prompt optimization that combines:
+1. **Text Flow Autoencoder (TFA)** - SONAR + simulation-free flow matching
+2. **GP-Guided Flow Generation** - Acquisition function gradients navigate velocity field
+3. **Flow Curvature Uncertainty (FCU)** - Trajectory curvature for adaptive evaluation gating
+4. **Unified End-to-End Pipeline** - text → encode → GP-BO → guided generation → decode
+
+---
+
+## Novel Contributions
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     FlowPO: Novel Contributions                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  1. TEXT FLOW AUTOENCODER (TFA)                                      │
+│     - SONAR 1024D → Flow Matching → 128D latent                      │
+│     - Simulation-free training, deterministic inference              │
+│     - First application of FM autoencoding for text                  │
+│                                                                      │
+│  2. GP-GUIDED FLOW GENERATION                                        │
+│     - Inject ∇UCB(z) into flow velocity: v' = v + s(t)·∇R(z)        │
+│     - Time-dependent guidance schedule (avoid t=0 noise)             │
+│     - First: GP acquisition gradients for flow matching              │
+│                                                                      │
+│  3. FLOW CURVATURE UNCERTAINTY (FCU) GATING                          │
+│     - FCU = Σ||v(x_{t+1}) - v(x_t)||² / N                           │
+│     - High FCU → uncertain → LLM evaluation                          │
+│     - Low FCU → confident → use GP prediction                        │
+│     - First: trajectory curvature as uncertainty for evaluation      │
+│                                                                      │
+│  4. UNIFIED FRAMEWORK FOR PROMPT OPTIMIZATION                        │
+│     - End-to-end: text → TFA encode → GP-BO → guided gen → decode   │
+│     - Bridges: flow matching + latent BO + prompt optimization       │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## Architecture Overview
 
-### High-Level Pipeline
-
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           LID-O++ Architecture                                   │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ENCODING (Text → Latent)                                                       │
-│  ────────────────────────                                                       │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                         │
-│  │    Text     │───▶│   GritLM    │───▶│     VAE     │───▶ z (32D)             │
-│  │ Instruction │    │   Encoder   │    │   Encoder   │     latent              │
-│  └─────────────┘    │   (768D)    │    │  (768→32)   │                         │
-│                     └─────────────┘    └─────────────┘                         │
-│                            │                                                    │
-│                            │ context (768D)                                     │
-│                            ▼                                                    │
-│  GENERATION (Latent → Latent)                                                   │
-│  ────────────────────────────                                                   │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                         │
-│  │   Noise     │───▶│   FlowDiT   │───▶│  z' (32D)   │                         │
-│  │  z₀~N(0,I)  │    │  (32D→32D)  │    │  optimized  │                         │
-│  └─────────────┘    │ + context   │    │   latent    │                         │
-│                     └─────────────┘    └──────┬──────┘                         │
-│                            │                  │                                 │
-│                       curvature (FCU)         │                                 │
-│                            │                  │                                 │
-│  DECODING (Latent → Text)  ▼                  ▼                                 │
-│  ────────────────────────────────────────────────────────────────               │
-│  ┌─────────────┐    ┌───────────────────────────────────────────┐              │
-│  │     VAE     │───▶│ Latent Projector (768→4×4K prefix tokens) │───▶ Text    │
-│  │   Decoder   │    │     + GritLM Decoder (7B, autoregressive) │    Output   │
-│  │  (32→768)   │    └───────────────────────────────────────────┘              │
-│  └─────────────┘      (projector.generate() wraps both internally)             │
-│                                                                                 │
-│  EVALUATION (Score Prediction)                                                  │
-│  ─────────────────────────────                                                  │
-│  ┌─────────────┐         ┌─────────────┐         ┌─────────────┐               │
-│  │  z' (32D)   │────────▶│  GP / Value │────────▶│   Score     │               │
-│  │   latent    │         │    Head     │         │  Prediction │               │
-│  └─────────────┘         │  (32→1)     │         └─────────────┘               │
-│         │                └─────────────┘                  │                     │
-│         │                       │                         │                     │
-│         │                  uncertainty                    │                     │
-│         │                       ▼                         ▼                     │
-│         │                ┌─────────────┐         ┌─────────────┐               │
-│         │                │  FCU high?  │───Yes──▶│     LLM     │               │
-│         │                │  (gating)   │         │  Evaluator  │               │
-│         │                └─────────────┘         │  (GSM8K)    │               │
-│         │                       │ No             └─────────────┘               │
-│         │                       ▼                                               │
-│         │                Use GP/ValueHead                                       │
-│         │                  prediction                                           │
-│         │                                                                       │
-│  GUIDED GENERATION (Optional)                                                   │
-│  ────────────────────────────                                                   │
-│         └──────────────────────────────────────────────────────┐                │
-│                                                                ▼                │
-│         ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐          │
-│         │   FlowDiT   │◀───│  ∇R(z) from │◀───│ GP UCB / EI reward  │          │
-│         │  velocity   │    │     GP      │    │  (guides toward     │          │
-│         │   + ∇R(z)   │    │             │    │   high-score areas) │          │
-│         └─────────────┘    └─────────────┘    └─────────────────────┘          │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
+                         FlowPO Architecture
+                         ===================
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  Text Instruction                                                    │
+│        │                                                             │
+│        ▼                                                             │
+│  ┌──────────────┐                                                    │
+│  │    SONAR     │  Reconstruction-optimized encoder                  │
+│  │   Encoder    │  (DAE + translation loss, preserves semantics)     │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ 1024D                                                       │
+│  ┌──────────────┐                                                    │
+│  │  Text Flow   │  Simulation-free flow matching                     │
+│  │ Autoencoder  │  + Lipschitz regularization (BO-friendly)          │
+│  │    (TFA)     │  8:1 compression (was 128:1)                       │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ 128D                                                        │
+│  ┌──────────────┐                                                    │
+│  │   GP Model   │  Matern 5/2 kernel with ARD                        │
+│  │  (Surrogate) │  Predicts error rate from latent                   │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ ∇UCB                                                        │
+│  ┌──────────────┐                                                    │
+│  │  GP-Guided   │  v'(x,t) = v(x,t) + s(t)·∇R(x)                    │
+│  │    Flow      │  Time-dependent guidance schedule                  │
+│  │  Generator   │                                                    │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ FCU                                                         │
+│  ┌──────────────┐                                                    │
+│  │  FCU Gating  │  High FCU → LLM evaluation                         │
+│  │              │  Low FCU → GP prediction                           │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ 128D                                                        │
+│  ┌──────────────┐                                                    │
+│  │    TFA       │  Reverse ODE integration                           │
+│  │   Decode     │  128D → 1024D                                      │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ 1024D                                                       │
+│  ┌──────────────┐                                                    │
+│  │ Cross-Attn   │  16 K,V memory slots (was 4 prefix tokens)         │
+│  │  Projector   │  Position-specific conditioning                    │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼ K,V                                                         │
+│  ┌──────────────┐                                                    │
+│  │   Decoder    │  Frozen LLM + cross-attention layers               │
+│  │    (LLM)     │  Generates optimized text instruction              │
+│  └──────────────┘                                                    │
+│        │                                                             │
+│        ▼                                                             │
+│  Optimized Instruction                                               │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Component Status During Task Training
+---
 
-```
-┌────────────────────┬────────────────────┬────────────────────┐
-│    FROZEN (🧊)     │   TRAINABLE (🔥)   │      PURPOSE       │
-├────────────────────┼────────────────────┼────────────────────┤
-│ GritLM Encoder/Dec │                    │ Text understanding │
-│ VAE Encoder/Dec    │                    │ Latent space map   │
-│ Latent Projector   │                    │ Vector → tokens    │
-├────────────────────┼────────────────────┼────────────────────┤
-│                    │ FlowDiT            │ Navigate latent    │
-│                    │ Value Head / GP    │ Predict quality    │
-└────────────────────┴────────────────────┴────────────────────┘
-```
+## Key Dimensions
 
-## 1. GritLM Unified Backbone
+| Component | Input | Output | Notes |
+|-----------|-------|--------|-------|
+| SONAR Encoder | text | 1024D | Reconstruction-optimized |
+| TFA Encode | 1024D | 128D | 8:1 compression |
+| Flow-DiT | 128D | 128D | Velocity field |
+| GP Surrogate | 128D | μ, σ | Error prediction |
+| TFA Decode | 128D | 1024D | Reverse ODE |
+| CrossAttn Projector | 128D | 16×4096D K,V | Memory slots |
+| Decoder | K,V | text | Frozen LLM |
 
-**Model**: `GritLM/GritLM-7B` (7B parameters, Mistral-based)
+---
 
-**Purpose**: Unified encoder/decoder using the same model with different attention masks.
+## Component Details
 
-### Encoder Mode
-- **Input**: Text instruction
-- **Output**: 768D normalized embedding (→ VAE compression to 32D, see Section 2)
-- **Pooling**: Latent Attention (4 queries × 4096D → 768D)
-- **Normalization**: L2 normalized
+### 1. SONAR Encoder (`backbone/sonar_encoder.py`)
+
+**Why SONAR over GritLM?**
+- GritLM: Contrastive/retrieval-optimized → loses reconstruction info
+- SONAR: DAE + translation loss → preserves semantic details
 
 ```python
-# Architecture
-GritLMUnifiedEncoder(
-    model_name="GritLM/GritLM-7B",
-    output_dim=768,           # Final embedding dimension
-    dtype=torch.float16,      # Memory efficient
-    quantize=False,           # Full precision for quality
-)
+from lido_pp.backbone import SONAREncoder
+
+encoder = SONAREncoder(device="cuda", source_lang="eng_Latn")
+embeddings = encoder.encode(["Think step by step..."])  # (1, 1024)
 ```
 
-### Decoder Mode (Latent Injection)
-- **Input**: 768D latent vector
-- **Projection**: 768D → 4 × 4096D prefix tokens
-- **Generation**: Autoregressive with prefix conditioning
+### 2. Text Flow Autoencoder (`backbone/cfm_encoder.py`)
+
+**Simulation-free flow matching** for text autoencoding:
+- Train: Match velocity field at random t, no ODE solver
+- Inference: Euler integration for encode/decode
 
 ```python
-# Latent Projector Architecture
-LatentProjector(
-    latent_dim=768,           # From encoder
-    hidden_dim=4096,          # GritLM hidden size
-    num_prefix_tokens=4,      # Conditioning tokens
-    intermediate_dim=3072,    # MLP intermediate
-    dropout=0.1,
+from lido_pp.backbone import TextFlowAutoencoder
+
+tfa = TextFlowAutoencoder(
+    input_dim=1024,   # SONAR
+    flow_dim=256,     # Intermediate
+    latent_dim=128,   # Target (8:1 compression)
 )
 
-# MLP Structure:
-# 768 → 3072 (GELU) → 3072 (GELU) → 16384 (4×4096)
-# + LayerNorm + Learnable scale (init=10.0)
+z, x_recon = tfa(x_input)  # Encode + decode
 ```
 
-**Training**:
-- Optimizer: AdamW (lr=1e-4, weight_decay=1e-5)
-- Mixed precision: GradScaler + autocast
-- Gradient clipping: max_norm=1.0
-- Loss: Cross-entropy on next-token prediction
-
-## 2. VAE (Variational Autoencoder)
-
-**Purpose**: Compress 768D GritLM embeddings to 32D latent space for efficient FlowDiT navigation.
-
-### Architecture
+**Lipschitz Regularization** ensures BO-friendly smoothness:
 ```python
-InstructionVAE(
-    input_dim=768,            # GritLM embedding dimension
-    latent_dim=32,            # Compressed latent space
-    hidden_dim=256,           # Encoder/Decoder hidden layers
-    beta=0.001,               # KL weight (low = reconstruction priority)
-)
+from lido_pp.backbone import compute_lipschitz_loss
 
-# Encoder: 768 → 256 → 128 → 32 (μ, σ)
-# Decoder: 32 → 128 → 256 → 768
+lip_loss = compute_lipschitz_loss(tfa, x_input, epsilon=0.01)
+# Penalizes ||f(z) - f(z+ε)|| / ||ε|| > 10
 ```
 
-### Why VAE? (Not Just Linear Projection)
+### 3. GP-Guided Flow Generation (`flow/gp_guided_flow.py`)
 
-| Aspect | Linear (768→32) | VAE (768→32→768) |
-|--------|-----------------|------------------|
-| Information loss | High | Controlled via β |
-| Latent structure | Arbitrary | Smooth, Gaussian |
-| Interpolation | Poor | Meaningful |
-| FlowDiT training | Harder | Easier (smooth manifold) |
-
-### Training Loss
-```python
-# β-VAE Loss
-reconstruction_loss = MSE(x, x_reconstructed)
-kl_loss = KL(q(z|x) || N(0,I))
-total_loss = reconstruction_loss + β * kl_loss
-
-# β = 0.001: Prioritize reconstruction (good for small data)
-# β = 1.0: Standard VAE (more regularized latent)
+**Inject acquisition gradients** into velocity field:
+```
+v'(x, t) = v(x, t) + s(t) · ∇UCB(x)
 ```
 
-### Critical: VAE Defines FlowDiT's "Map"
-
-```
-VAE trained on Alpaca → Latent space "A"
-VAE trained on GSM8K  → Latent space "B"
-
-FlowDiT trained on "A" will NOT work with "B"!
-```
-
-**Rule**: Train VAE once on diverse data, then FREEZE forever.
-
-## 3. FlowDiT (Flow Diffusion Transformer)
-
-**Purpose**: Learn velocity field for latent space navigation.
-
-### Architecture
-```python
-FlowDiT(
-    latent_dim=32,            # VAE latent dimension
-    context_dim=768,          # GritLM embedding dimension
-    hidden_dim=512,           # Transformer hidden size
-    num_layers=6,             # Transformer blocks
-    num_heads=8,              # Attention heads
-    dropout=0.1,
-)
-```
-
-### Components
-1. **Input Projection**: 32D → 512D
-2. **Timestep Embedding**: Sinusoidal + MLP (512D)
-3. **Context Cross-Attention**: Query from x_t, Key/Value from context
-4. **AdaLayerNorm**: Timestep-conditioned normalization
-5. **Output Projection**: 512D → 32D velocity
-
-### Flow Matching Training
-```python
-# Conditional Flow Matching (CFM) Loss
-x_t = (1 - t) * x_0 + t * x_1  # OT interpolation
-v_target = x_1 - x_0           # Constant velocity (straight line)
-v_pred = model(x_t, t, context)
-loss = MSE(v_pred, v_target)
-```
-
-### OAT-FM Regularization (Optional)
-```python
-# Optimal Affine Transport regularization
-oat_loss = ||d²x_t/dt²||²  # Minimize acceleration
-total_loss = cfm_loss + 0.1 * oat_loss
-```
-
-## 4. ODE Solvers with Curvature Tracking
-
-### Available Solvers
-| Solver | Steps | Error | Use Case |
-|--------|-------|-------|----------|
-| Euler | 20 | O(dt) | Fast inference |
-| Midpoint | 10 | O(dt²) | Balanced |
-| RK4 | 5 | O(dt⁴) | High quality |
-| One-step | 1 | Learned | After Reflow |
-
-### Curvature Computation
-```python
-# Flow Curvature Uncertainty (FCU)
-curvature = Σ ||v(x_{t+dt}) - v(x_t)||²  # Sum of velocity changes
-
-# High curvature = uncertain trajectory = needs LLM evaluation
-# Low curvature = confident trajectory = use Value Head
-```
-
-### Guided Flow Matching (Classifier Guidance for Flow)
-
-**Purpose**: Guide FlowDiT generation toward high-reward (low error) regions using GP/ValueHead gradients.
-
-Standard flow generates random instructions from the learned distribution. Guided flow modifies the velocity field to follow the reward gradient:
-
-```
-v_guided(x_t, t) = v_base(x_t, t) + s(t) · ∇_x R(x_t)
-```
-
-Where:
-- `v_base`: Original FlowDiT velocity
-- `s(t)`: Time-dependent guidance scale
-- `R(x)`: Reward function (GP UCB, EI, or ValueHead)
-
-```
-Standard Flow:                      Guided Flow:
-
-x₀ ──v──▶ ──v──▶ ──v──▶ x₁         x₀ ──v+∇R──▶ ──v+∇R──▶ x₁*
-(noise)              (random)       (noise)              (optimal!)
-```
-
-#### Time-Dependent Guidance (Critical!)
-
-At t=0, x_t is pure Gaussian noise where GP gradients are meaningless. Guidance must ramp up as structure forms:
-
-| Schedule | Formula | Use Case |
-|----------|---------|----------|
-| `linear` | s(t) = s_base · t | **Recommended** - smooth ramp |
-| `cosine` | s(t) = s_base · (1-cos(πt))/2 | Very smooth S-curve |
-| `quadratic` | s(t) = s_base · t² | Conservative start |
-| `sqrt` | s(t) = s_base · √t | Aggressive early guidance |
-| `step` | s(t) = s_base if t > t₀ else 0 | Hard threshold |
-| `warmup` | Linear to t₀, then constant | Hybrid |
+Time-dependent schedule `s(t)`:
+- t=0 (pure noise): s(t)=0 (no guidance)
+- t=1 (clean sample): s(t)=scale (full guidance)
 
 ```python
-# Recommended configuration
-result = guided_euler_integrate(
-    flowdit,
-    x_0=noise,
-    reward_fn=gp_reward,
+from lido_pp.flow import GPGuidedFlowGenerator
+
+generator = GPGuidedFlowGenerator(
+    flowdit=flowdit,
+    latent_dim=128,
     guidance_scale=1.0,
-    guidance_schedule="linear",  # s(t) = 1.0 * t
+    schedule="linear",  # linear, cosine, warmup, sqrt
+    ucb_beta=2.0,
+)
+generator.set_gp_model(gp)
+
+result = generator.generate(batch_size=16, num_steps=20)
+# result.latents: (16, 128) optimized latents
+```
+
+### 4. Flow Curvature Uncertainty (`active_learning/fcu_gating.py`)
+
+**FCU metric**:
+```
+FCU = (1/N) × Σᵢ ||v(xₜᵢ₊₁, tᵢ₊₁) - v(xₜᵢ, tᵢ)||²
+```
+
+Interpretation:
+- FCU ≈ 0: Straight trajectory → model confident
+- FCU >> 0: Curved trajectory → model uncertain
+
+```python
+from lido_pp.active_learning import FlowCurvatureUncertainty, AdaptiveEvaluationGate
+
+fcu = FlowCurvatureUncertainty(
+    flowdit=flowdit,
     num_steps=20,
-)
-```
-
-#### Reward Functions with Regularization
-
-To prevent guided generation from leaving the VAE's learned distribution:
-
-```
-Total Reward(z) = UCB(z) - λ · ||z - μ_train||²
-```
-
-| Regularization | Formula | When to Use |
-|----------------|---------|-------------|
-| `none` | No penalty | Debugging only |
-| `l2` | λ·\|\|z\|\|² | VAE prior is N(0,I) |
-| `l2_centered` | λ·\|\|z - μ_train\|\|² | **Recommended** for small data |
-| `mahalanobis` | λ·(z-μ)ᵀΣ⁻¹(z-μ) | N > 50 samples |
-
-```python
-from lido_pp.flow.ode_solver import guided_euler_integrate, GPRewardWrapper
-
-# Create regularized reward function
-gp_reward = GPRewardWrapper(
-    gp_model,
-    mode="ucb",              # UCB acquisition
-    beta=2.0,                # Exploration coefficient
-    regularization="l2_centered",  # Stay near training data
-    reg_lambda=0.1,          # Regularization strength
+    percentile_threshold=90.0,  # Top 10% get LLM eval
 )
 
-# Guided generation
-result = guided_euler_integrate(
-    flowdit,
-    x_0=torch.randn(batch_size, 32, device="cuda"),
-    reward_fn=gp_reward,
-    guidance_scale=1.0,
-    guidance_schedule="linear",
-    num_steps=20,
+gate = AdaptiveEvaluationGate(fcu_module=fcu, gp_model=gp)
+latents, scores = gate.evaluate(x_0, llm_evaluator=eval_fn)
+
+# Compute savings: 20-50% fewer LLM evaluations
+stats = gate.get_statistics()
+print(f"Compute savings: {stats['compute_savings_pct']:.1f}%")
+```
+
+### 5. Cross-Attention Decoder (`backbone/cross_attention_decoder.py`)
+
+**ICAE-style memory slots** replace prefix tokens:
+
+| Old (Prefix) | New (Cross-Attn) |
+|--------------|------------------|
+| 4 tokens | 16 K,V slots |
+| Compete in self-attn | Separate pathway |
+| Fixed positions | Position-specific |
+
+```python
+from lido_pp.backbone import CrossAttentionProjector
+
+projector = CrossAttentionProjector(
+    latent_dim=128,
+    hidden_dim=4096,
+    num_memory_slots=16,
 )
 
-optimized_latent = result.x_final  # (B, 32) - guided toward high UCB
+keys, values = projector(latent)  # (B, 16, 4096) each
 ```
 
-#### Hyperparameter Guidelines
-
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `guidance_scale` | 0.1 - 2.0 | Higher = stronger pull toward reward |
-| `reg_lambda` | 0.05 - 0.5 | Higher = more conservative (stays closer to training) |
-| `beta` (UCB) | 1.0 - 4.0 | Higher = more exploration |
-
-**Trade-offs**:
-- High `guidance_scale` + low `reg_lambda` → May leave VAE distribution (gibberish text)
-- Low `guidance_scale` + high `reg_lambda` → Conservative, may miss optima
-- **Recommended**: `guidance_scale=1.0`, `reg_lambda=0.1`, `guidance_schedule="linear"`
-
-## 5. Value Head / GP Surrogate
-
-**Purpose**: Predict instruction quality without expensive LLM evaluation.
-
-### Option A: Neural Value Head (N > 100 samples)
-
-For larger datasets, a neural network provides fast inference:
-
-```python
-ValueHead(
-    latent_dim=32,
-    hidden_dim=128,
-    dropout=0.1,
-)
-
-# Structure:
-# 32 → 128 (GELU, LN) → 128 (GELU, LN) → 1 (Sigmoid)
-# Output: error_rate ∈ [0, 1]
-# Parameters: ~21K
-```
-
-**Training**:
-- Replay buffer: 10,000 samples
-- Loss: MSE on (predicted_error, actual_error)
-- Online updates during BO
-
-**With Uncertainty (MC Dropout)**:
-```python
-ValueHeadWithUncertainty(
-    num_mc_samples=10,  # Forward passes for uncertainty
-)
-# Returns: (mean_prediction, std_prediction)
-```
-
-### Option B: Gaussian Process (N < 100 samples) ⭐ Recommended for Small Data
-
-For small datasets (10-100 labeled prompts), GP is superior:
-
-| Aspect | Neural Network | GP |
-|--------|---------------|-----|
-| Min samples | ~100-500 | **5-50** |
-| Overfitting | High risk | **None** |
-| Uncertainty | MC Dropout (hack) | **Analytical** |
-| Interpretability | Black box | **ARD lengthscales** |
-
-```python
-from lipo.gp import GPWithEI
-
-# GP with Matern 5/2 ARD kernel on 32D VAE latent
-gp = GPWithEI(device="cuda")
-gp.vae_with_adapter = vae_encoder  # For embedding → latent conversion
-
-# Fit on labeled prompts
-gp.set_training_data(
-    embeddings,      # (N, 768) GritLM embeddings
-    error_rates,     # (N,) in [0, 1]
-    fidelities,      # (N,) sample counts for Beta posterior
-)
-gp.train(epochs=1000)
-
-# Predict with uncertainty
-mean, std = gp.predict(new_embedding)  # Returns positive error rate
-```
-
-**GP Architecture**:
-```
-embeddings (768D) → frozen VAE encoder → z (32D) → normalize [0,1] → GP
-
-GP Kernel: ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=32))
-- ARD: 32 per-dimension lengthscales (learns relevance)
-- Small lengthscale = dimension is important
-- Large lengthscale = dimension is ignored
-```
-
-**Heteroscedastic Noise (Beta Posterior)**:
-```python
-# For error_rate p measured on n samples:
-posterior_variance = p * (1-p) / (n + α + β + 1)
-
-# Low fidelity (n=50) → high uncertainty
-# High fidelity (n=1319) → low uncertainty
-```
-
-### When to Use What
-
-| Scenario | Recommendation |
-|----------|----------------|
-| Initial exploration (10-50 prompts) | **GP** - no overfitting |
-| After Hyperband (100-500 prompts) | **GP** or Value Head |
-| Large-scale BO (1000+ evaluations) | **Value Head** - faster inference |
-| Guided Flow Matching | **GP** - differentiable + uncertainty |
-
-## 6. Evaluation Gating
-
-**Purpose**: Decide between expensive LLM evaluation and cheap Value Head.
-
-### Decision Logic
-```
-1. Check cache (hash-based, tolerance=1e-4)
-2. Compute FCU from ODE integration
-3. If FCU > percentile_threshold (90th): → LLM evaluation
-4. Else: → Value Head prediction
-```
-
-### Adaptive Threshold
-```python
-EvaluationGate(
-    percentile_threshold=90.0,    # FCU percentile for LLM
-    adaptive_threshold=True,      # Adjust based on accuracy
-    min_samples_for_threshold=50, # Minimum history
-)
-```
-
-### Budget Management
-```python
-AdaptiveGate(
-    total_budget=100,           # Total LLM evaluations allowed
-    target_llm_ratio=0.2,       # Target 20% LLM usage
-)
-```
-
-## 7. Cost-Aware Acquisition
-
-**Purpose**: Balance exploration (high uncertainty) with exploitation (high value).
-
-### Acquisition Function
-```python
-# qLogEI with FCU weighting
-acquisition = EI(z) * exp(-fcu_weight * curvature)
-
-# High EI + Low curvature = good candidate
-# High EI + High curvature = uncertain, maybe evaluate with LLM
-```
-
-## 8. Reflow Training
-
-**Purpose**: Straighten ODE trajectories for 1-step inference.
-
-### Process
-```
-1. Generate trajectories with current model
-2. Store (x_0, x_1) pairs from trajectory endpoints
-3. Retrain model on straightened pairs
-4. Repeat until 1-step error < threshold
-```
-
-### Metrics
-```python
-# Straightness verification
-straightness = {
-    "avg_deviation": mean ||x_t - linear_interp||,
-    "max_deviation": max ||x_t - linear_interp||,
-    "velocity_variance": var(v_t),
-    "path_length_ratio": actual_length / straight_length,
-}
-```
+---
 
 ## Training Pipeline
 
-### Phase 1: VAE Training (Latent Space)
-```bash
-# Train VAE on instruction embeddings (e.g., APE/Alpaca)
-uv run python -m lido_pp.run train-vae \
-    --epochs 100 \
-    --batch-size 64 \
-    --latent-dim 32 \
-    --beta 0.001 \
-    --lr 1e-4 \
-    --device cuda:0
-```
-**Output**: `checkpoints/vae_best.pt` - defines the 32D latent space
+### Phase 1: Pre-compute Embeddings
 
-### Phase 2: Projector Training (Latent Injection)
 ```bash
-# Train projector to decode 768D → text (uses GritLM decoder)
-uv run python -m lido_pp.run train-projector \
-    --epochs 50 \
-    --batch-size 8 \
-    --lr 1e-4 \
-    --device cuda:0
-```
-**Output**: `checkpoints/projector_best.pt` - translates embeddings to text
-
-### Phase 3: FlowDiT Training (Latent Navigation)
-```bash
-# Train FlowDiT on VAE latent space (VAE must be frozen!)
-uv run python -m lido_pp.run train-flowdit \
-    --vae-checkpoint checkpoints/vae_best.pt \
-    --iterations 100 \
-    --batch-size 32 \
-    --flow-lr 1e-4 \
-    --device cuda:0
-```
-**Output**: `checkpoints/flowdit_best.pt` - navigates latent space
-
-### Phase 4: Reflow (Optional - Trajectory Straightening)
-```bash
-uv run python -m lido_pp.run reflow \
-    --rounds 3 \
-    --trajectories-per-round 1000 \
-    --target-straightness 0.01
+uv run python -m lido_pp.training.precompute_embeddings \
+    --encoder sonar \
+    --dataset combined \
+    --output lido_pp/data/sonar_embeddings.pt
 ```
 
-### Phase 5: Task-Specific Optimization (e.g., GSM8K)
+### Phase 2: Train TFA
+
 ```bash
-uv run python -m lido_pp.run optimize \
-    --dataset gsm8k \
-    --num-iterations 50 \
-    --use-guided-flow \
-    --guidance-scale 1.0
+uv run python -m lido_pp.training.train_cfm \
+    --data lido_pp/data/sonar_embeddings.pt \
+    --latent-dim 128 \
+    --lambda-lip 0.01 \
+    --epochs 10000
 ```
 
-## ⚠️ CRITICAL: Training Policy — Freeze vs. Trainable
+**Expected metrics:**
+- Val CosODE: >0.90 (was 0.79 with GritLM)
+- Compression: 8:1 (was 128:1)
 
-**This is one of the most important principles for architecture stability.**
+### Phase 3: Train Flow-DiT
 
-During task-specific training (e.g., GSM8K), **ONLY train FlowDiT and Value Head/GP**. The VAE and Latent Projector must be **FROZEN** after pre-training.
+```bash
+uv run python -m lido_pp.training.train_flow \
+    --tfa-checkpoint lido_pp/checkpoints/tfa_best.pt \
+    --latent-dim 128 \
+    --context-dim 1024
+```
 
-### Component Training Status
+### Phase 4: Train Cross-Attention Projector
 
-| Component | Status | Role |
-|-----------|--------|------|
-| GritLM (7B) | 🧊 **FROZEN** | Intelligence. Knows everything about the world and math. |
-| VAE Encoder/Decoder | 🧊 **FROZEN** | Map. Defines the 32D latent space structure. |
-| Latent Projector | 🧊 **FROZEN** | Translator. Maintains stable language between vectors and text. |
-| FlowDiT | 🔥 **TRAINABLE** | Strategist. Searches the latent map for optimal instructions. |
-| Value Head / GP | 🔥 **TRAINABLE** | Evaluator. Assesses if found paths lead to success. |
+```bash
+uv run python -m lido_pp.training.train_translator \
+    --tfa-checkpoint lido_pp/checkpoints/tfa_best.pt \
+    --num-memory-slots 16
+```
 
-### Why NOT Train Projector on Task?
+---
 
-**1. Moving Target Problem**
-- FlowDiT is an archer, Projector is the target
-- FlowDiT learns to hit specific vectors meaning "solve math"
-- If Projector changes weights simultaneously, the target moves while aiming
-- Result: FlowDiT gets confused — vector that meant "add" yesterday means "multiply" today
-- **Model will not converge**
+## Configuration
 
-**2. Projector is Just a Dictionary**
-- Projector's job is NOT to be smart — only to translate
-- Word "Integral" has the same meaning in math and general English
-- Once Projector learns (during pre-training) that vector `[0.5, -0.2, ...]` → "Integral", don't touch it
-- Retraining on small dataset (GSM8K) causes **Catastrophic Forgetting** — may forget other words needed for creative solutions
-
-**3. Loss of GritLM Anchoring**
-- GritLM Encoder and Decoder are fixed reference points
-- Projector serves as a bridge between them
-- Bending the bridge for a specific task breaks correspondence with what GritLM Encoder originally intended
-- Latent space becomes misaligned
-
-### Correct Training Workflow
+Key parameters in `FlowPOConfig`:
 
 ```python
-# ═══════════════════════════════════════════════════════════════════
-# PRE-TRAINING (once, on Alpaca/UltraChat data)
-# ═══════════════════════════════════════════════════════════════════
+@dataclass
+class FlowPOConfig:
+    # SONAR
+    encoder_type: str = "sonar"
+    embedding_dim: int = 1024
 
-# 1. Train VAE (defines latent space)
-vae = InstructionVAE(input_dim=768, latent_dim=32)
-train_vae(vae, alpaca_embeddings)
-torch.save(vae.state_dict(), "vae_v1.pth")
+    # TFA
+    tfa_latent_dim: int = 128
+    tfa_flow_dim: int = 256
+    tfa_ode_steps: int = 20
 
-# 2. Train Projector (768D → text)
-projector = LatentProjector(...)
-train_projector(projector, alpaca_data)
-torch.save(projector.state_dict(), "projector_v1.pth")
+    # GP-Guided Flow
+    guidance_scale: float = 1.0
+    guidance_schedule: str = "linear"
+    guidance_ucb_beta: float = 2.0
 
-# 3. Train FlowDiT on frozen VAE latent space
-vae.load_state_dict(torch.load("vae_v1.pth"))
-for param in vae.parameters():
-    param.requires_grad = False  # 🧊 FREEZE VAE
+    # FCU Gating
+    fcu_percentile: float = 90.0
+    fcu_min_threshold: float = 0.1
 
-flowdit = FlowDiT(latent_dim=32, context_dim=768)
-train_flowdit(flowdit, vae, alpaca_embeddings)  # VAE frozen!
-torch.save(flowdit.state_dict(), "flowdit_v1.pth")
+    # Cross-Attention
+    num_memory_slots: int = 16
+    decoder_hidden_dim: int = 4096
 
-# ═══════════════════════════════════════════════════════════════════
-# TASK TRAINING (GSM8K) — VAE, Projector FROZEN
-# ═══════════════════════════════════════════════════════════════════
-
-# Load and freeze all pre-trained components
-vae.load_state_dict(torch.load("vae_v1.pth"))
-for param in vae.parameters():
-    param.requires_grad = False  # 🧊 FREEZE
-
-projector.load_state_dict(torch.load("projector_v1.pth"))
-for param in projector.parameters():
-    param.requires_grad = False  # 🧊 FREEZE
-
-# FlowDiT can be fine-tuned OR frozen (depends on strategy)
-flowdit.load_state_dict(torch.load("flowdit_v1.pth"))
-# Option A: Fine-tune FlowDiT for task
-# Option B: Keep frozen, only train GP/Value Head
-
-# GP or Value Head — always trainable
-gp = GPWithEI(device="cuda")  # 🔥 Trainable
-# OR
-value_head = ValueHead(latent_dim=32)  # 🔥 Trainable
+    # Regularization
+    lambda_lip: float = 0.01
+    lambda_recon: float = 0.1
 ```
 
-## Dimensions Summary
+---
 
-| Component | Input | Output | Parameters | Status |
-|-----------|-------|--------|------------|--------|
-| GritLM Encoder | text | 768D | 7B | 🧊 frozen |
-| Latent Attention | 4096D×L | 768D | 106M | 🧊 frozen |
-| **VAE Encoder** | 768D | 32D | ~100K | 🧊 frozen |
-| **VAE Decoder** | 32D | 768D | ~100K | 🧊 frozen |
-| Latent Projector | 768D | 4×4096D | 62M | 🧊 frozen |
-| FlowDiT | 32D + 768D | 32D | 35M | 🔥 trainable |
-| Value Head / GP | 32D | 1D | 21K / - | 🔥 trainable |
+## Comparison: Old vs New Architecture
 
-## Memory Requirements
+| Aspect | Old (LID-O++) | New (FlowPO) |
+|--------|---------------|--------------|
+| Encoder | GritLM (4096D, retrieval) | SONAR (1024D, reconstruction) |
+| Latent | 32D | 128D |
+| Compression | 128:1 | 8:1 |
+| Val CosODE | 0.79 | >0.90 (target) |
+| Conditioning | 4 prefix tokens | 16 K,V memory slots |
+| Generation | Random sampling | GP-guided flow |
+| Uncertainty | Ensemble/dropout | FCU (trajectory curvature) |
+| Eval savings | 0% | 20-50% |
 
-| Configuration | GPU Memory |
-|--------------|------------|
-| GritLM fp16 | ~14GB |
-| + FlowDiT training | ~16GB |
-| + Batch size 32 | ~20GB |
-| Full pipeline | ~24GB |
+---
 
-**Recommended**: 2× L40S (48GB each) for parallel experiments.
+## Paper Claims
 
-## Key Hyperparameters
+1. **TFA (Text Flow Autoencoder)**: First application of simulation-free flow matching for text autoencoding, achieving 8:1 compression with >0.90 reconstruction fidelity.
 
-```python
-# config.py defaults
+2. **GP-Guided Flow**: First integration of GP acquisition function gradients into flow velocity field, enabling optimization-aware generation.
 
-# GritLM Backbone
-GRITLM_MODEL = "GritLM/GritLM-7B"
-EMBEDDING_DIM = 768
+3. **FCU Gating**: First use of flow trajectory curvature as uncertainty measure for adaptive evaluation, reducing LLM calls by 20-50%.
 
-# VAE (Latent Space)
-VAE_LATENT_DIM = 32
-VAE_HIDDEN_DIM = 256
-VAE_BETA = 0.001              # KL weight (low = better reconstruction)
+4. **Unified Framework**: FlowPO bridges flow matching, Bayesian optimization, and prompt optimization in a coherent end-to-end framework.
 
-# FlowDiT (Latent Navigation)
-FLOW_HIDDEN_DIM = 512
-FLOW_NUM_LAYERS = 6
-FLOW_NUM_HEADS = 8
-OAT_WEIGHT = 0.1              # Optimal Affine Transport regularization
-
-# Value Head / GP
-VALUE_HEAD_HIDDEN = 128
-FCU_PERCENTILE = 90.0         # Curvature threshold for LLM gating
-
-# Latent Projector (Text Generation)
-PROJECTOR_NUM_TOKENS = 4
-PROJECTOR_INTERMEDIATE_DIM = 3072
-```
+---
 
 ## File Structure
 
 ```
 lido_pp/
-├── __init__.py
-├── config.py              # Hyperparameters
-├── run.py                 # CLI entry point
-├── vae.py                 # InstructionVAE (768D → 32D → 768D)
 ├── backbone/
-│   ├── gritlm_encoder.py  # GritLM unified encoder
-│   ├── latent_attention.py # Attention pooling
-│   └── latent_injection.py # Decoder + Projector
+│   ├── sonar_encoder.py         # SONAR text encoder (1024D)
+│   ├── cfm_encoder.py           # Text Flow Autoencoder (TFA)
+│   └── cross_attention_decoder.py  # K,V memory projection
 ├── flow/
-│   ├── flow_dit.py        # FlowDiT model
-│   ├── losses.py          # CFM + OAT losses
-│   ├── ode_solver.py      # Euler/Midpoint/RK4 + Guided Flow
-│   └── reflow.py          # Trajectory straightening
+│   ├── flow_dit.py              # Velocity field network
+│   ├── gp_guided_flow.py        # GP-guided generation
+│   └── ode_solver.py            # Euler/RK4 integration
 ├── active_learning/
-│   ├── curvature.py       # FCU computation
-│   ├── value_head.py      # Neural value predictor
-│   ├── gp.py              # Gaussian Process surrogate
-│   ├── acquisition.py     # Cost-aware acquisition
-│   └── gating.py          # Evaluation gating
-└── training/
-    ├── data_prep.py       # Dataset handling
-    ├── trainer.py         # Training orchestration
-    └── checkpointing.py   # Model saving
+│   ├── fcu_gating.py            # FCU computation & gating
+│   ├── curvature.py             # Flow curvature utilities
+│   └── gating.py                # Evaluation gate logic
+├── training/
+│   ├── precompute_embeddings.py # SONAR embedding pre-computation
+│   ├── train_cfm.py             # TFA training
+│   └── train_translator.py      # Cross-attn projector training
+└── config.py                    # FlowPOConfig
 ```
 
-## Complete Guided Flow Pipeline (Small Data Regime)
+---
 
-End-to-end example for prompt optimization with only 20 labeled examples:
+## Dependencies
 
-```python
-import torch
-from lipo.gp import GPWithEI
-from lido_pp.flow.ode_solver import guided_euler_integrate, GPRewardWrapper
-from lido_pp.flow.flow_dit import FlowDiT
-from lido_pp.vae import InstructionVAE
-
-# ═══════════════════════════════════════════════════════════════════
-# 1. SETUP: Load pre-trained components
-# ═══════════════════════════════════════════════════════════════════
-
-device = "cuda"
-
-# Load VAE (frozen, pre-trained on Alpaca)
-vae = InstructionVAE(input_dim=768, latent_dim=32).to(device)
-vae.load_state_dict(torch.load("checkpoints/vae_best.pt")["model_state_dict"])
-vae.eval()
-for p in vae.parameters():
-    p.requires_grad = False
-
-# Load FlowDiT (frozen or fine-tuned)
-flowdit = FlowDiT(latent_dim=32, context_dim=768).to(device)
-flowdit.load_state_dict(torch.load("checkpoints/flowdit_best.pt")["model_state_dict"])
-flowdit.eval()
-
-# ═══════════════════════════════════════════════════════════════════
-# 2. FIT GP: Train on 20 labeled prompts
-# ═══════════════════════════════════════════════════════════════════
-
-# Your labeled data (from LLM evaluation on GSM8K)
-embeddings = torch.load("data/labeled_embeddings.pt")  # (20, 768)
-error_rates = torch.tensor([0.35, 0.22, 0.18, ...])    # (20,)
-fidelities = torch.ones(20) * 100  # Each evaluated on 100 samples
-
-# Create and train GP
-gp = GPWithEI(device=device)
-gp.vae_with_adapter = vae  # VAE for embedding → latent
-gp.set_training_data(embeddings, error_rates, fidelities)
-gp.train(epochs=1000, verbose=True)
-
-print(f"Best observed error: {gp.best_error_rate:.2%}")
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. CREATE REWARD: UCB with regularization
-# ═══════════════════════════════════════════════════════════════════
-
-reward_fn = GPRewardWrapper(
-    gp,
-    mode="ucb",                    # Explore + exploit
-    beta=2.0,                      # Exploration coefficient
-    regularization="l2_centered",  # Stay near training data
-    reg_lambda=0.1,                # Regularization strength
-)
-
-# ═══════════════════════════════════════════════════════════════════
-# 4. GUIDED GENERATION: Generate optimized prompts
-# ═══════════════════════════════════════════════════════════════════
-
-batch_size = 16
-noise = torch.randn(batch_size, 32, device=device)
-
-# Optional: context from existing good prompt
-context = None  # Or: gritlm.encode(["Solve step by step"])
-
-result = guided_euler_integrate(
-    flowdit,
-    x_0=noise,
-    reward_fn=reward_fn,
-    context=context,
-    num_steps=20,
-    guidance_scale=1.0,
-    guidance_schedule="linear",    # Ramp from 0 to 1
-    guidance_start_t=0.2,          # For warmup schedule
-    return_trajectory=False,
-)
-
-optimized_latents = result.x_final  # (16, 32)
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. DECODE: Convert latents back to text
-# ═══════════════════════════════════════════════════════════════════
-
-# Decode through VAE → embedding → Projector → text
-with torch.no_grad():
-    # VAE decode (32D → 768D approximation)
-    reconstructed_embeddings = vae.decode(optimized_latents)
-
-    # Use Projector for text generation
-    instructions = projector.generate(reconstructed_embeddings)
-
-for i, instr in enumerate(instructions):
-    print(f"Candidate {i}: {instr}")
-
-# ═══════════════════════════════════════════════════════════════════
-# 6. EVALUATE & ITERATE: Test best candidates, update GP
-# ═══════════════════════════════════════════════════════════════════
-
-# Evaluate top candidates on GSM8K
-for candidate_embedding, error_rate in evaluated_candidates:
-    gp.add_observation(candidate_embedding, error_rate, fidelity=100)
-
-# Retrain GP with new data
-gp.train(epochs=500)
-
-# Repeat steps 3-6 until convergence
+```toml
+[project.dependencies]
+sonar-space = ">=0.5.0"  # Meta SONAR encoder
+torch = ">=2.0.0"
+botorch = ">=0.14.0"     # GP & acquisition
+gpytorch = ">=1.14.2"    # GP kernels
+torchdyn = ">=1.0.6"     # ODE utilities
 ```
-
-## References
-
-1. **GritLM**: Muennighoff et al., "Generative Representational Instruction Tuning"
-2. **Flow Matching**: Lipman et al., "Flow Matching for Generative Modeling"
-3. **OAT-FM**: Pooladian et al., "Optimal Affine Transport Flow Matching"
-4. **Reflow**: Liu et al., "Rectified Flow: A Marginal Preserving Approach"
-5. **Classifier Guidance**: Dhariwal & Nichol, "Diffusion Models Beat GANs on Image Synthesis"
-6. **Gaussian Processes**: Rasmussen & Williams, "Gaussian Processes for Machine Learning"
