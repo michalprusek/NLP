@@ -594,9 +594,9 @@ class TrialRunner:
         trainer.train(samples=training_samples, epoch_callback=pruning_callback)
         training_stats = trainer.training_stats
 
-        # If pruned, mark completion and return partial metrics
+        # If pruned, log and return partial metrics (don't call mark_completed -
+        # that would remove from pruned list and add to completed, defeating ASHA tracking)
         if self._pruned:
-            self.pruner.mark_completed(self.trial_id)
             logger.info(f"Trial {self.trial_id} was pruned - returning partial metrics")
 
         # Save VAE checkpoint
@@ -683,6 +683,10 @@ class TrialRunner:
             {name: result.value for name, result in metrics.items()},
         )
         logger.info("Saved VAE to artifact cache")
+
+        # Mark trial as completed (only if not pruned - pruned trials stay in pruned list)
+        if self.pruner is not None and not self._pruned:
+            self.pruner.mark_completed(self.trial_id)
 
         return metrics
 

@@ -246,19 +246,23 @@ IMPORTANT_PARAMS: List[ParameterSpec] = [
         values=[4, 8],
         default=4,
     ),
+    # NOTE: set_transformer_hidden moved to FINETUNE to avoid ASHA pruning bias
+    # (hidden=256 has ~16x more params than hidden=64, slower convergence at epoch 100)
     ParameterSpec(
         name="set_transformer_hidden",
         param_type=ParameterType.DISCRETE,
-        tier=TuningTier.IMPORTANT,
+        tier=TuningTier.FINETUNE,
         phases=[TuningPhase.SCORER],
         description="Hidden dimension in Set Transformer",
         values=[64, 128, 256],
         default=128,
     ),
+    # NOTE: num_inducing_points moved to FINETUNE to avoid ASHA pruning bias
+    # (more inducing points = more computation in ISAB, slower convergence)
     ParameterSpec(
         name="num_inducing_points",
         param_type=ParameterType.DISCRETE,
-        tier=TuningTier.IMPORTANT,
+        tier=TuningTier.FINETUNE,
         phases=[TuningPhase.SCORER],
         description="Number of inducing points in ISAB",
         values=[4, 8, 16],
@@ -266,10 +270,11 @@ IMPORTANT_PARAMS: List[ParameterSpec] = [
     ),
 
     # GP Configuration
+    # NOTE: gp_lr moved to FINETUNE to avoid ASHA pruning bias
     ParameterSpec(
         name="gp_lr",
         param_type=ParameterType.CONTINUOUS,
-        tier=TuningTier.IMPORTANT,
+        tier=TuningTier.FINETUNE,
         phases=[TuningPhase.GP],
         description="GP training learning rate",
         low=0.001,
@@ -318,10 +323,12 @@ IMPORTANT_PARAMS: List[ParameterSpec] = [
     ),
 
     # VAE Training
+    # NOTE: vae_lr moved to FINETUNE to avoid ASHA pruning bias
+    # (higher LR appears better at epoch 100 but may not be optimal long-term)
     ParameterSpec(
         name="vae_lr",
         param_type=ParameterType.CONTINUOUS,
-        tier=TuningTier.IMPORTANT,
+        tier=TuningTier.FINETUNE,
         phases=[TuningPhase.VAE],
         description="VAE training learning rate",
         low=0.0001,
@@ -358,10 +365,12 @@ IMPORTANT_PARAMS: List[ParameterSpec] = [
         values=[2, 4, 8],
         default=4,
     ),
+    # NOTE: scorer_hidden_dim moved to FINETUNE to avoid ASHA pruning bias
+    # (hidden=256 has ~4x more params than hidden=64, slower convergence)
     ParameterSpec(
         name="scorer_hidden_dim",
         param_type=ParameterType.DISCRETE,
-        tier=TuningTier.IMPORTANT,
+        tier=TuningTier.FINETUNE,
         phases=[TuningPhase.SCORER],
         description="Hidden dimension in scorer MLP",
         values=[64, 128, 256],

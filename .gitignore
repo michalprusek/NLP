@@ -162,3 +162,15 @@ results/
 bolt/results/
 bolt/tuning/test*
 bolt/tuning/full_run_*
+bolt/tuning_results*/
+
+# LID-O++ data and checkpoints
+lido_pp/checkpoints/
+lido_pp/data/
+lido_pp/results/
+
+# General checkpoints and data (all subprojects)
+**/checkpoints/
+**/data/*.pt
+**/data/*.bin
+**/data/*.safetensors

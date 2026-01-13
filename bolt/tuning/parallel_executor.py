@@ -185,6 +185,7 @@ class DualGPUExecutor:
         max_retries: int = 3,
         checkpoint_interval: int = 10,  # Checkpoint every N completed trials
         heartbeat_interval: int = 60,  # Heartbeat every N seconds
+        trial_timeout_minutes: int = 30,  # Max time for a single trial before marking as stuck
         pruner_state_path: Optional[Path] = None,  # Shared ASHA pruner state file
         embedding_cache_path: Optional[Path] = None,  # Shared GTR embedding cache
     ):
@@ -195,6 +196,7 @@ class DualGPUExecutor:
         self.max_retries = max_retries
         self.checkpoint_interval = checkpoint_interval
         self.heartbeat_interval = heartbeat_interval
+        self.trial_timeout_minutes = trial_timeout_minutes
         self.pruner_state_path = str(pruner_state_path) if pruner_state_path else None
         self.embedding_cache_path = str(embedding_cache_path) if embedding_cache_path else None
 
@@ -528,6 +530,9 @@ class DualGPUExecutor:
         while not self._shutdown_event.is_set():
             time.sleep(self.heartbeat_interval)
 
+            # Check for stuck trials (watchdog)
+            self._check_stuck_trials()
+
             # Log status
             with self._lock:
                 pending = len(self.pending_tasks)
@@ -554,6 +559,46 @@ class DualGPUExecutor:
                     "uptime_hours": uptime,
                     "gpus": {str(k): v.to_dict() for k, v in self.gpus.items()},
                 }, f, indent=2)
+
+    def _check_stuck_trials(self):
+        """Check for stuck trials and mark them as failed (watchdog)."""
+        timeout_seconds = self.trial_timeout_minutes * 60
+        now = datetime.now()
+        stuck_trials = []
+
+        with self._lock:
+            for gpu_id, gpu_info in self.gpus.items():
+                if gpu_info.status == GPUStatus.BUSY and gpu_info.last_active:
+                    elapsed = (now - gpu_info.last_active).total_seconds()
+                    if elapsed > timeout_seconds:
+                        trial_id = gpu_info.current_trial
+                        if trial_id:
+                            stuck_trials.append((trial_id, gpu_id, elapsed))
+
+        # Handle stuck trials outside the lock to avoid deadlock
+        for trial_id, gpu_id, elapsed in stuck_trials:
+            elapsed_min = elapsed / 60
+            logger.warning(
+                f"WATCHDOG: Trial {trial_id} on GPU {gpu_id} stuck for {elapsed_min:.1f} minutes "
+                f"(timeout: {self.trial_timeout_minutes} min). Marking as failed."
+            )
+
+            # Cancel the future if possible
+            future_to_cancel = None
+            with self._lock:
+                for future, (tid, gid) in list(self._futures.items()):
+                    if tid == trial_id:
+                        future_to_cancel = future
+                        break
+
+            if future_to_cancel:
+                future_to_cancel.cancel()
+
+            # Mark trial as failed
+            self._handle_failure(
+                trial_id, gpu_id,
+                f"Trial timed out after {elapsed_min:.1f} minutes (watchdog timeout: {self.trial_timeout_minutes} min)"
+            )
 
     def _should_checkpoint(self) -> bool:
         """Check if we should save a checkpoint."""
