@@ -160,17 +160,7 @@ class GPGuidedFlowGenerator(nn.Module):
         self.gp = gp_model
 
     def _get_schedule_weight(self, t: float) -> float:
-        """
-        Compute time-dependent guidance weight.
-
-        Critical: No guidance at t=0 (pure noise) where gradients are meaningless.
-
-        Args:
-            t: Time in [0, 1] where 0=noise, 1=clean
-
-        Returns:
-            Weight in [0, 1] for guidance strength
-        """
+        """Compute time-dependent guidance weight. No guidance at t=0 (pure noise)."""
         schedules = {
             "linear": lambda: t,
             "cosine": lambda: (1 - math.cos(t * math.pi)) / 2,
@@ -178,13 +168,7 @@ class GPGuidedFlowGenerator(nn.Module):
             "warmup": lambda: 0.0 if t < 0.2 else (t - 0.2) / 0.8,
             "constant": lambda: 1.0,
         }
-
-        if self.schedule not in schedules:
-            raise ValueError(
-                f"Unknown guidance schedule '{self.schedule}'. "
-                f"Valid options: {', '.join(schedules.keys())}"
-            )
-
+        # Schedule is validated in __init__, so no check needed here
         return schedules[self.schedule]()
 
     def _compute_acquisition_gradient(
@@ -193,30 +177,9 @@ class GPGuidedFlowGenerator(nn.Module):
         acquisition: Literal["ucb", "ei", "neg_error"] = "ucb",
     ) -> torch.Tensor:
         """
-        Compute gradient of acquisition function.
+        Compute gradient of acquisition function for error minimization.
 
-        For prompt optimization, we want to minimize error rate.
-        GP predicts error rate (NOT accuracy), so:
-        - UCB: R = -mean + beta*std (minimize error + explore)
-        - EI: Expected improvement for minimization
-        - neg_error: R = -mean (pure exploitation)
-
-        For high-dimensional spaces (curse of dimensionality), uses the GP's
-        compute_guidance_gradient method if available, which falls back to
-        nearest-neighbor direction when analytic gradient is too small.
-
-        IMPORTANT: If your GP predicts accuracy instead of error rate,
-        flip the sign: R = mean + beta*std
-
-        Args:
-            z: (B, latent_dim) current latent positions
-            acquisition: Which acquisition function to use
-
-        Returns:
-            (B, latent_dim) gradient of acquisition w.r.t. z
-
-        Raises:
-            RuntimeError: If GP model is not set
+        Uses GP's compute_guidance_gradient if available (high-dim fallback).
         """
         if self.gp is None:
             raise RuntimeError(
@@ -266,21 +229,7 @@ class GPGuidedFlowGenerator(nn.Module):
         context: Optional[torch.Tensor] = None,
         acquisition: Literal["ucb", "ei", "neg_error"] = "ucb",
     ) -> Tuple[torch.Tensor, float]:
-        """
-        Single guided integration step.
-
-        Computes: v'(x, t) = v(x, t) + s(t) · ∇R(x)
-
-        Args:
-            x: (B, latent_dim) current position
-            t: Current time
-            context: Optional conditioning context
-            acquisition: Acquisition function type
-
-        Returns:
-            v_guided: (B, latent_dim) guided velocity
-            grad_norm: Norm of guidance gradient (for logging)
-        """
+        """Single guided step: v'(x,t) = v(x,t) + s(t)*grad_R(x)."""
         # Base velocity from FlowDiT
         t_tensor = torch.full((x.shape[0],), t, device=x.device)
 
@@ -312,23 +261,7 @@ class GPGuidedFlowGenerator(nn.Module):
         return_trajectory: bool = False,
         initial_noise: Optional[torch.Tensor] = None,
     ) -> GuidedGenerationResult:
-        """
-        Generate optimized latents via GP-guided flow.
-
-        This is the main interface for generating new prompt latents
-        that are biased toward high-reward regions.
-
-        Args:
-            batch_size: Number of latents to generate
-            num_steps: ODE integration steps
-            context: Optional conditioning (e.g., task description embedding)
-            acquisition: Acquisition function type
-            return_trajectory: Whether to return full trajectory
-            initial_noise: Optional initial noise (for reproducibility)
-
-        Returns:
-            GuidedGenerationResult with latents and optional trajectory
-        """
+        """Generate optimized latents via GP-guided flow."""
         device = next(self.flowdit.parameters()).device
 
         # Initialize from noise (t=0)
@@ -379,23 +312,7 @@ class GPGuidedFlowGenerator(nn.Module):
         acquisition: Literal["ucb", "ei", "neg_error"] = "ucb",
         diversity_weight: float = 0.1,
     ) -> torch.Tensor:
-        """
-        Generate diverse set of optimized latents.
-
-        Uses DPP-style diversity: select candidates that are both
-        high-quality (low error) and diverse (high pairwise distance).
-
-        Args:
-            batch_size: Number of final latents to return
-            num_candidates: Number of candidates to generate (> batch_size)
-            num_steps: ODE integration steps
-            context: Optional conditioning
-            acquisition: Acquisition function
-            diversity_weight: Weight for diversity vs quality
-
-        Returns:
-            (batch_size, latent_dim) diverse high-quality latents
-        """
+        """Generate diverse high-quality latents via DPP-style selection."""
         result = self.generate(
             batch_size=num_candidates,
             num_steps=num_steps,

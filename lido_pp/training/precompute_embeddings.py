@@ -91,8 +91,8 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
-        help="Batch size for encoding",
+        default=1024,
+        help="Batch size for encoding (optimized for L40S 48GB VRAM)",
     )
     parser.add_argument(
         "--device",

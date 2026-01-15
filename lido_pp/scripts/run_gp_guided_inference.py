@@ -34,16 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_tfa_checkpoint(checkpoint_path: str, device: str = "cuda:0") -> nn.Module:
-    """
-    Load TFA model from checkpoint.
-
-    Args:
-        checkpoint_path: Path to tfa_best.pt
-        device: Target device
-
-    Returns:
-        Loaded TextFlowAutoencoder
-    """
+    """Load TFA model from checkpoint."""
     from lido_pp.backbone.cfm_encoder import TextFlowAutoencoder
 
     logger.info(f"Loading TFA checkpoint from {checkpoint_path}")
@@ -84,16 +75,7 @@ def load_hbbops_evaluations(
     hbbops_path: str,
     min_fidelity: int = 600,
 ) -> List[Dict]:
-    """
-    Load HbBoPs evaluations with fidelity threshold.
-
-    Args:
-        hbbops_path: Path to hbbops_results_*.json
-        min_fidelity: Minimum fidelity threshold (default: 600)
-
-    Returns:
-        List of evaluation dicts with instruction, accuracy, error_rate
-    """
+    """Load HbBoPs evaluations with fidelity threshold."""
     logger.info(f"Loading HbBoPs evaluations from {hbbops_path}")
 
     with open(hbbops_path) as f:
@@ -135,18 +117,7 @@ def encode_instructions_to_latent(
     device: str = "cuda:0",
     batch_size: int = 32,
 ) -> torch.Tensor:
-    """
-    Encode instructions through SONAR -> TFA to get latent vectors.
-
-    Args:
-        instructions: List of instruction strings
-        tfa: TextFlowAutoencoder model
-        device: Target device
-        batch_size: Encoding batch size
-
-    Returns:
-        (N, latent_dim) latent vectors
-    """
+    """Encode instructions through SONAR -> TFA to get latent vectors."""
     from lido_pp.backbone.sonar_encoder import SONAREncoder
 
     logger.info(f"Encoding {len(instructions)} instructions to latent space")
@@ -178,14 +149,7 @@ def encode_instructions_to_latent(
 
 
 class TFAVelocityWrapper(nn.Module):
-    """
-    Wrapper to adapt TFA velocity field to GPGuidedFlowGenerator interface.
-
-    TFA velocity: (t, x) -> v where x is flow_dim
-    Expected interface: (x, t, context) -> v
-
-    Additionally handles the latent <-> flow space conversion for GP guidance.
-    """
+    """Adapts TFA velocity (t, x) -> v to GPGuidedFlowGenerator interface (x, t, ctx) -> v."""
 
     def __init__(self, tfa: nn.Module):
         super().__init__()
@@ -200,62 +164,27 @@ class TFAVelocityWrapper(nn.Module):
         t: torch.Tensor,
         context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Compute velocity in flow space.
-
-        Args:
-            x: (B, flow_dim) position in flow space
-            t: (B,) or scalar timestep
-            context: Unused (TFA doesn't use context)
-
-        Returns:
-            v: (B, flow_dim) velocity
-        """
-        # Handle scalar t
+        """Compute velocity in flow space."""
         if t.dim() == 0:
             t = t.expand(x.shape[0])
-
-        # TFA velocity expects (t, x)
         return self.velocity(t, x)
 
 
 class LatentGPWrapper(nn.Module):
-    """
-    Wrapper that maps GP predictions from latent space to flow space.
-
-    GP operates on latent (256D), but generation happens in flow space (512D).
-    This wrapper projects flow_dim -> latent_dim for GP, then projects back.
-
-    IMPORTANT: Must allow gradients to flow through for acquisition gradient computation.
-    """
+    """Maps GP predictions from latent space to flow space for gradient computation."""
 
     def __init__(self, gp, to_latent: nn.Module, from_latent: nn.Module):
         super().__init__()
         self.gp = gp
         self.to_latent = to_latent
         self.from_latent = from_latent
-        # Best error rate for EI computation
         self.best_error_rate = getattr(gp, 'best_error_rate', 1.0)
-        # For high-dim guidance
         self.X_train = getattr(gp, 'X_train', None)
         self.y_train = getattr(gp, 'y_train', None)
 
     def predict(self, x_flow: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Predict on flow-space vectors by projecting to latent first.
-
-        Args:
-            x_flow: (B, flow_dim) vectors in flow space
-
-        Returns:
-            mean: (B,) predicted error rates
-            std: (B,) prediction uncertainties
-        """
-        # Project to latent space - ALLOW GRADIENTS for acquisition gradient computation
-        # The to_latent projection is a linear layer, gradients flow through it
-        z = self.to_latent(x_flow)  # (B, latent_dim)
-
-        # GP prediction on latent
+        """Predict on flow-space vectors by projecting to latent first."""
+        z = self.to_latent(x_flow)
         return self.gp.predict(z)
 
     def compute_guidance_gradient(
@@ -263,78 +192,39 @@ class LatentGPWrapper(nn.Module):
         x_flow: torch.Tensor,
         ucb_beta: float = 4.0,
     ) -> torch.Tensor:
-        """
-        Compute guidance gradient in flow space.
+        """Compute guidance gradient in flow space."""
+        z = self.to_latent(x_flow)
 
-        Uses GP's high-dimensional gradient method which falls back to
-        nearest-neighbor direction when analytic gradient is too small.
-
-        Args:
-            x_flow: (B, flow_dim) current positions in flow space
-            ucb_beta: UCB exploration parameter
-
-        Returns:
-            (B, flow_dim) guidance gradients in flow space
-        """
-        # Project to latent
-        z = self.to_latent(x_flow)  # (B, latent_dim)
-
-        # Get guidance gradient in latent space
         if hasattr(self.gp, 'compute_guidance_gradient'):
             grad_latent = self.gp.compute_guidance_gradient(z, ucb_beta)
         else:
-            # Fallback to analytic
             z_grad = z.detach().requires_grad_(True)
             mean, std = self.gp.predict(z_grad)
             reward = -mean + ucb_beta * std
             reward.sum().backward()
             grad_latent = z_grad.grad if z_grad.grad is not None else torch.zeros_like(z)
 
-        # Project gradient back to flow space using from_latent Jacobian
-        # For linear projection: grad_flow = W^T @ grad_latent
-        # where W is the to_latent weight matrix
-        W = self.to_latent.weight  # (latent_dim, flow_dim)
-        grad_flow = torch.matmul(grad_latent, W)  # (B, flow_dim)
-
-        return grad_flow
+        # Project gradient back: grad_flow = grad_latent @ W
+        W = self.to_latent.weight
+        return torch.matmul(grad_latent, W)
 
 
 def run_gp_guided_inference(
     tfa: nn.Module,
     gp,  # HighDimGP
-    train_latents: torch.Tensor,  # Training latents for proper initialization
+    train_latents: torch.Tensor,
     num_samples: int = 16,
     num_steps: int = 20,
     guidance_scale: float = 1.0,
     ucb_beta: float = 4.0,
-    exploration_noise: float = 0.5,  # Noise scale relative to training std
+    exploration_noise: float = 0.5,
     device: str = "cuda:0",
 ) -> Dict:
     """
     Run GP-guided flow generation with proper initialization.
 
-    Architecture:
-    - Generation happens in flow_dim (512D) space
-    - GP operates on latent_dim (256D) space
-    - Wrapper projects between spaces for gradient computation
-
-    CRITICAL: Initialize from training latent distribution, not N(0,1)!
-    The TFA was never trained on N(0,1) noise - it was trained on from_latent(z)
-    where z comes from encoded instructions.
-
-    Args:
-        tfa: TextFlowAutoencoder model
-        gp: Trained GP model (operates on latent_dim)
-        train_latents: (N, latent_dim) training latents for initialization distribution
-        num_samples: Number of samples to generate
-        num_steps: ODE integration steps
-        guidance_scale: Guidance strength
-        ucb_beta: UCB exploration parameter
-        exploration_noise: Noise scale for exploration (relative to training std)
-        device: Target device
-
-    Returns:
-        Dict with latents, embeddings, predictions
+    Initializes from training latent distribution (not N(0,1)) since TFA
+    was trained on from_latent(z) where z comes from encoded instructions.
     """
     from lido_pp.flow.gp_guided_flow import GPGuidedFlowGenerator
 

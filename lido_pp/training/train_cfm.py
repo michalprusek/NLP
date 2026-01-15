@@ -79,7 +79,7 @@ def parse_args():
         help="Path to pre-computed SONAR embeddings (1024D)",
     )
     parser.add_argument("--epochs", type=int, default=10000, help="Training epochs")
-    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=1024, help="Batch size (optimized for L40S 48GB VRAM)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument(
         "--latent-dim",
@@ -203,25 +203,13 @@ def train_epoch(
     use_ot = args.use_ot and not getattr(args, 'no_ot', False)
 
     for batch_idx, batch in enumerate(dataloader):
-        if batch_idx == 0 and n_batches == 0:
-            print(f"[DEBUG] First batch starting, shape: {batch[0].shape}")
-            print(f"[DEBUG] OT-CFM enabled: {use_ot}")
-            sys.stdout.flush()
-
         embeddings = batch[0].to(device)
 
         # Data augmentation: add small Gaussian noise to embeddings
-        # This improves generalization and prevents overfitting
-        # NOTE: Do NOT normalize - SONAR decoder needs unnormalized embeddings
         if args.augment_noise > 0:
-            noise = torch.randn_like(embeddings) * args.augment_noise
-            embeddings = embeddings + noise
+            embeddings = embeddings + torch.randn_like(embeddings) * args.augment_noise
 
         optimizer.zero_grad()
-
-        if batch_idx == 0 and n_batches == 0:
-            print(f"[DEBUG] Calling flow_matching_loss...")
-            sys.stdout.flush()
 
         # Forward pass and compute loss (OT-CFM for straighter trajectories)
         losses = flow_matching_loss(
@@ -236,10 +224,6 @@ def train_epoch(
             lip_penalty_type=args.lip_penalty_type,
             use_ot=use_ot,
         )
-
-        if batch_idx == 0 and n_batches == 0:
-            print(f"[DEBUG] Loss computed: {losses['loss'].item():.4f}")
-            sys.stdout.flush()
 
         loss = losses["loss"]
 
@@ -286,12 +270,10 @@ def validate(
     total_fm = 0.0
     total_recon = 0.0
     total_gw = 0.0
-    total_lip = 0.0
-    total_cos_ode = 0.0  # ODE-based reconstruction cosine
+    total_cos_ode = 0.0
     n_batches = 0
     n_ode_batches = 0
 
-    # Resolve use_ot from args
     use_ot = args.use_ot and not getattr(args, 'no_ot', False)
 
     for i, batch in enumerate(dataloader):
@@ -514,18 +496,7 @@ def main():
         print("Inference: Euler integration for encode/decode")
         print("=" * 70 + "\n")
 
-    if is_main_process():
-        print(f"\n[DEBUG] Starting training loop...")
-        print(f"[DEBUG] Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
-        print(f"[DEBUG] Batch size: {args.batch_size}, Epochs: {args.epochs}")
-        sys.stdout.flush()
-
     for epoch in range(1, args.epochs + 1):
-        if is_main_process() and epoch == 1:
-            print(f"[DEBUG] Epoch {epoch} starting...")
-            sys.stdout.flush()
-
-        # Set epoch for distributed sampler
         if use_ddp:
             train_sampler.set_epoch(epoch)
 
@@ -537,9 +508,6 @@ def main():
 
         # Train with error context
         try:
-            if is_main_process() and epoch == 1:
-                print(f"[DEBUG] Calling train_epoch()...")
-                sys.stdout.flush()
             train_metrics = train_epoch(model, train_loader, optimizer, device, args)
         except (ValueError, RuntimeError) as e:
             if is_main_process():

@@ -1,16 +1,20 @@
 """
-High-Dimensional GP for FlowPO (256D latent with ~20 training points).
+High-Dimensional GP for FlowPO (128D-256D latent with ~20 training points).
+
+FlowPO default: 128D latent (tfa_latent_dim). This module supports higher dims (256D+).
 
 Addresses the curse of dimensionality through:
-1. Isotropic kernel - single lengthscale for all 256 dims (safe with few points)
+1. Isotropic kernel - single lengthscale for all dims (safe with few points, n < 30)
 2. SAAS prior - learns which dims matter (better when n >= 30)
 3. Adaptive switching - uses isotropic initially, SAAS when enough data
 
 Interface compatible with GPGuidedFlowGenerator:
     gp.predict(z) -> (mean, std)
+    gp.compute_guidance_gradient(z, ucb_beta) -> gradient
 """
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
@@ -24,14 +28,19 @@ from gpytorch.means import ConstantMean
 from gpytorch.models import ExactGP
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-# SAAS imports (optional - may not be available in all BoTorch versions)
+# SAAS imports (optional - requires BoTorch >= 0.10.0 and pyro-ppl)
 try:
     from botorch.fit import fit_fully_bayesian_model_nuts
     from botorch.models.fully_bayesian import SaasFullyBayesianSingleTaskGP
     from botorch.models.transforms.outcome import Standardize
     SAAS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     SAAS_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        f"SAAS GP not available: {e}. "
+        "Install with: pip install 'botorch>=0.10.0' pyro-ppl. "
+        "Falling back to Isotropic GP for high-dimensional optimization."
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -50,16 +59,6 @@ def compute_ucb_beta(
     High beta (3-4) is CRITICAL for 256D with few points:
     - More exploration prevents getting stuck
     - Helps discover structure in high-D space
-
-    Args:
-        iteration: Current iteration
-        total_iterations: Total iterations planned
-        beta_start: Initial beta (high exploration)
-        beta_end: Final beta (exploitation)
-        schedule: "linear" or "sqrt" (slower decay)
-
-    Returns:
-        UCB beta value for current iteration
     """
     if total_iterations <= 0:
         return beta_start
@@ -67,10 +66,8 @@ def compute_ucb_beta(
     progress = iteration / total_iterations
 
     if schedule == "sqrt":
-        # Slower decay, more exploration
         progress = progress ** 0.5
     elif schedule == "cosine":
-        import math
         progress = (1 - math.cos(progress * math.pi)) / 2
 
     return beta_start + (beta_end - beta_start) * progress
@@ -90,21 +87,13 @@ class TrustRegion:
         scale: float = 2.0,
         device: str = "cuda",
     ):
-        """
-        Initialize trust region from training data.
-
-        Args:
-            X_train: (N, D) training latents
-            scale: Trust radius = scale * max_dist_from_centroid
-            device: Torch device
-        """
+        """Initialize trust region from training data."""
         self.device = device
         X = X_train.to(device)
 
         self.centroid = X.mean(dim=0)
-        dists = (X - self.centroid).norm(dim=-1)
-        self.radius = dists.max().item() * scale
-        self.max_dist = dists.max().item()
+        max_dist = (X - self.centroid).norm(dim=-1).max().item()
+        self.radius = max_dist * scale
 
         logger.info(
             f"TrustRegion: centroid norm={self.centroid.norm():.3f}, "
@@ -122,32 +111,13 @@ class TrustRegion:
         grad: torch.Tensor,
         max_step: float = 0.1,
     ) -> torch.Tensor:
-        """
-        Clip guidance gradient to stay within trust region.
-
-        Args:
-            z: (B, D) current positions
-            grad: (B, D) guidance gradients
-            max_step: Maximum step size as fraction of radius
-
-        Returns:
-            (B, D) clipped gradients
-        """
+        """Clip guidance gradient to stay within trust region."""
         centroid = self.centroid.to(z.device)
-
-        # Distance to boundary
         dist_to_centroid = (z - centroid).norm(dim=-1, keepdim=True)
         dist_to_boundary = self.radius - dist_to_centroid
-
-        # Scale gradient based on distance to boundary
         grad_norm = grad.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-
-        # Max allowed step
         max_allowed = (dist_to_boundary / grad_norm).clamp(min=0, max=max_step * self.radius)
-
-        # Scale gradients
         scale = (max_allowed / (grad_norm + 1e-8)).clamp(max=1.0)
-
         return grad * scale
 
 
@@ -242,7 +212,12 @@ class HighDimGPBase(ABC, nn.Module):
 
             return direction * scale
 
-        # No training data - return zeros
+        # No training data - return zeros with warning
+        logger.warning(
+            "compute_guidance_gradient returning zeros: "
+            "No training data available (X_train or y_train is None). "
+            "GP-guided generation will have no optimization effect."
+        )
         return torch.zeros_like(z)
 
     @abstractmethod
@@ -368,16 +343,12 @@ class IsotropicHighDimGP(HighDimGPBase):
         )
 
     def fit(self, X: torch.Tensor, y: torch.Tensor) -> bool:
-        """
-        Fit GP to training data.
+        """Fit GP to training data. Returns True on success."""
+        if X.shape[0] < 2:
+            raise ValueError(f"GP requires at least 2 training points, got {X.shape[0]}")
+        if X.shape[0] != y.shape[0]:
+            raise ValueError(f"X and y must have same number of samples: {X.shape[0]} vs {y.shape[0]}")
 
-        Args:
-            X: (N, D) latent vectors
-            y: (N,) error rates (NOT negated)
-
-        Returns:
-            Success flag
-        """
         X = X.to(self.device)
         y = y.to(self.device)
 
@@ -434,19 +405,7 @@ class IsotropicHighDimGP(HighDimGPBase):
         return True
 
     def predict(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Predict mean and std for latent vectors.
-
-        Returns error rates (higher is worse).
-        Supports gradient computation for acquisition optimization.
-
-        Args:
-            z: (B, D) latent vectors
-
-        Returns:
-            mean: (B,) predicted error rates (differentiable if z.requires_grad)
-            std: (B,) prediction uncertainties (differentiable if z.requires_grad)
-        """
+        """Predict mean and std for latent vectors. Supports gradient computation."""
         z = z.to(self.device)
         batch_size = z.shape[0]
 
@@ -571,11 +530,7 @@ class SaasHighDimGP(HighDimGPBase):
         return True
 
     def predict(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Predict with SAAS GP.
-
-        Note: SAAS posterior has shape (num_mcmc_samples, batch, 1).
-        We average over MCMC samples to get final prediction.
-        """
+        """Predict with SAAS GP, averaging over MCMC samples."""
         z = z.to(self.device)
 
         if self.gp_model is None:
@@ -589,17 +544,12 @@ class SaasHighDimGP(HighDimGPBase):
 
         with torch.no_grad():
             posterior = self.gp_model.posterior(z_norm)
-            # Shape: (num_mcmc_samples, batch, 1) -> average over MCMC samples
-            mean = posterior.mean.squeeze(-1).mean(dim=0)  # (batch,)
-            # For std, combine MCMC uncertainty (variance of means) and aleatoric (mean of variances)
-            var_epistemic = posterior.mean.squeeze(-1).var(dim=0)  # Variance of means
-            var_aleatoric = posterior.variance.squeeze(-1).mean(dim=0)  # Mean of variances
-            std = (var_epistemic + var_aleatoric).sqrt()  # (batch,)
+            mean = posterior.mean.squeeze(-1).mean(dim=0)
+            var_epistemic = posterior.mean.squeeze(-1).var(dim=0)
+            var_aleatoric = posterior.variance.squeeze(-1).mean(dim=0)
+            std = (var_epistemic + var_aleatoric).sqrt()
 
-        mean = mean.clamp(0, 1)
-        std = std.clamp(min=1e-6)
-
-        return mean, std
+        return mean.clamp(0, 1), std.clamp(min=1e-6)
 
     def compute_guidance_gradient(
         self,

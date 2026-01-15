@@ -32,15 +32,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Optional: scipy for exact OT, falls back to approximate if not available
+# Optional: scipy for exact OT, falls back to approximate Sinkhorn if not available
 try:
     from scipy.optimize import linear_sum_assignment
     SCIPY_AVAILABLE = True
 except ImportError:
     SCIPY_AVAILABLE = False
-    warnings.warn(
-        "scipy not available, using approximate OT. Install scipy for exact OT-CFM.",
-        ImportWarning,
+    import logging
+    logging.getLogger(__name__).warning(
+        "scipy not available - using approximate Sinkhorn OT. "
+        "For exact Hungarian OT (recommended for batch_size <= 256), "
+        "install scipy: pip install scipy"
     )
 
 
@@ -134,29 +136,7 @@ def apply_ot_pairing(
     """
     Reorder x_0 to optimally match x_1 via Optimal Transport.
 
-    This is the key innovation of OT-CFM: instead of random pairing,
-    we minimize the total transport cost within each minibatch.
-
-    Benefits:
-    - Straighter trajectories (less crossing)
-    - Lower discretization error during ODE integration
-    - Better reconstruction quality
-
-    Performance notes:
-    - Exact OT (Hungarian): O(n³) on CPU - fast for n<256, slow for larger
-    - Sinkhorn approx: O(n²) on GPU - fast for any batch size
-
-    Reference: "Flow Matching for Generative Modeling" (Lipman et al., 2023)
-               "Improving Training of Rectified Flows" (Liu et al., 2024)
-
-    Args:
-        x_0: (B, D) source samples (noise)
-        x_1: (B, D) target samples (data)
-        use_exact: Use exact Hungarian algorithm when batch_size <= exact_threshold
-        exact_threshold: Max batch size for exact OT (default: 256)
-
-    Returns:
-        x_0_paired: (B, D) reordered noise samples
+    Uses Hungarian algorithm for small batches (<=256), Sinkhorn for larger.
     """
     batch_size = x_0.shape[0]
 
@@ -310,25 +290,15 @@ class VelocityField(nn.Module):
         nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """
-        Compute velocity at (x, t).
-
-        Args:
-            t: (B,) or scalar timestep in [0, 1]
-            x: (B, dim) current state
-
-        Returns:
-            v: (B, dim) velocity
-        """
-        # Handle scalar or batch t
+        """Compute velocity at (x, t)."""
         if t.dim() == 0:
             t = t.expand(x.shape[0])
         elif t.shape[0] == 1 and x.shape[0] > 1:
             t = t.expand(x.shape[0])
 
-        t_emb = self.time_embed(t)  # (B, dim)
-        h = torch.cat([x, t_emb], dim=-1)  # (B, 2*dim)
-        return self.net(h)  # (B, dim)
+        t_emb = self.time_embed(t)
+        h = torch.cat([x, t_emb], dim=-1)
+        return self.net(h)
 
 
 class TextFlowAutoencoder(nn.Module):
@@ -340,17 +310,17 @@ class TextFlowAutoencoder(nn.Module):
     Optimization in the latent space.
 
     Architecture (training is simulation-free, inference uses ODE):
-        Encode: SONAR 1024D → enc_proj → 256D → [Flow t=1→0] → 256D → to_latent → 128D
-        Decode: 128D → from_latent → 256D → [Flow t=0→1] → 256D → dec_proj → 1024D
+        Encode: SONAR 1024D → enc_proj → 512D → [Flow t=1→0] → 512D → to_latent → 128D
+        Decode: 128D → from_latent → 512D → [Flow t=0→1] → 512D → dec_proj → 1024D
 
-    Flow operates in 256D intermediate space, with 128D bottleneck at t=0.
+    Flow operates in 512D intermediate space (flow_dim), with 128D bottleneck at t=0.
 
     Training: Simulation-free Flow Matching (no ODE solver!)
     Inference: ODE integration for encode/decode
 
     Flow direction:
         t=0: latent space (flow endpoint, then projected to 128D)
-        t=1: data space (projected SONAR embedding in 256D)
+        t=1: data space (projected SONAR embedding in 512D flow_dim)
 
     Novel contribution: First FM autoencoder for text reconstruction.
     """
@@ -506,24 +476,7 @@ class TextFlowAutoencoder(nn.Module):
         """
         Compute simulation-free Flow Matching loss with optional OT pairing.
 
-        This is the KEY INNOVATION - no ODE solver during training!
-        We directly regress the velocity field to match straight-line paths.
-
-        OT-CFM (Optimal Transport CFM):
-        - Pairs noise x_0 with data x_1 to minimize transport cost
-        - Results in straighter trajectories (less crossing)
-        - Dramatically improves reconstruction quality
-
-        Args:
-            x_input: (B, input_dim) input embeddings
-            timestep_sampling: "uniform" or "u_shaped" (default: u_shaped for better convergence)
-            use_ot: Use Optimal Transport pairing (default: True, recommended)
-
-        Returns:
-            dict with loss components and intermediates
-
-        Raises:
-            ValueError: If input contains NaN or Inf values
+        OT-CFM pairs noise x_0 with data x_1 via optimal transport for straighter trajectories.
         """
         # Validate input
         if torch.isnan(x_input).any():
@@ -598,15 +551,9 @@ class TextFlowAutoencoder(nn.Module):
         x_0: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute reconstruction loss through FULL encode-decode path.
+        Compute reconstruction loss through full encode-decode path.
 
-        CRITICAL: This must match the inference path exactly:
-        x_input → enc_proj → ODE(1→0) → to_latent → z → from_latent → ODE(0→1) → dec_proj → x_recon
-
-        NOTE: x_0 from flow_matching_loss is random noise - we must re-encode x_1!
-
-        Uses fewer ODE steps during training for speed (num_train_ode_steps).
-        Inference uses full num_ode_steps for quality.
+        Uses fewer ODE steps during training (num_train_ode_steps) for speed.
         """
         # Use fewer ODE steps during training for speed
         train_steps = self.num_train_ode_steps
@@ -637,20 +584,9 @@ class TextFlowAutoencoder(nn.Module):
         num_steps: Optional[int] = None,
     ) -> torch.Tensor:
         """
-        Forward-backward consistency loss for stable training.
+        Forward-backward consistency loss: encode(decode(z)) should equal z.
 
-        From RegFlow (2025): This self-consistency loss dramatically improves
-        training stability by ensuring encode(decode(z)) ≈ z.
-
-        Path: x → encode → z → decode → x' → encode → z'
-        Loss: MSE(z, z')
-
-        Args:
-            x_input: (B, input_dim) input embeddings
-            num_steps: ODE steps (default: min(5, num_train_ode_steps) for speed)
-
-        Returns:
-            Consistency loss (MSE between z and z_cycle)
+        Uses fewer ODE steps for speed (3 integrations).
         """
         # Use fewer ODE steps for consistency (3 integrations) to reduce overhead
         # 5 steps is enough to check cycle consistency without being too slow
@@ -687,28 +623,7 @@ def compute_lipschitz_loss(
     """
     Lipschitz regularization for BO-friendly latent space.
 
-    Ensures ||f(z) - f(z+ε)|| / ||ε|| is bounded, which is critical for
-    GP surrogate smoothness in Bayesian Optimization.
-
-    Key insight from LOL-BO (NeurIPS 2022): Without Lipschitz regularization,
-    small latent perturbations can cause large semantic jumps, violating
-    GP smoothness assumptions and reducing optimization effectiveness.
-
-    Penalty types:
-    - "hinge": relu(ratio - bound) - only penalizes above bound (original)
-    - "soft": log(1 + exp(ratio - bound)) - smooth version, always active
-    - "quadratic": (ratio / bound)^2 - encourages low ratios everywhere
-
-    Args:
-        model: TextFlowAutoencoder
-        x_input: (B, input_dim) input embeddings
-        epsilon: Perturbation magnitude
-        lip_bound: Target Lipschitz bound
-        penalty_type: Type of penalty function
-
-    Returns:
-        loss: Lipschitz loss tensor
-        mean_ratio: Mean Lipschitz ratio (for logging)
+    Ensures ||f(z) - f(z+ε)|| / ||ε|| is bounded for GP smoothness.
     """
     # Use fewer ODE steps during training for speed (5 is enough for Lip estimation)
     train_steps = min(5, model.num_train_ode_steps)
@@ -741,24 +656,18 @@ def compute_lipschitz_loss(
     lipschitz_ratio = output_change / input_change.clamp(min=eps)
     lipschitz_ratio = lipschitz_ratio.clamp(max=1e6)  # Prevent extreme values
 
-    # Store mean ratio for logging
     mean_ratio = lipschitz_ratio.mean().item()
 
-    # Compute penalty based on type
-    if penalty_type == "hinge":
-        # Original: only penalize above bound
-        loss = F.relu(lipschitz_ratio - lip_bound).mean()
-    elif penalty_type == "soft":
-        # Soft: smooth penalty, always provides gradient
-        # softplus(ratio - bound) ≈ relu but smooth
-        loss = F.softplus(lipschitz_ratio - lip_bound).mean()
-    elif penalty_type == "quadratic":
-        # Quadratic: encourages ratios much smaller than bound
-        loss = ((lipschitz_ratio / lip_bound) ** 2).mean()
-    else:
+    penalties = {
+        "hinge": lambda: F.relu(lipschitz_ratio - lip_bound).mean(),
+        "soft": lambda: F.softplus(lipschitz_ratio - lip_bound).mean(),
+        "quadratic": lambda: ((lipschitz_ratio / lip_bound) ** 2).mean(),
+    }
+
+    if penalty_type not in penalties:
         raise ValueError(f"Unknown penalty_type: {penalty_type}")
 
-    return loss, mean_ratio
+    return penalties[penalty_type](), mean_ratio
 
 
 # =============================================================================
@@ -788,30 +697,7 @@ def flow_matching_loss(
     """
     Combined Flow Matching training loss with BO-friendly regularization.
 
-    L_total = L_FM + λ_recon·L_recon + λ_gw·L_GW + λ_lip·L_Lip + λ_cons·L_consistency
-
-    Key features:
-    - OT-CFM: Optimal Transport pairing for straighter trajectories
-    - Soft Lipschitz penalty: Always provides gradient signal
-    - U-shaped timestep sampling: +28% convergence
-
-    SIMULATION-FREE: No ODE solver during FM loss computation!
-
-    Args:
-        model: TextFlowAutoencoder (or DDP-wrapped)
-        x_input: (B, input_dim) input embeddings
-        lambda_recon: Weight for reconstruction loss (default: 0.5)
-        lambda_gw: Weight for Gromov-Wasserstein loss (optional)
-        lambda_lip: Weight for Lipschitz regularization (default: 0.1)
-        lambda_consistency: Weight for forward-backward consistency (default: 0.1)
-        timestep_sampling: "uniform" or "u_shaped" (default: u_shaped)
-        lip_bound: Maximum Lipschitz constant (default: 5.0)
-        lip_penalty_type: "hinge", "soft", or "quadratic" (default: soft)
-        use_ot: Use Optimal Transport pairing (default: True, highly recommended)
-        objectives: Optional objective values for correlation loss
-
-    Returns:
-        dict with loss components and metrics
+    L_total = L_FM + lambda_recon*L_recon + lambda_gw*L_GW + lambda_lip*L_Lip + lambda_cons*L_consistency
     """
     # Unwrap DDP if necessary
     unwrapped = _unwrap_model(model)

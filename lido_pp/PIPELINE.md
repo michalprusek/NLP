@@ -286,9 +286,9 @@ diverse_latents = generator.generate_diverse(
 ### 4.1 High-Dimensional GP (`gp/high_dim_gp.py`)
 
 **Problem: Curse of Dimensionality**
-With 256D latent space and ~20 training points, standard GP fails:
+With 128D+ latent space (FlowPO default: 128D) and ~20 training points, standard GP fails:
 - All points appear equidistant (distances lose meaning in high-D)
-- ARD kernel has 256+ parameters to learn from 20 points → overfitting
+- ARD kernel has 128+ parameters to learn from 20 points → overfitting
 - Analytic gradients become numerically zero
 
 **Solution: Isotropic kernel + Nearest-Neighbor Fallback**
@@ -298,16 +298,16 @@ from lido_pp.gp import IsotropicHighDimGP, AdaptiveHighDimGP
 
 # Isotropic GP - single lengthscale for all dimensions
 gp = IsotropicHighDimGP(
-    latent_dim=256,
+    latent_dim=128,        # FlowPO default (matches tfa_latent_dim)
     device="cuda:0",
-    ucb_beta=4.0,          # High exploration (critical for 256D)
+    ucb_beta=4.0,          # High exploration (critical for high-D)
     trust_region_scale=2.0, # Prevent guidance from escaping data region
 )
 gp.fit(train_latents, error_rates)
 
 # Adaptive GP - switches to SAAS when n >= 30
 gp = AdaptiveHighDimGP(
-    latent_dim=256,
+    latent_dim=128,        # FlowPO default
     switch_threshold=30,   # Use SAAS when enough data
 )
 ```
@@ -340,17 +340,17 @@ def compute_guidance_gradient(z, ucb_beta):
 The TFA flow was never trained on N(0,1) noise - it was trained on `from_latent(z)` where z comes from encoded instructions. Always initialize generation from the training latent distribution:
 
 ```python
-# WRONG - generates in wrong region
-initial_noise = torch.randn(batch_size, flow_dim)  # ❌
+# WRONG - generates in wrong region (latent_dim=128 for FlowPO)
+z_init = torch.randn(batch_size, latent_dim)  # ❌ N(0,1) is wrong distribution
 
 # CORRECT - initialize from training distribution
 train_mean = train_latents.mean(dim=0)
 train_std = train_latents.std(dim=0)
 z_init = train_mean + exploration_noise * train_std * torch.randn(batch_size, latent_dim)
-x0_flow = tfa.from_latent(z_init)  # ✓ Proper initialization
+x0_flow = tfa.from_latent(z_init)  # ✓ Proper initialization in 512D flow space
 ```
 
-**Experimental Results (26 points, 256D latent):**
+**Experimental Results (26 points, 128D latent):**
 | GP Type | Exploration Noise | Predicted Error | Diversity | Notes |
 |---------|-------------------|-----------------|-----------|-------|
 | Isotropic | 0.5 | **0.128** | 0.047 | Best predictions |
