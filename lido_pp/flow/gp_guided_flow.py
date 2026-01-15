@@ -77,6 +77,20 @@ class GuidedGenerationResult:
     acquisition_values: Optional[torch.Tensor] = None  # (B,) final acquisition values
     guidance_norms: Optional[List[float]] = None  # Per-step gradient norms
 
+    def __post_init__(self):
+        """Validate tensor shapes are consistent."""
+        B = self.latents.shape[0]
+        if self.acquisition_values is not None and self.acquisition_values.shape[0] != B:
+            raise ValueError(
+                f"acquisition_values batch size {self.acquisition_values.shape[0]} != "
+                f"latents batch size {B}"
+            )
+        if self.trajectory is not None and self.trajectory.shape[1] != B:
+            raise ValueError(
+                f"trajectory batch dimension {self.trajectory.shape[1]} != "
+                f"latents batch size {B}"
+            )
+
 
 class GPGuidedFlowGenerator(nn.Module):
     """
@@ -113,6 +127,15 @@ class GPGuidedFlowGenerator(nn.Module):
             ucb_beta: UCB exploration parameter (β in μ + β·σ)
         """
         super().__init__()
+
+        # Validate schedule at construction time
+        valid_schedules = {"linear", "cosine", "warmup", "sqrt", "constant"}
+        if schedule not in valid_schedules:
+            raise ValueError(
+                f"Invalid schedule '{schedule}'. "
+                f"Valid options: {', '.join(sorted(valid_schedules))}"
+            )
+
         self.flowdit = flowdit
         self.latent_dim = latent_dim
         self.scale = guidance_scale
@@ -178,6 +201,10 @@ class GPGuidedFlowGenerator(nn.Module):
         - EI: Expected improvement for minimization
         - neg_error: R = -mean (pure exploitation)
 
+        For high-dimensional spaces (curse of dimensionality), uses the GP's
+        compute_guidance_gradient method if available, which falls back to
+        nearest-neighbor direction when analytic gradient is too small.
+
         IMPORTANT: If your GP predicts accuracy instead of error rate,
         flip the sign: R = mean + beta*std
 
@@ -197,6 +224,11 @@ class GPGuidedFlowGenerator(nn.Module):
                 "Call set_gp_model() before using GP-guided generation."
             )
 
+        # Use high-dimensional gradient method if available
+        if hasattr(self.gp, 'compute_guidance_gradient'):
+            return self.gp.compute_guidance_gradient(z, self.ucb_beta)
+
+        # Standard analytic gradient
         z_grad = z.detach().requires_grad_(True)
         mean, std = self.gp.predict(z_grad)
 
@@ -208,12 +240,22 @@ class GPGuidedFlowGenerator(nn.Module):
         reward.sum().backward()
 
         if z_grad.grad is None:
-            raise RuntimeError(
-                "Gradient computation failed: z_grad.grad is None. "
-                "Ensure GP model supports gradient computation."
+            logger.warning(
+                "Gradient computation returned None. "
+                "This may happen with high-dimensional GP and few training points."
             )
+            return torch.zeros_like(z)
 
         grad = z_grad.grad.detach().clone()
+
+        # Check if gradient is meaningful
+        grad_norm = grad.norm(dim=-1).mean()
+        if grad_norm < 1e-6:
+            logger.debug(
+                f"Analytic gradient is very small ({grad_norm:.2e}). "
+                "Consider using more training data for high-dimensional GP."
+            )
+
         z_grad.grad = None
         return grad
 

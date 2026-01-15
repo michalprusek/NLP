@@ -188,11 +188,16 @@ class CrossAttentionLayer(nn.Module):
             dropout: Dropout rate
         """
         super().__init__()
+
+        # Validate divisibility (use ValueError instead of assert)
+        if hidden_dim % num_heads != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) must be divisible by num_heads ({num_heads})"
+            )
+
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
-
-        assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
 
         # Query projection for decoder hidden states
         self.q_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)

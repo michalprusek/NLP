@@ -32,9 +32,6 @@ from lido_pp.backbone.cfm_encoder import (
     sliced_gw_distance,
     flow_matching_loss,
     compute_lipschitz_loss,
-    # Legacy alias
-    CoupledFlowEncoder,
-    cfm_loss,
 )
 
 from lido_pp.backbone.cross_attention_decoder import (
@@ -43,51 +40,6 @@ from lido_pp.backbone.cross_attention_decoder import (
     MemoryConditionedDecoder,
     create_cross_attention_projector,
 )
-
-# === Legacy Components (Deprecated but kept for compatibility) ===
-# These will be removed in a future version
-
-try:
-    from lido_pp.backbone.latent_attention import (
-        LatentAttentionPooling,
-        AdaptiveLatentAttention,
-    )
-    _LATENT_ATTENTION_AVAILABLE = True
-except ImportError:
-    _LATENT_ATTENTION_AVAILABLE = False
-    LatentAttentionPooling = None
-    AdaptiveLatentAttention = None
-
-try:
-    from lido_pp.backbone.gritlm_encoder import (
-        GritLMUnifiedEncoder,
-        create_instruction_encoder,
-    )
-    _GRITLM_AVAILABLE = True
-except ImportError:
-    _GRITLM_AVAILABLE = False
-    GritLMUnifiedEncoder = None
-    create_instruction_encoder = None
-
-try:
-    from lido_pp.backbone.latent_injection import (
-        LatentInjectionDecoder,
-        LatentProjector,
-        ProjectorTrainer,
-        RoundTripEvaluator,
-        LatentInjectionResult,
-        create_latent_injection_decoder,
-    )
-    _LATENT_INJECTION_AVAILABLE = True
-except ImportError:
-    _LATENT_INJECTION_AVAILABLE = False
-    LatentInjectionDecoder = None
-    LatentProjector = None
-    ProjectorTrainer = None
-    RoundTripEvaluator = None
-    LatentInjectionResult = None
-    create_latent_injection_decoder = None
-
 
 __all__ = [
     # === FlowPO Core Components ===
@@ -106,30 +58,4 @@ __all__ = [
     "CrossAttentionLayer",
     "MemoryConditionedDecoder",
     "create_cross_attention_projector",
-    # === Legacy Aliases (Deprecated) ===
-    "CoupledFlowEncoder",  # Use TextFlowAutoencoder
-    "cfm_loss",  # Use flow_matching_loss
 ]
-
-# Conditionally add legacy exports if available
-if _LATENT_ATTENTION_AVAILABLE:
-    __all__.extend([
-        "LatentAttentionPooling",
-        "AdaptiveLatentAttention",
-    ])
-
-if _GRITLM_AVAILABLE:
-    __all__.extend([
-        "GritLMUnifiedEncoder",
-        "create_instruction_encoder",
-    ])
-
-if _LATENT_INJECTION_AVAILABLE:
-    __all__.extend([
-        "LatentInjectionDecoder",
-        "LatentProjector",
-        "ProjectorTrainer",
-        "RoundTripEvaluator",
-        "LatentInjectionResult",
-        "create_latent_injection_decoder",
-    ])

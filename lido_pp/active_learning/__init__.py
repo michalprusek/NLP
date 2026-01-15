@@ -46,7 +46,7 @@ __all__ = [
     "FCUGatingResult",
     "FCUStatistics",
     "create_fcu_gating",
-    # === Legacy Components ===
+    # === Core Components ===
     # Curvature
     "compute_flow_curvature",
     "compute_fcu_with_threshold",

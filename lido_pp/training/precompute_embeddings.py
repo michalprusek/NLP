@@ -36,14 +36,39 @@ def main():
         "--dataset",
         type=str,
         default="alpaca",
-        choices=["alpaca", "ultrachat", "combined", "custom"],
-        help="Dataset to encode",
+        choices=["alpaca", "ultrachat", "combined", "universal", "custom"],
+        help="Dataset to encode (universal = 1.5M+ from OpenOrca, UltraChat, Code, ShareGPT, Alpaca)",
     )
     parser.add_argument(
         "--ultrachat-samples",
         type=int,
         default=50000,
         help="Number of UltraChat samples for combined dataset",
+    )
+    # Universal dataset sample counts
+    parser.add_argument(
+        "--openorca-samples",
+        type=int,
+        default=500000,
+        help="Number of OpenOrca samples for universal dataset",
+    )
+    parser.add_argument(
+        "--code-samples",
+        type=int,
+        default=200000,
+        help="Number of code samples (CodeAlpaca + Glaive) for universal dataset",
+    )
+    parser.add_argument(
+        "--sharegpt-samples",
+        type=int,
+        default=100000,
+        help="Number of ShareGPT samples for universal dataset",
+    )
+    parser.add_argument(
+        "--existing-embeddings",
+        type=str,
+        default=None,
+        help="Path to existing embeddings to merge with (for universal dataset)",
     )
     parser.add_argument(
         "--custom-path",
@@ -91,8 +116,8 @@ def main():
     parser.add_argument(
         "--normalize",
         action="store_true",
-        default=True,
-        help="L2 normalize embeddings",
+        default=False,
+        help="L2 normalize embeddings (default: False for SONAR decoder compatibility)",
     )
     args = parser.parse_args()
 
@@ -119,6 +144,28 @@ def main():
             alpaca_samples=args.max_samples,
             ultrachat_samples=uc_samples,
         )
+
+    elif args.dataset == "universal":
+        from lido_pp.training.alpaca_dataset import load_universal_dataset
+
+        print("\n" + "=" * 70)
+        print("Loading UNIVERSAL dataset for production training")
+        print("Sources: OpenOrca, UltraChat, CodeAlpaca, ShareGPT, Alpaca")
+        print(f"Target samples: {args.openorca_samples + args.ultrachat_samples + args.code_samples + args.sharegpt_samples + 52000}")
+        print("=" * 70 + "\n")
+
+        instructions = load_universal_dataset(
+            openorca_samples=args.openorca_samples,
+            ultrachat_samples=args.ultrachat_samples,
+            codealpaca_samples=args.code_samples,
+            sharegpt_samples=args.sharegpt_samples,
+            alpaca_samples=52000,  # All Alpaca
+            existing_path=args.existing_embeddings,
+            deduplicate=True,
+        )
+
+        if args.max_samples and len(instructions) > args.max_samples:
+            instructions = instructions[:args.max_samples]
 
     elif args.dataset == "custom":
         if not args.custom_path:

@@ -48,6 +48,22 @@ class FCUGatingResult:
     # Threshold used for gating
     threshold: float = 0.0
 
+    def __post_init__(self):
+        """Validate tensor shapes are consistent."""
+        B = self.latents.shape[0]
+        if self.fcu_values.shape[0] != B:
+            raise ValueError(
+                f"fcu_values batch size {self.fcu_values.shape[0]} != "
+                f"latents batch size {B}"
+            )
+        if self.needs_llm_eval.shape[0] != B:
+            raise ValueError(
+                f"needs_llm_eval batch size {self.needs_llm_eval.shape[0]} != "
+                f"latents batch size {B}"
+            )
+        if self.threshold < 0:
+            raise ValueError(f"threshold must be non-negative, got {self.threshold}")
+
 
 @dataclass
 class FCUStatistics:
@@ -60,6 +76,12 @@ class FCUStatistics:
     # Running statistics for adaptive threshold (using deque for automatic size limiting)
     max_history: int = 1000
     fcu_history: deque = field(default_factory=lambda: deque(maxlen=1000))
+
+    def __post_init__(self):
+        """Ensure fcu_history maxlen matches max_history."""
+        if self.fcu_history.maxlen != self.max_history:
+            # Recreate deque with correct maxlen, preserving existing values
+            self.fcu_history = deque(self.fcu_history, maxlen=self.max_history)
 
     @property
     def llm_ratio(self) -> float:
@@ -416,7 +438,7 @@ class AdaptiveEvaluationGate(nn.Module):
         if self.evaluation_log:
             stats["num_batches"] = len(self.evaluation_log)
             stats["avg_batch_llm_ratio"] = sum(
-                log["llm_evals"] / log["batch_size"]
+                log["llm_evals"] / max(log["batch_size"], 1)
                 for log in self.evaluation_log
             ) / len(self.evaluation_log)
 

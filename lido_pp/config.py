@@ -55,10 +55,14 @@ class FlowPOConfig:
 
     # === Text Flow Autoencoder (TFA) ===
     tfa_latent_dim: int = 128  # Increased from 32 for better reconstruction (8:1 compression)
-    tfa_flow_dim: int = 256  # Intermediate flow space dimension
+    tfa_flow_dim: int = 512  # Intermediate flow space dimension (increased for capacity)
     tfa_hidden_dims: List[int] = field(default_factory=lambda: [512, 256])
-    tfa_ode_steps: int = 20  # ODE integration steps
-    tfa_time_embed_dim: int = 64
+    tfa_ode_steps: int = 20  # ODE integration steps (ALIGNED train/inference for stability)
+    tfa_train_ode_steps: int = 20  # Training ODE steps (ALIGNED with inference)
+    tfa_velocity_layers: int = 6  # Deeper velocity network
+    tfa_dropout: float = 0.0  # Dropout for regularization (0.1 for production with large datasets)
+    tfa_time_embed_dim: int = 128  # Increased timestep embedding
+    tfa_timestep_sampling: str = "u_shaped"  # "uniform" or "u_shaped" (u_shaped improves by ~28%)
 
     # === Flow-DiT Architecture ===
     flow_latent_dim: int = 128  # Must match tfa_latent_dim
@@ -101,10 +105,11 @@ class FlowPOConfig:
     decoder_use_gate: bool = True  # GLU-style gating
 
     # === Regularization ===
-    lambda_recon: float = 0.1  # Reconstruction loss weight
-    lambda_lip: float = 0.01  # Lipschitz regularization (BO-friendly smoothness)
+    lambda_recon: float = 0.5  # Reconstruction loss weight (increased for stability)
+    lambda_lip: float = 0.1  # Lipschitz regularization (10x increase for stability)
     lambda_gw: float = 0.0  # Gromov-Wasserstein (optional)
-    lipschitz_bound: float = 10.0  # Maximum Lipschitz constant
+    lambda_consistency: float = 0.1  # Forward-backward consistency (RegFlow-style stability)
+    lipschitz_bound: float = 5.0  # Maximum Lipschitz constant (tighter for stability)
 
     # === OAT-FM (Optimal Acceleration Transport) ===
     # NOTE: OAT is not yet implemented in train_cfm.py
@@ -147,6 +152,15 @@ class FlowPOConfig:
     gp_patience: int = 100
     gp_retrain_epochs: int = 1000  # Per-iteration retraining
 
+    # === High-Dimensional GP (for 256D latent with ~20 points) ===
+    gp_type: Literal["isotropic", "saas", "adaptive"] = "isotropic"
+    gp_switch_threshold: int = 30  # Switch to SAAS when n >= this
+    gp_ucb_beta_start: float = 4.0  # High exploration for curse of dimensionality
+    gp_ucb_beta_end: float = 2.0  # Standard exploitation
+    gp_ucb_beta_schedule: Literal["linear", "sqrt", "cosine"] = "linear"
+    gp_trust_region_scale: float = 2.0  # Trust region radius multiplier
+    gp_cold_start_threshold: int = 5  # Return prior below this many points
+
     # === UCB Acquisition ===
     ucb_beta: float = 8.0  # Initial exploration
     ucb_beta_final: float = 2.0  # Final exploitation
@@ -157,7 +171,7 @@ class FlowPOConfig:
     # === Results ===
     results_dir: str = "lido_pp/results"
     checkpoint_dir: str = "lido_pp/checkpoints"
-    log_interval: int = 100  # Logging frequency (epochs)
+    log_interval: int = 1  # Logging frequency (epochs) - log every epoch for detailed monitoring
 
     # === Reproducibility ===
     seed: int = 42
@@ -206,6 +220,25 @@ class FlowPOConfig:
                 f"flow_context_dim ({self.flow_context_dim}) must match "
                 f"embedding_dim ({self.embedding_dim})"
             )
+
+        # Validate OAT is not enabled (not implemented)
+        if self.oat_enabled:
+            raise NotImplementedError(
+                "OAT regularization is not yet implemented. "
+                "Set oat_enabled=False or wait for a future release."
+            )
+
+        # Validate FCU percentile
+        if not 0 <= self.fcu_percentile <= 100:
+            raise ValueError(
+                f"fcu_percentile must be in [0, 100], got {self.fcu_percentile}"
+            )
+
+        # Validate positive values
+        if self.flow_lr <= 0:
+            raise ValueError(f"flow_lr must be positive, got {self.flow_lr}")
+        if self.flow_batch_size < 1:
+            raise ValueError(f"flow_batch_size must be >= 1, got {self.flow_batch_size}")
 
         # Sync deprecated aliases
         self.vae_latent_dim = self.tfa_latent_dim

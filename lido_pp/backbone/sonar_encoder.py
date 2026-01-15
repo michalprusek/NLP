@@ -148,6 +148,10 @@ class SONAREncoder(nn.Module):
                 from tqdm import tqdm
                 iterator = tqdm(range(0, len(texts), batch_size), desc="Encoding")
             except ImportError:
+                logger.warning(
+                    "tqdm not installed. Progress bar disabled. "
+                    "Install with: pip install tqdm"
+                )
                 iterator = range(0, len(texts), batch_size)
         else:
             iterator = range(0, len(texts), batch_size)
@@ -163,14 +167,29 @@ class SONAREncoder(nn.Module):
         """Forward pass (alias for encode)."""
         return self.encode(texts)
 
-    def to(self, device: str) -> "SONAREncoder":
-        """Move encoder to device."""
+    def set_device(self, device: str) -> "SONAREncoder":
+        """
+        Move encoder to device.
+
+        Note: This method reinitializes the SONAR pipeline on the new device.
+        Use set_device() instead of to() to avoid confusion with nn.Module.to().
+
+        Args:
+            device: Target device string (e.g., "cuda:0", "cpu")
+
+        Returns:
+            self for method chaining
+        """
         self.device = device
         if self._initialized and self._pipeline is not None:
             # Reinitialize on new device
             self._initialized = False
             self._initialize()
         return self
+
+    def to(self, device: str) -> "SONAREncoder":
+        """Move encoder to device (alias for set_device)."""
+        return self.set_device(device)
 
 
 class SONARTextDecoder(nn.Module):
@@ -227,6 +246,11 @@ class SONARTextDecoder(nn.Module):
             raise ImportError(
                 "SONAR not installed. Install with: pip install sonar-space>=0.5.0\n"
                 f"Original error: {e}"
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to initialize SONAR decoder: {e}\n"
+                "Try clearing fairseq2 cache: rm -rf ~/.cache/fairseq2"
             )
 
     @torch.no_grad()
