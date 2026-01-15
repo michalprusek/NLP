@@ -1,17 +1,21 @@
 """
-Pre-compute GritLM embeddings for Alpaca dataset.
+Pre-compute SONAR embeddings for FlowPO training.
 
-This script pre-computes embeddings once so they can be reused
-for VAE, Projector, and FlowDiT training without re-encoding.
+This script pre-computes SONAR embeddings (1024D) once so they can be reused
+for TFA (Text Flow Autoencoder), Flow-DiT, and Decoder training.
+
+SONAR (Meta's reconstruction-optimized encoder) is preferred over GritLM
+because it's trained for translation, preserving reconstruction information.
 
 Output format:
 {
-    "embeddings": Tensor (N, 768),
+    "embeddings": Tensor (N, 1024),
     "instructions": List[str],
     "metadata": {
-        "model": "GritLM/GritLM-7B",
+        "model": "sonar",
         "dataset": "alpaca",
         "n_samples": N,
+        "embedding_dim": 1024,
         "timestamp": "...",
     }
 }
@@ -27,19 +31,44 @@ from tqdm import tqdm
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Pre-compute GritLM embeddings")
+    parser = argparse.ArgumentParser(description="Pre-compute SONAR embeddings for FlowPO")
     parser.add_argument(
         "--dataset",
         type=str,
         default="alpaca",
-        choices=["alpaca", "ultrachat", "combined", "custom"],
-        help="Dataset to encode",
+        choices=["alpaca", "ultrachat", "combined", "universal", "custom"],
+        help="Dataset to encode (universal = 1.5M+ from OpenOrca, UltraChat, Code, ShareGPT, Alpaca)",
     )
     parser.add_argument(
         "--ultrachat-samples",
         type=int,
         default=50000,
         help="Number of UltraChat samples for combined dataset",
+    )
+    # Universal dataset sample counts
+    parser.add_argument(
+        "--openorca-samples",
+        type=int,
+        default=500000,
+        help="Number of OpenOrca samples for universal dataset",
+    )
+    parser.add_argument(
+        "--code-samples",
+        type=int,
+        default=200000,
+        help="Number of code samples (CodeAlpaca + Glaive) for universal dataset",
+    )
+    parser.add_argument(
+        "--sharegpt-samples",
+        type=int,
+        default=100000,
+        help="Number of ShareGPT samples for universal dataset",
+    )
+    parser.add_argument(
+        "--existing-embeddings",
+        type=str,
+        default=None,
+        help="Path to existing embeddings to merge with (for universal dataset)",
     )
     parser.add_argument(
         "--custom-path",
@@ -50,7 +79,7 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="lido_pp/data/alpaca_embeddings.pt",
+        default="lido_pp/data/sonar_embeddings.pt",
         help="Output path for embeddings",
     )
     parser.add_argument(
@@ -62,8 +91,8 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
-        help="Batch size for encoding",
+        default=1024,
+        help="Batch size for encoding (optimized for L40S 48GB VRAM)",
     )
     parser.add_argument(
         "--device",
@@ -72,15 +101,23 @@ def main():
         help="Device for encoding",
     )
     parser.add_argument(
-        "--model",
+        "--encoder",
         type=str,
-        default="GritLM/GritLM-7B",
-        help="GritLM model name",
+        default="sonar",
+        choices=["sonar", "gtr", "gritlm"],
+        help="Encoder to use: sonar (recommended), gtr (lightweight), gritlm (legacy)",
     )
     parser.add_argument(
-        "--use-gtr",
+        "--source-lang",
+        type=str,
+        default="eng_Latn",
+        help="Source language for SONAR encoder",
+    )
+    parser.add_argument(
+        "--normalize",
         action="store_true",
-        help="Use GTR encoder instead of GritLM (faster, smaller)",
+        default=False,
+        help="L2 normalize embeddings (default: False for SONAR decoder compatibility)",
     )
     args = parser.parse_args()
 
@@ -108,6 +145,28 @@ def main():
             ultrachat_samples=uc_samples,
         )
 
+    elif args.dataset == "universal":
+        from lido_pp.training.alpaca_dataset import load_universal_dataset
+
+        print("\n" + "=" * 70)
+        print("Loading UNIVERSAL dataset for production training")
+        print("Sources: OpenOrca, UltraChat, CodeAlpaca, ShareGPT, Alpaca")
+        print(f"Target samples: {args.openorca_samples + args.ultrachat_samples + args.code_samples + args.sharegpt_samples + 52000}")
+        print("=" * 70 + "\n")
+
+        instructions = load_universal_dataset(
+            openorca_samples=args.openorca_samples,
+            ultrachat_samples=args.ultrachat_samples,
+            codealpaca_samples=args.code_samples,
+            sharegpt_samples=args.sharegpt_samples,
+            alpaca_samples=52000,  # All Alpaca
+            existing_path=args.existing_embeddings,
+            deduplicate=True,
+        )
+
+        if args.max_samples and len(instructions) > args.max_samples:
+            instructions = instructions[:args.max_samples]
+
     elif args.dataset == "custom":
         if not args.custom_path:
             raise ValueError("--custom-path required for custom dataset")
@@ -127,36 +186,76 @@ def main():
     print(f"Loaded {len(instructions)} instructions")
 
     # Initialize encoder
-    print(f"\nInitializing encoder...")
+    print(f"\nInitializing {args.encoder} encoder...")
 
-    if args.use_gtr:
+    if args.encoder == "sonar":
+        from lido_pp.backbone.sonar_encoder import SONAREncoder
+
+        print("\n" + "=" * 70)
+        print("Using SONAR encoder (recommended for FlowPO)")
+        print("SONAR is reconstruction-optimized (DAE + translation loss)")
+        print("Output dimension: 1024D")
+        print("=" * 70 + "\n")
+
+        encoder = SONAREncoder(
+            device=args.device,
+            source_lang=args.source_lang,
+            normalize=args.normalize,
+        )
+        model_name = "sonar-text-encoder"
+        embedding_dim = 1024
+
+    elif args.encoder == "gtr":
         from lipo.encoder import GTRInstructionEncoder
         encoder = GTRInstructionEncoder(device=args.device)
         model_name = "sentence-transformers/gtr-t5-base"
-    else:
-        from lido_pp.backbone.gritlm_encoder import GritLMUnifiedEncoder
-        encoder = GritLMUnifiedEncoder(
-            model_name=args.model,
-            device=args.device,
-            dtype="float16",
-        )
-        model_name = args.model
+        embedding_dim = 768
+
+    elif args.encoder == "gritlm":
+        print("\n" + "=" * 70)
+        print("WARNING: GritLM is DEPRECATED for FlowPO")
+        print("GritLM is retrieval-optimized and loses reconstruction info.")
+        print("Use --encoder sonar instead for better reconstruction.")
+        print("=" * 70 + "\n")
+        try:
+            from lido_pp.backbone.gritlm_encoder import GritLMUnifiedEncoder
+            encoder = GritLMUnifiedEncoder(
+                model_name="GritLM/GritLM-7B",
+                device=args.device,
+                dtype="float16",
+                use_latent_attention=False,
+            )
+            model_name = "GritLM/GritLM-7B"
+            embedding_dim = 4096
+        except ImportError:
+            raise ImportError(
+                "GritLM encoder not available (deleted). Use --encoder sonar instead."
+            )
 
     print(f"Encoder ready: {model_name}")
 
     # Encode all instructions
     print(f"\nEncoding {len(instructions)} instructions with batch_size={args.batch_size}...")
 
-    embeddings = encoder.encode_batch(
-        instructions,
-        batch_size=args.batch_size,
-        show_progress=True,
-    )
+    all_embeddings = []
 
-    print(f"Embeddings shape: {embeddings.shape}")
+    for i in tqdm(range(0, len(instructions), args.batch_size), desc="Encoding"):
+        batch = instructions[i:i + args.batch_size]
 
-    # Convert to tensor
-    embeddings_tensor = torch.tensor(embeddings, dtype=torch.float32)
+        with torch.no_grad():
+            if args.encoder == "sonar":
+                batch_embeddings = encoder.encode(batch)
+            elif args.encoder == "gtr":
+                batch_embeddings = torch.tensor(encoder.encode(batch))
+            else:  # gritlm
+                batch_embeddings = torch.tensor(
+                    encoder.encode_4096_numpy(batch, batch_size=len(batch))
+                )
+
+        all_embeddings.append(batch_embeddings.cpu())
+
+    embeddings_tensor = torch.cat(all_embeddings, dim=0)
+    print(f"Embeddings shape: {embeddings_tensor.shape}")
 
     # Prepare output data
     data = {
@@ -164,9 +263,12 @@ def main():
         "instructions": instructions,
         "metadata": {
             "model": model_name,
+            "encoder_type": args.encoder,
             "dataset": args.dataset,
             "n_samples": len(instructions),
-            "embedding_dim": embeddings.shape[1],
+            "embedding_dim": embeddings_tensor.shape[1],
+            "normalized": args.normalize,
+            "source_lang": args.source_lang if args.encoder == "sonar" else None,
             "timestamp": datetime.now().isoformat(),
         },
     }

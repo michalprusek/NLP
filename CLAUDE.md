@@ -2,7 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Hardware Environment
+
+**GPUs: 2x NVIDIA L40S (48GB VRAM each, 96GB total)**
+
+Always optimize for this hardware:
+- Use DDP (DistributedDataParallel) for multi-GPU training with `torchrun --nproc_per_node=2`
+- Maximize batch sizes to utilize 48GB VRAM per GPU (e.g., batch_size=1024-2048 for embeddings)
+- Use `pin_memory=True` and `num_workers=8` for DataLoaders
+- Enable mixed precision (fp16/bf16) when appropriate
+
 ## Overview
+
+CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
 
 Prompt optimization framework implementing **ProTeGi**, **OPRO**, **LIPO**, and **BOLT** algorithms for automatic prompt engineering on GSM8K (math reasoning) dataset.
 

@@ -97,6 +97,301 @@ def load_ultrachat_dataset(
     return instructions
 
 
+def load_openorca_dataset(
+    max_samples: Optional[int] = 500000,
+    cache_dir: Optional[str] = None,
+) -> List[str]:
+    """
+    Load OpenOrca dataset from HuggingFace.
+
+    OpenOrca contains diverse instruction-following data with Chain of Thought
+    reasoning, which is essential for math and logical reasoning tasks.
+
+    Args:
+        max_samples: Maximum number of samples (default 500k)
+        cache_dir: HuggingFace cache directory
+
+    Returns:
+        List of instruction strings
+    """
+    from datasets import load_dataset
+
+    print(f"Loading OpenOrca dataset from HuggingFace (streaming)...")
+
+    # Use streaming to avoid downloading entire dataset if only need subset
+    dataset = load_dataset(
+        "Open-Orca/OpenOrca",
+        split="train",
+        streaming=True,
+        cache_dir=cache_dir,
+    )
+
+    instructions = []
+    for sample in tqdm(dataset, desc="Processing OpenOrca", total=max_samples):
+        # OpenOrca has 'question' field for instruction
+        text = sample.get("question", sample.get("instruction", ""))
+
+        if text and len(text.strip()) > 20:
+            instructions.append(text.strip())
+
+        if max_samples and len(instructions) >= max_samples:
+            break
+
+    print(f"Loaded {len(instructions)} OpenOrca instructions")
+    return instructions
+
+
+def load_codealpaca_dataset(
+    max_samples: Optional[int] = 200000,
+    cache_dir: Optional[str] = None,
+) -> List[str]:
+    """
+    Load code instruction datasets (CodeAlpaca + Glaive Code Assistant).
+
+    Code instructions are critical for teaching the model syntax patterns
+    which helps preserve code structure during latent space optimization.
+
+    Args:
+        max_samples: Maximum number of samples (default 200k)
+        cache_dir: HuggingFace cache directory
+
+    Returns:
+        List of code instruction strings
+    """
+    from datasets import load_dataset
+
+    instructions = []
+
+    # 1. CodeAlpaca-20k
+    print(f"Loading CodeAlpaca-20k...")
+    try:
+        dataset = load_dataset(
+            "sahil2801/CodeAlpaca-20k",
+            split="train",
+            cache_dir=cache_dir,
+        )
+        for sample in tqdm(dataset, desc="Processing CodeAlpaca"):
+            text = sample.get("instruction", "")
+            if sample.get("input"):
+                text += f"\n\nInput: {sample['input']}"
+
+            if text and len(text.strip()) > 20:
+                instructions.append(text.strip())
+
+            if max_samples and len(instructions) >= max_samples:
+                break
+        print(f"Added {len(instructions)} from CodeAlpaca-20k")
+    except Exception as e:
+        print(f"Warning: Could not load CodeAlpaca-20k: {e}")
+
+    # 2. Glaive Code Assistant (if need more samples)
+    if max_samples is None or len(instructions) < max_samples:
+        print(f"Loading Glaive Code Assistant...")
+        try:
+            remaining = (max_samples - len(instructions)) if max_samples else None
+            dataset = load_dataset(
+                "glaiveai/glaive-code-assistant",
+                split="train",
+                streaming=True,
+                cache_dir=cache_dir,
+            )
+            count = 0
+            for sample in tqdm(dataset, desc="Processing Glaive", total=remaining):
+                # Glaive uses 'question' field
+                text = sample.get("question", sample.get("instruction", ""))
+
+                if text and len(text.strip()) > 20:
+                    instructions.append(text.strip())
+                    count += 1
+
+                if remaining and count >= remaining:
+                    break
+            print(f"Added {count} from Glaive Code Assistant")
+        except Exception as e:
+            print(f"Warning: Could not load Glaive Code Assistant: {e}")
+
+    print(f"Loaded {len(instructions)} total code instructions")
+    return instructions
+
+
+def load_sharegpt_dataset(
+    max_samples: Optional[int] = 100000,
+    cache_dir: Optional[str] = None,
+) -> List[str]:
+    """
+    Load real human conversation dataset (LMSYS-Chat-1M or WildChat).
+
+    These datasets contain real user prompts which are often more complex
+    and diverse than synthetic instructions. Important for robustness.
+
+    Args:
+        max_samples: Maximum number of samples (default 100k)
+        cache_dir: HuggingFace cache directory
+
+    Returns:
+        List of instruction strings (first human turn of each conversation)
+    """
+    from datasets import load_dataset
+
+    instructions = []
+
+    # Try LMSYS-Chat-1M first (cleaner, more reliable)
+    print(f"Loading LMSYS-Chat-1M dataset (real conversations)...")
+    try:
+        dataset = load_dataset(
+            "lmsys/lmsys-chat-1m",
+            split="train",
+            streaming=True,
+            cache_dir=cache_dir,
+        )
+
+        for sample in tqdm(dataset, desc="Processing LMSYS-Chat", total=max_samples):
+            # LMSYS has 'conversation' field with list of messages
+            convos = sample.get("conversation", [])
+
+            # Get first human message
+            for turn in convos:
+                if turn.get("role") == "user" and turn.get("content"):
+                    text = turn["content"].strip()
+                    if len(text) > 20 and len(text) < 2000:  # Filter very long prompts
+                        instructions.append(text)
+                    break
+
+            if max_samples and len(instructions) >= max_samples:
+                break
+
+        print(f"Loaded {len(instructions)} LMSYS-Chat instructions")
+        return instructions
+
+    except Exception as e:
+        print(f"Warning: Could not load LMSYS-Chat-1M: {e}")
+
+    # Fallback to WildChat
+    print("Trying WildChat dataset...")
+    try:
+        dataset = load_dataset(
+            "allenai/WildChat-1M",
+            split="train",
+            streaming=True,
+            cache_dir=cache_dir,
+        )
+
+        for sample in tqdm(dataset, desc="Processing WildChat", total=max_samples):
+            # WildChat has 'conversation' field
+            convos = sample.get("conversation", [])
+
+            for turn in convos:
+                if turn.get("role") == "user" and turn.get("content"):
+                    text = turn["content"].strip()
+                    if len(text) > 20 and len(text) < 2000:
+                        instructions.append(text)
+                    break
+
+            if max_samples and len(instructions) >= max_samples:
+                break
+
+        print(f"Loaded {len(instructions)} WildChat instructions")
+        return instructions
+
+    except Exception as e:
+        print(f"Warning: Could not load WildChat: {e}")
+
+    print(f"Warning: No real conversation dataset available. Returning {len(instructions)} samples.")
+    return instructions
+
+
+def load_universal_dataset(
+    openorca_samples: int = 500000,
+    ultrachat_samples: int = 500000,
+    codealpaca_samples: int = 200000,
+    sharegpt_samples: int = 100000,
+    alpaca_samples: int = 52000,
+    existing_path: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    deduplicate: bool = True,
+) -> List[str]:
+    """
+    Load universal dataset combining multiple sources for production training.
+
+    Target: 1.5-2M diverse, high-quality instructions covering:
+    - Reasoning (OpenOrca)
+    - Conversation (UltraChat)
+    - Code (CodeAlpaca, Glaive)
+    - Real prompts (ShareGPT)
+    - General (Alpaca)
+
+    Args:
+        openorca_samples: Max OpenOrca samples (500k default)
+        ultrachat_samples: Max UltraChat samples (500k default)
+        codealpaca_samples: Max code samples (200k default)
+        sharegpt_samples: Max ShareGPT samples (100k default)
+        alpaca_samples: Max Alpaca samples (52k default)
+        existing_path: Path to existing embeddings .pt to merge with
+        cache_dir: HuggingFace cache directory
+        deduplicate: Whether to deduplicate instructions (MD5 hash)
+
+    Returns:
+        List of deduplicated instruction strings
+    """
+    import hashlib
+
+    instructions = []
+    seen_hashes = set()
+
+    def add_instructions(new_instructions: List[str], source: str):
+        """Add instructions with optional deduplication."""
+        added = 0
+        for inst in new_instructions:
+            if deduplicate:
+                h = hashlib.md5(inst.lower().strip().encode()).hexdigest()
+                if h in seen_hashes:
+                    continue
+                seen_hashes.add(h)
+            instructions.append(inst)
+            added += 1
+        print(f"  → Added {added} unique from {source} (total: {len(instructions)})")
+
+    # Load existing instructions if provided
+    if existing_path:
+        print(f"Loading existing instructions from {existing_path}...")
+        import torch
+        data = torch.load(existing_path, weights_only=False)
+        existing = data.get("instructions", [])
+        if existing:
+            add_instructions(existing, "existing")
+
+    # 1. OpenOrca (reasoning, CoT)
+    if openorca_samples > 0:
+        orca = load_openorca_dataset(max_samples=openorca_samples, cache_dir=cache_dir)
+        add_instructions(orca, "OpenOrca")
+
+    # 2. UltraChat (conversation)
+    if ultrachat_samples > 0:
+        ultra = load_ultrachat_dataset(max_samples=ultrachat_samples, cache_dir=cache_dir)
+        add_instructions(ultra, "UltraChat")
+
+    # 3. Code (syntax)
+    if codealpaca_samples > 0:
+        code = load_codealpaca_dataset(max_samples=codealpaca_samples, cache_dir=cache_dir)
+        add_instructions(code, "Code")
+
+    # 4. ShareGPT (real prompts)
+    if sharegpt_samples > 0:
+        share = load_sharegpt_dataset(max_samples=sharegpt_samples, cache_dir=cache_dir)
+        add_instructions(share, "ShareGPT")
+
+    # 5. Alpaca (general)
+    if alpaca_samples > 0:
+        alpaca = load_alpaca_dataset(max_samples=alpaca_samples, cache_dir=cache_dir)
+        add_instructions(alpaca, "Alpaca")
+
+    print(f"\n{'='*60}")
+    print(f"Universal dataset: {len(instructions)} unique instructions")
+    print(f"{'='*60}")
+
+    return instructions
+
+
 class AlpacaInstructionDataset(Dataset):
     """
     PyTorch Dataset for Alpaca instructions with optional pre-computed embeddings.
