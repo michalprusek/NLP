@@ -335,6 +335,9 @@ class TextFlowAutoencoder(nn.Module):
         num_train_ode_steps: int = 20,  # Training ODE steps (ALIGNED with inference)
         num_velocity_layers: int = 6,  # Deeper velocity network for better capacity
         dropout: float = 0.0,     # Dropout for regularization (0.1 for production, 0.0 for small datasets)
+        normalize_output: bool = False,  # L2 normalize output (False for SONAR decoder compatibility)
+        zscore_mean: Optional[torch.Tensor] = None,  # Z-score mean for denormalization
+        zscore_std: Optional[torch.Tensor] = None,   # Z-score std for denormalization
     ):
         super().__init__()
 
@@ -353,6 +356,19 @@ class TextFlowAutoencoder(nn.Module):
         self.latent_dim = latent_dim
         self.num_ode_steps = num_ode_steps
         self.num_train_ode_steps = num_train_ode_steps
+        self.normalize_output = normalize_output  # L2 normalize decode output
+
+        # Z-score normalization stats (registered as buffers for checkpoint saving)
+        # These are used to denormalize output back to original SONAR space
+        if zscore_mean is not None:
+            self.register_buffer("zscore_mean", zscore_mean)
+        else:
+            self.register_buffer("zscore_mean", None)
+
+        if zscore_std is not None:
+            self.register_buffer("zscore_std", zscore_std)
+        else:
+            self.register_buffer("zscore_std", None)
 
         # Projections between spaces
         self.enc_proj = nn.Linear(input_dim, flow_dim)   # 1024 → 256
@@ -380,6 +396,62 @@ class TextFlowAutoencoder(nn.Module):
                 nn.init.xavier_uniform_(module.weight, gain=0.5)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
+
+    def set_zscore_stats(self, mean: torch.Tensor, std: torch.Tensor):
+        """
+        Set z-score normalization statistics for denormalization.
+
+        Call this after loading model if zscore stats weren't passed to __init__.
+
+        Args:
+            mean: (input_dim,) mean per dimension
+            std: (input_dim,) std per dimension
+        """
+        device = next(self.parameters()).device
+        self.register_buffer("zscore_mean", mean.to(device))
+        self.register_buffer("zscore_std", std.to(device))
+
+    def has_zscore_stats(self) -> bool:
+        """Check if z-score statistics are available."""
+        return self.zscore_mean is not None and self.zscore_std is not None
+
+    def denormalize(self, x_zscore: torch.Tensor) -> torch.Tensor:
+        """
+        Denormalize z-score standardized embeddings back to original space.
+
+        Args:
+            x_zscore: (B, input_dim) z-score normalized embeddings
+
+        Returns:
+            x_original: (B, input_dim) embeddings in original SONAR space
+        """
+        if not self.has_zscore_stats():
+            warnings.warn(
+                "Z-score stats not set. Returning input unchanged. "
+                "Call set_zscore_stats() or pass zscore_mean/zscore_std to __init__."
+            )
+            return x_zscore
+
+        return x_zscore * self.zscore_std + self.zscore_mean
+
+    def normalize_zscore(self, x_original: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize original embeddings to z-score space.
+
+        Args:
+            x_original: (B, input_dim) embeddings in original SONAR space
+
+        Returns:
+            x_zscore: (B, input_dim) z-score normalized embeddings
+        """
+        if not self.has_zscore_stats():
+            warnings.warn(
+                "Z-score stats not set. Returning input unchanged. "
+                "Call set_zscore_stats() or pass zscore_mean/zscore_std to __init__."
+            )
+            return x_original
+
+        return (x_original - self.zscore_mean) / (self.zscore_std + 1e-8)
 
     # =========================================================================
     # INFERENCE METHODS (use ODE solver)
@@ -430,7 +502,12 @@ class TextFlowAutoencoder(nn.Module):
         return z
 
     @torch.no_grad()
-    def decode(self, z: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+    def decode(
+        self,
+        z: torch.Tensor,
+        normalize: Optional[bool] = None,
+        denormalize_zscore: bool = False,
+    ) -> torch.Tensor:
         """
         Decode latent codes to embeddings via ODE flow.
 
@@ -438,11 +515,18 @@ class TextFlowAutoencoder(nn.Module):
 
         Args:
             z: (B, latent_dim) latent codes
-            normalize: L2 normalize output
+            normalize: L2 normalize output. If None, uses instance default (normalize_output).
+                       Set False for SONAR decoder compatibility.
+            denormalize_zscore: If True, denormalize from z-score space back to original
+                               SONAR space. Requires zscore_mean/std to be set.
 
         Returns:
             x_output: (B, input_dim) reconstructed embeddings
         """
+        # Use instance default if not specified
+        if normalize is None:
+            normalize = self.normalize_output
+
         # Unproject from latent
         x_0 = self.from_latent(z)  # (B, flow_dim)
 
@@ -452,6 +536,10 @@ class TextFlowAutoencoder(nn.Module):
         # Project to output
         x_output = self.dec_proj(x_1)  # (B, input_dim)
 
+        # Denormalize from z-score to original SONAR space (for SONAR decoder)
+        if denormalize_zscore:
+            x_output = self.denormalize(x_output)
+
         if normalize:
             x_output = F.normalize(x_output, p=2, dim=-1)
 
@@ -460,7 +548,7 @@ class TextFlowAutoencoder(nn.Module):
     def forward(self, x_input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Full encode-decode pass (inference only)."""
         z = self.encode(x_input)
-        x_recon = self.decode(z)
+        x_recon = self.decode(z, normalize=self.normalize_output)
         return z, x_recon
 
     # =========================================================================
@@ -549,11 +637,25 @@ class TextFlowAutoencoder(nn.Module):
         x_input: torch.Tensor,
         x_1: torch.Tensor,
         x_0: torch.Tensor,
-    ) -> torch.Tensor:
+        lambda_cos: float = 1.0,
+        lambda_mse: float = 0.1,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
-        Compute reconstruction loss through full encode-decode path.
+        Compute hybrid reconstruction loss through full encode-decode path.
 
-        Uses fewer ODE steps during training (num_train_ode_steps) for speed.
+        Uses decoupled direction (cosine) + magnitude (MSE) loss for accurate
+        reconstruction of both semantics and scale (required for SONAR decoder).
+
+        Args:
+            x_input: Original input embeddings
+            x_1: Projected embeddings (from enc_proj)
+            x_0: Flow endpoint (from OT pairing)
+            lambda_cos: Weight for cosine (direction) loss
+            lambda_mse: Weight for MSE (magnitude) loss
+
+        Returns:
+            total_loss: Combined reconstruction loss
+            components: Dict with 'cos' and 'mse' values for logging
         """
         # Use fewer ODE steps during training for speed
         train_steps = self.num_train_ode_steps
@@ -569,14 +671,24 @@ class TextFlowAutoencoder(nn.Module):
         # STEP 3: Decode - integrate forward to data space
         x_1_recon = self._euler_integrate(x_0_recon, t_start=0.0, t_end=1.0, num_steps=train_steps)
 
-        # STEP 4: Project back to original embedding space
+        # STEP 4: Project back to original embedding space (NO L2 normalization!)
         x_recon = self.dec_proj(x_1_recon)  # 512D → 1024D
 
-        # Cosine similarity loss
-        cos_sim = F.cosine_similarity(x_input, x_recon, dim=-1).mean()
-        loss_recon = 1 - cos_sim
+        # === HYBRID LOSS: Decoupled Direction & Magnitude ===
 
-        return loss_recon
+        # 1. Direction loss (Cosine) - Captures semantics
+        # Normalize for cosine computation only (not the actual output)
+        x_pred_norm = F.normalize(x_recon, p=2, dim=-1)
+        x_target_norm = F.normalize(x_input, p=2, dim=-1)
+        loss_cos = 1.0 - (x_pred_norm * x_target_norm).sum(dim=-1).mean()
+
+        # 2. Magnitude loss (MSE) - Captures scale for SONAR decoder
+        loss_mse = F.mse_loss(x_recon, x_input)
+
+        # 3. Combined loss
+        total_loss = lambda_cos * loss_cos + lambda_mse * loss_mse
+
+        return total_loss, {"cos": loss_cos.item(), "mse": loss_mse.item()}
 
     def compute_consistency_loss(
         self,
@@ -688,6 +800,8 @@ def flow_matching_loss(
     lambda_gw: float = 0.0,
     lambda_lip: float = 0.1,
     lambda_consistency: float = 0.1,
+    lambda_cos: float = 1.0,     # Cosine (direction) weight in reconstruction
+    lambda_mse: float = 0.1,     # MSE (magnitude) weight in reconstruction
     timestep_sampling: Literal["uniform", "u_shaped"] = "u_shaped",
     lip_bound: float = 5.0,
     lip_penalty_type: Literal["hinge", "soft", "quadratic"] = "soft",
@@ -698,6 +812,9 @@ def flow_matching_loss(
     Combined Flow Matching training loss with BO-friendly regularization.
 
     L_total = L_FM + lambda_recon*L_recon + lambda_gw*L_GW + lambda_lip*L_Lip + lambda_cons*L_consistency
+
+    Reconstruction loss uses hybrid direction (cosine) + magnitude (MSE) for
+    accurate SONAR decoder compatibility (no L2 normalization on output).
     """
     # Unwrap DDP if necessary
     unwrapped = _unwrap_model(model)
@@ -710,9 +827,11 @@ def flow_matching_loss(
     )
     loss_fm = fm_result["loss_fm"]
 
-    # Reconstruction loss for projections
-    loss_recon = unwrapped.compute_reconstruction_loss(
-        x_input, fm_result["x_1"], fm_result["x_0"]
+    # Reconstruction loss with decoupled direction (cosine) + magnitude (MSE)
+    loss_recon, recon_components = unwrapped.compute_reconstruction_loss(
+        x_input, fm_result["x_1"], fm_result["x_0"],
+        lambda_cos=lambda_cos,
+        lambda_mse=lambda_mse,
     )
 
     # Start with core losses
@@ -749,9 +868,11 @@ def flow_matching_loss(
         "loss": total,
         "fm": loss_fm.item(),
         "recon": loss_recon.item(),
+        "recon_cos": recon_components["cos"],   # Direction component
+        "recon_mse": recon_components["mse"],   # Magnitude component
         "gw": gw_value,
         "lip": lip_value,
-        "lip_ratio": lip_ratio,  # NEW: actual Lipschitz ratio for monitoring
+        "lip_ratio": lip_ratio,
         "consistency": consistency_value,
     }
 

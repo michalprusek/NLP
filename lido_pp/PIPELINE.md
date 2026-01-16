@@ -199,10 +199,12 @@ from lido_pp.backbone import flow_matching_loss
 
 losses = flow_matching_loss(
     model, x_input,
-    lambda_recon=0.5,             # Reconstruction weight
+    lambda_recon=0.5,             # Reconstruction weight (combined cosine + MSE)
     lambda_gw=0.0,                # Gromov-Wasserstein (optional, disabled)
     lambda_lip=0.1,               # Lipschitz regularization
     lambda_consistency=0.1,       # Forward-backward consistency
+    lambda_cos=1.0,               # Cosine (direction) weight in reconstruction
+    lambda_mse=0.1,               # MSE (magnitude) weight in reconstruction
     timestep_sampling="u_shaped", # U-shaped distribution (+28%)
     lip_bound=5.0,                # Maximum Lipschitz constant
     lip_penalty_type="soft",      # "hinge", "soft", or "quadratic"
@@ -213,11 +215,21 @@ losses = flow_matching_loss(
 # {
 #   "loss": total,        # Combined loss for backprop
 #   "fm": float,          # Flow matching loss
-#   "recon": float,       # Reconstruction loss
+#   "recon": float,       # Reconstruction loss (combined)
+#   "recon_cos": float,   # Cosine (direction) component
+#   "recon_mse": float,   # MSE (magnitude) component
 #   "lip": float,         # Lipschitz penalty
 #   "lip_ratio": float,   # Actual Lipschitz ratio (for monitoring)
 #   "consistency": float, # Consistency loss
 # }
+```
+
+**Hybrid Reconstruction Loss:**
+```
+L_recon = λ_cos · (1 - cos_sim(x, x_recon)) + λ_mse · MSE(x, x_recon)
+
+- Cosine: Captures semantic direction (what the text means)
+- MSE: Captures magnitude (required for SONAR decoder reconstruction)
 ```
 
 **Lipschitz Penalty Types:**
@@ -426,52 +438,68 @@ cross_attn = CrossAttentionLayer(
 ### Phase 1: Pre-compute Embeddings
 
 ```bash
+# Step 1: Generate raw SONAR embeddings
 uv run python -m lido_pp.training.precompute_embeddings \
     --encoder sonar \
-    --dataset combined \
-    --output lido_pp/data/sonar_embeddings.pt
+    --dataset universal \
+    --output lido_pp/data/sonar_unified_unnorm.pt
+
+# Step 2: Apply z-score standardization (recommended for SONAR decoder)
+uv run python -m lido_pp.training.zscore_embeddings \
+    --input lido_pp/data/sonar_unified_unnorm.pt \
+    --output lido_pp/data/sonar_unified_zscore.pt
 ```
+
+**Z-Score Normalization:**
+- Transforms each dimension to zero mean and unit variance
+- Saves `mean` and `std` in the output file for denormalization
+- Required for accurate magnitude reconstruction (SONAR decoder needs original scale)
 
 ### Phase 2: Train TFA
 
 ```bash
 # Multi-GPU training with DDP (recommended for 2x L40S)
 uv run torchrun --nproc_per_node=2 -m lido_pp.training.train_cfm \
-    --data lido_pp/data/sonar_289k.pt \
+    --data lido_pp/data/sonar_unified_zscore.pt \
     --epochs 10000 \
     --batch-size 1024 \
     --lr 1e-4 \
-    --latent-dim 128 \
+    --latent-dim 256 \
     --flow-dim 512 \
     --ode-steps 20 \
     --train-ode-steps 20 \
     --velocity-layers 6 \
     --lambda-recon 0.5 \
+    --lambda-cos 1.0 \
+    --lambda-mse 0.1 \
     --lambda-lip 0.1 \
     --lambda-consistency 0.1 \
     --lipschitz-bound 5.0 \
     --timestep-sampling u_shaped \
-    --augment-noise 0.02 \
+    --augment-noise 0.01 \
     --warmup-epochs 500 \
     --patience 1000 \
     --grad-clip 1.0 \
     --val-ratio 0.05 \
-    --num-workers 8
+    --num-workers 8 \
+    --checkpoint-dir lido_pp/checkpoints_zscore
 ```
 
 **CLI argument defaults (train_cfm.py):**
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--epochs` | 10000 | Training epochs |
-| `--batch-size` | 64 | Batch size (increase to 1024-2048 for L40S) |
+| `--batch-size` | 1024 | Batch size (optimized for L40S 48GB) |
 | `--lr` | 1e-4 | Learning rate |
-| `--latent-dim` | 128 | Latent dimension |
+| `--latent-dim` | 128 | Latent dimension (256 recommended for SONAR) |
 | `--flow-dim` | 512 | Flow space dimension |
 | `--ode-steps` | 20 | Inference ODE steps |
 | `--train-ode-steps` | 20 | Training ODE steps |
 | `--velocity-layers` | 6 | Velocity network depth |
-| `--augment-noise` | 0.02 | Gaussian noise std for augmentation |
-| `--lambda-recon` | 0.5 | Reconstruction loss weight |
+| `--augment-noise` | 0.01 | Gaussian noise std for augmentation |
+| `--lambda-recon` | 0.5 | Reconstruction loss weight (combined) |
+| `--lambda-cos` | 1.0 | Cosine (direction) weight in recon |
+| `--lambda-mse` | 0.1 | MSE (magnitude) weight in recon |
 | `--lambda-lip` | 0.1 | Lipschitz regularization weight |
 | `--lambda-consistency` | 0.1 | Consistency loss weight |
 | `--lipschitz-bound` | 5.0 | Maximum Lipschitz constant |
@@ -486,10 +514,11 @@ uv run torchrun --nproc_per_node=2 -m lido_pp.training.train_cfm \
 | `--num-workers` | 8 | DataLoader workers |
 
 **Expected metrics:**
-- Val CosODE: >0.90 (target, was 0.79 with GritLM)
-- Compression: 8:1 (was 128:1)
+- Val CosODE: >0.85 (direction accuracy)
+- recon_mse: ~0.5-1.0 (magnitude reconstruction)
+- Compression: 4:1 (1024D → 256D)
 - Lip loss: Should be >0 (active regularization)
-- Consistency loss: ~0.01-0.05 (cycle consistency)
+- Consistency loss: ~0.001-0.01 (cycle consistency)
 
 ### Phase 3: Train Flow-DiT (optional, for generation)
 

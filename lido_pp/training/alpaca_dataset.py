@@ -1,8 +1,8 @@
 """
-Alpaca Dataset Loading for LID-O++ Pre-training.
+Alpaca Dataset Loading for FlowPO Pre-training.
 
 Loads the Stanford Alpaca dataset (~52k instruction-following samples)
-and prepares it for VAE, Projector, and FlowDiT training.
+and prepares it for TFA, Cross-Attention Decoder, and Flow-DiT training.
 
 Dataset: tatsu-lab/alpaca on HuggingFace Hub
 Format: instruction + optional input -> output
@@ -406,8 +406,8 @@ class AlpacaInstructionDataset(Dataset):
         """
         Args:
             instructions: List of instruction texts
-            embeddings: Pre-computed GritLM embeddings (N, 768)
-            latents: Pre-computed VAE latents (N, 32)
+            embeddings: Pre-computed SONAR embeddings (N, 1024)
+            latents: Pre-computed TFA latents (N, 128/256)
         """
         self.instructions = instructions
         self.embeddings = embeddings
@@ -473,7 +473,7 @@ class AlpacaInstructionDataset(Dataset):
 
 class EmbeddingDataset(Dataset):
     """
-    Simple dataset of pre-computed embeddings for VAE training.
+    Simple dataset of pre-computed embeddings for TFA training.
     """
 
     def __init__(self, embeddings: torch.Tensor):
@@ -510,7 +510,7 @@ class FlowMatchingDataset(Dataset):
     Dataset for Flow Matching training with (x_0, x_1, context) pairs.
 
     x_0: Noise (generated on-the-fly)
-    x_1: Target latent (from VAE encoder)
+    x_1: Target latent (from TFA encoder)
     context: Original embedding for conditioning
     """
 
@@ -521,8 +521,8 @@ class FlowMatchingDataset(Dataset):
     ):
         """
         Args:
-            embeddings: Original GritLM embeddings (N, 768) for context
-            latents: VAE-encoded latents (N, 32) as targets
+            embeddings: Original SONAR embeddings (N, 1024) for context
+            latents: TFA-encoded latents (N, 128/256) as targets
         """
         assert len(embeddings) == len(latents), "Embeddings and latents must match"
         self.embeddings = embeddings

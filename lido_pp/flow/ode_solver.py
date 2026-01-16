@@ -560,7 +560,7 @@ class GPRewardWrapper:
     """Wrapper to make GP differentiable for guided generation.
 
     Creates differentiable reward functions from GP predictions with optional
-    regularization to stay within VAE's learned distribution:
+    regularization to stay within TFA's learned distribution:
 
         Total Reward(z) = UCB(z) - λ · regularization(z)
 
@@ -569,16 +569,16 @@ class GPRewardWrapper:
     - ucb: R(x) = -μ(x) + β·σ(x)  (explore + exploit)
     - ei: R(x) = EI(x)  (expected improvement)
 
-    Regularization modes (keeps z within VAE distribution):
+    Regularization modes (keeps z within latent distribution):
     - "none": No regularization
-    - "l2": ||z||² - assumes VAE prior is N(0,1)
+    - "l2": ||z||² - assumes prior is N(0,1) (z-score normalized)
     - "l2_centered": ||z - μ_train||² - distance from training centroid
     - "mahalanobis": (z-μ)ᵀΣ⁻¹(z-μ) - accounts for training covariance
 
-    The GP must operate on the same latent space as FlowDiT (32D).
+    The GP must operate on the same latent space as TFA (128D/256D).
 
     Example:
-        # With L2 regularization to stay in VAE distribution
+        # With L2 regularization to stay in latent distribution
         gp_reward = GPRewardWrapper(
             gp_model,
             mode="ucb", beta=2.0,
@@ -599,8 +599,8 @@ class GPRewardWrapper:
     ):
         """
         Args:
-            gp_model: Trained GP with predict method (from lipo.gp.GPWithEI)
-            vae_encoder: VAE encoder if GP expects 768D embeddings (optional)
+            gp_model: Trained GP with predict method
+            tfa_encoder: TFA encoder if GP expects different embeddings (optional, rarely used)
             mode: "mean", "ucb", or "ei"
             beta: UCB exploration coefficient
             best_f: Best observed value for EI (auto-detected if None)
@@ -649,7 +649,7 @@ class GPRewardWrapper:
 
         elif self.regularization == "l2":
             # Simple L2 norm: ||z||²
-            # Assumes VAE prior is N(0, I)
+            # Works well with z-score normalized latents (approx N(0, I))
             return (x ** 2).sum(dim=-1)
 
         elif self.regularization == "l2_centered":
@@ -752,7 +752,7 @@ class ValueHeadRewardWrapper:
     def __init__(self, value_head: nn.Module):
         """
         Args:
-            value_head: Trained ValueHead network (32D → 1D)
+            value_head: Trained ValueHead network (latent_dim → 1D)
         """
         self.value_head = value_head
 

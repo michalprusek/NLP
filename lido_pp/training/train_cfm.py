@@ -133,6 +133,18 @@ def parse_args():
         help="Forward-backward consistency loss weight (new for RegFlow-style stability)",
     )
     parser.add_argument(
+        "--lambda-cos",
+        type=float,
+        default=1.0,
+        help="Cosine (direction) weight in reconstruction loss",
+    )
+    parser.add_argument(
+        "--lambda-mse",
+        type=float,
+        default=0.1,
+        help="MSE (magnitude) weight in reconstruction loss (for SONAR decoder compatibility)",
+    )
+    parser.add_argument(
         "--lipschitz-bound",
         type=float,
         default=5.0,
@@ -167,6 +179,7 @@ def parse_args():
     parser.add_argument("--patience", type=int, default=1000, help="Early stopping patience")
     parser.add_argument("--checkpoint-dir", type=str, default="lido_pp/checkpoints")
     parser.add_argument("--checkpoint-interval", type=int, default=1000)
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint (path to .pt file)")
     parser.add_argument("--log-interval", type=int, default=1, help="Epoch logging interval (1 = every epoch)")
     parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping")
     parser.add_argument("--val-ratio", type=float, default=0.05, help="Validation ratio")
@@ -193,6 +206,8 @@ def train_epoch(
     total_loss = 0.0
     total_fm = 0.0
     total_recon = 0.0
+    total_recon_cos = 0.0
+    total_recon_mse = 0.0
     total_gw = 0.0
     total_lip = 0.0
     total_lip_ratio = 0.0
@@ -219,6 +234,8 @@ def train_epoch(
             lambda_gw=args.lambda_gw,
             lambda_lip=args.lambda_lip,
             lambda_consistency=args.lambda_consistency,
+            lambda_cos=args.lambda_cos,
+            lambda_mse=args.lambda_mse,
             timestep_sampling=args.timestep_sampling,
             lip_bound=args.lipschitz_bound,
             lip_penalty_type=args.lip_penalty_type,
@@ -240,6 +257,8 @@ def train_epoch(
         total_loss += loss.item()
         total_fm += losses["fm"]
         total_recon += losses["recon"]
+        total_recon_cos += losses.get("recon_cos", 0.0)
+        total_recon_mse += losses.get("recon_mse", 0.0)
         total_gw += losses.get("gw", 0.0)
         total_lip += losses.get("lip", 0.0)
         total_lip_ratio += losses.get("lip_ratio", 0.0)
@@ -250,9 +269,11 @@ def train_epoch(
         "loss": total_loss / n_batches,
         "fm": total_fm / n_batches,
         "recon": total_recon / n_batches,
+        "recon_cos": total_recon_cos / n_batches,
+        "recon_mse": total_recon_mse / n_batches,
         "gw": total_gw / n_batches,
         "lip": total_lip / n_batches,
-        "lip_ratio": total_lip_ratio / n_batches,  # NEW: actual Lipschitz ratio
+        "lip_ratio": total_lip_ratio / n_batches,
         "consistency": total_consistency / n_batches,
     }
 
@@ -367,11 +388,18 @@ def main():
             )
         embeddings = data["embeddings"]
         metadata = data.get("metadata", {})
+        # Z-score stats (if available)
+        zscore_mean = data.get("mean", None)
+        zscore_std = data.get("std", None)
         if is_main_process():
             print(f"Metadata: {metadata}")
+            if zscore_mean is not None:
+                print(f"✓ Z-score stats loaded (mean/std for denormalization)")
     else:
         embeddings = data
         metadata = {}
+        zscore_mean = None
+        zscore_std = None
 
     if is_main_process():
         print(f"Embeddings shape: {embeddings.shape}")
@@ -424,6 +452,7 @@ def main():
     )
 
     # Create model (Text Flow Autoencoder) with increased capacity
+    # normalize_output=False for SONAR decoder compatibility (needs original magnitudes)
     model = TextFlowAutoencoder(
         input_dim=input_dim,
         flow_dim=args.flow_dim,
@@ -432,7 +461,24 @@ def main():
         num_train_ode_steps=args.train_ode_steps,  # Training: 10 steps for speed
         num_velocity_layers=args.velocity_layers,
         dropout=args.dropout,  # Regularization for large datasets
+        normalize_output=False,  # No L2 norm - SONAR decoder needs original magnitudes
+        zscore_mean=zscore_mean,  # Z-score mean for denormalization (if available)
+        zscore_std=zscore_std,    # Z-score std for denormalization (if available)
     ).to(device)
+
+    # Resume from checkpoint if specified
+    start_epoch = 1
+    resumed_best_val_cos = 0.0
+    if args.resume:
+        if is_main_process():
+            print(f"\nResuming from checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        start_epoch = ckpt.get("epoch", 0) + 1
+        resumed_best_val_cos = ckpt.get("val_cos_ode", 0.0)
+        if is_main_process():
+            print(f"  Loaded epoch {ckpt.get('epoch', '?')}, val_cos_ode={resumed_best_val_cos:.4f}")
+            print(f"  Starting from epoch {start_epoch} with fresh optimizer (new LR)")
 
     # Wrap in DDP if multi-GPU
     if use_ddp:
@@ -463,7 +509,7 @@ def main():
 
     # Training state
     best_val_loss = float("inf")
-    best_val_cos = 0.0
+    best_val_cos = resumed_best_val_cos  # Use resumed value if available
     epochs_without_improvement = 0
     start_time = datetime.now()
 
@@ -486,22 +532,27 @@ def main():
         print(f"Timestep sampling: {args.timestep_sampling}")
         print(f"Augment noise: {args.augment_noise}")
         print("-" * 70)
-        print(f"Lambda recon: {args.lambda_recon}")
+        print(f"Lambda recon: {args.lambda_recon} (cos={args.lambda_cos}, mse={args.lambda_mse})")
         print(f"Lambda GW: {args.lambda_gw}")
         print(f"Lambda Lipschitz: {args.lambda_lip} (penalty={args.lip_penalty_type})")
         print(f"Lambda Consistency: {args.lambda_consistency}")
         print(f"Lipschitz bound: {args.lipschitz_bound}")
+        print(f"Output L2 normalize: False (for SONAR decoder compatibility)")
+        zscore_status = "ENABLED (mean/std saved)" if zscore_mean is not None else "DISABLED"
+        print(f"Z-score normalization: {zscore_status}")
         print("-" * 70)
-        print("Training: OT-CFM + ODE reconstruction loss")
-        print("Inference: Euler integration for encode/decode")
-        print("=" * 70 + "\n")
+        print("Training: OT-CFM + hybrid loss (cosine direction + MSE magnitude)")
+        print("Inference: Euler integration for encode/decode (no L2 norm)")
+        if zscore_mean is not None:
+            print("Inference: Use decode(denormalize_zscore=True) for SONAR decoder")
+        print("=" * 70 + "\n", flush=True)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         if use_ddp:
             train_sampler.set_epoch(epoch)
 
-        # Warmup LR
-        if epoch <= args.warmup_epochs:
+        # Warmup LR (skip if resuming - use constant LR for fine-tuning)
+        if epoch <= args.warmup_epochs and not args.resume:
             warmup_factor = epoch / args.warmup_epochs
             for param_group in optimizer.param_groups:
                 param_group["lr"] = args.lr * warmup_factor
@@ -538,7 +589,7 @@ def main():
             # Save best model (only on main process)
             if is_main_process():
                 model_to_save = model.module if use_ddp else model
-                torch.save({
+                checkpoint_data = {
                     "epoch": epoch,
                     "model_state_dict": model_to_save.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
@@ -549,7 +600,12 @@ def main():
                     "architecture": "TextFlowAutoencoder",
                     "input_dim": input_dim,
                     "latent_dim": args.latent_dim,
-                }, checkpoint_dir / "tfa_best.pt")
+                }
+                # Save z-score stats for denormalization during inference
+                if zscore_mean is not None:
+                    checkpoint_data["zscore_mean"] = zscore_mean
+                    checkpoint_data["zscore_std"] = zscore_std
+                torch.save(checkpoint_data, checkpoint_dir / "tfa_best.pt")
         else:
             epochs_without_improvement += 1
 
@@ -558,16 +614,19 @@ def main():
             lr = optimizer.param_groups[0]["lr"]
             elapsed = datetime.now() - start_time
             lip_ratio = train_metrics.get('lip_ratio', 0.0)
+            recon_cos = train_metrics.get('recon_cos', 0.0)
+            recon_mse = train_metrics.get('recon_mse', 0.0)
             print(
                 f"Epoch {epoch:5d} | "
                 f"FM: {train_metrics['fm']:.4f} | "
-                f"Recon: {train_metrics['recon']:.4f} | "
+                f"Recon: {train_metrics['recon']:.4f} (cos={recon_cos:.4f}, mse={recon_mse:.4f}) | "
                 f"Lip: {train_metrics['lip']:.4f} (R={lip_ratio:.1f}) | "
                 f"Cons: {train_metrics.get('consistency', 0.0):.4f} | "
                 f"Val CosODE: {val_metrics['cos_ode']:.4f} | "
                 f"Best: {best_val_cos:.4f} | "
                 f"LR: {lr:.2e} | "
-                f"Time: {elapsed}"
+                f"Time: {elapsed}",
+                flush=True,  # Ensure immediate output when piped
             )
 
         # Periodic checkpoint (only on main process)
@@ -609,6 +668,9 @@ def main():
             num_train_ode_steps=args.train_ode_steps,
             num_velocity_layers=args.velocity_layers,
             dropout=args.dropout,
+            normalize_output=False,  # No L2 norm - SONAR decoder needs original magnitudes
+            zscore_mean=checkpoint.get("zscore_mean"),
+            zscore_std=checkpoint.get("zscore_std"),
         ).to(device)
         test_model.load_state_dict(checkpoint["model_state_dict"])
         test_model.eval()
@@ -616,11 +678,39 @@ def main():
         with torch.no_grad():
             test_batch = next(iter(val_loader))[0][:8].to(device)
             z, x_recon = test_model(test_batch)
-            cos_sim = F.cosine_similarity(test_batch, x_recon, dim=-1)
-            print(f"Test cosine similarities: {cos_sim.tolist()}")
-            print(f"Mean: {cos_sim.mean():.4f}, Min: {cos_sim.min():.4f}, Max: {cos_sim.max():.4f}")
 
-            # Also check latent statistics
+            # Direction accuracy (cosine similarity)
+            cos_sim = F.cosine_similarity(test_batch, x_recon, dim=-1)
+            print(f"Cosine similarities: {cos_sim.tolist()}")
+            print(f"  Mean: {cos_sim.mean():.4f}, Min: {cos_sim.min():.4f}, Max: {cos_sim.max():.4f}")
+
+            # Magnitude accuracy (MSE and norm comparison)
+            mse = F.mse_loss(test_batch, x_recon, reduction='none').mean(dim=-1)
+            print(f"\nMSE per sample: {mse.tolist()}")
+            print(f"  Mean MSE: {mse.mean():.4f}")
+
+            # Magnitude reconstruction (important for SONAR decoder!)
+            orig_norms = test_batch.norm(dim=-1)
+            recon_norms = x_recon.norm(dim=-1)
+            norm_ratio = recon_norms / orig_norms
+            print(f"\nMagnitude reconstruction (z-score space):")
+            print(f"  ||x_recon|| / ||x_orig||: {norm_ratio.mean():.4f} (ideal=1.0)")
+            print(f"  Original norms: mean={orig_norms.mean():.2f}")
+            print(f"  Recon norms: mean={recon_norms.mean():.2f}")
+
+            # If z-score, show denormalized stats
+            if test_model.has_zscore_stats():
+                print(f"\nDenormalized (original SONAR space):")
+                x_recon_denorm = test_model.denormalize(x_recon)
+                test_batch_denorm = test_model.denormalize(test_batch)
+                orig_norms_denorm = test_batch_denorm.norm(dim=-1)
+                recon_norms_denorm = x_recon_denorm.norm(dim=-1)
+                norm_ratio_denorm = recon_norms_denorm / orig_norms_denorm
+                print(f"  ||x_recon|| / ||x_orig||: {norm_ratio_denorm.mean():.4f} (ideal=1.0)")
+                print(f"  Original norms: mean={orig_norms_denorm.mean():.2f}")
+                print(f"  Recon norms: mean={recon_norms_denorm.mean():.2f}")
+
+            # Latent statistics
             print(f"\nLatent statistics:")
             print(f"  Shape: {z.shape}")
             print(f"  Mean: {z.mean():.4f}, Std: {z.std():.4f}")

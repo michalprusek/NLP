@@ -9,8 +9,8 @@ Key components:
 - FlowTransformerBlock: Transformer block with self-attention, cross-attention, MLP
 - FlowDiT: Full model for velocity prediction
 
-The architecture is designed for latent-space flow matching (32D VAE latent)
-with context conditioning from GritLM embeddings.
+The architecture is designed for latent-space flow matching (128D/256D TFA latent)
+with context conditioning from SONAR embeddings (1024D).
 """
 
 import math

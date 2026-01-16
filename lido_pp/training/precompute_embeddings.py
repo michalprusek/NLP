@@ -4,7 +4,7 @@ Pre-compute SONAR embeddings for FlowPO training.
 This script pre-computes SONAR embeddings (1024D) once so they can be reused
 for TFA (Text Flow Autoencoder), Flow-DiT, and Decoder training.
 
-SONAR (Meta's reconstruction-optimized encoder) is preferred over GritLM
+SONAR (Meta's reconstruction-optimized encoder) is the recommended encoder
 because it's trained for translation, preserving reconstruction information.
 
 Output format:
@@ -104,8 +104,8 @@ def main():
         "--encoder",
         type=str,
         default="sonar",
-        choices=["sonar", "gtr", "gritlm"],
-        help="Encoder to use: sonar (recommended), gtr (lightweight), gritlm (legacy)",
+        choices=["sonar", "gtr"],
+        help="Encoder to use: sonar (recommended, 1024D), gtr (lightweight, 768D)",
     )
     parser.add_argument(
         "--source-lang",
@@ -211,27 +211,6 @@ def main():
         model_name = "sentence-transformers/gtr-t5-base"
         embedding_dim = 768
 
-    elif args.encoder == "gritlm":
-        print("\n" + "=" * 70)
-        print("WARNING: GritLM is DEPRECATED for FlowPO")
-        print("GritLM is retrieval-optimized and loses reconstruction info.")
-        print("Use --encoder sonar instead for better reconstruction.")
-        print("=" * 70 + "\n")
-        try:
-            from lido_pp.backbone.gritlm_encoder import GritLMUnifiedEncoder
-            encoder = GritLMUnifiedEncoder(
-                model_name="GritLM/GritLM-7B",
-                device=args.device,
-                dtype="float16",
-                use_latent_attention=False,
-            )
-            model_name = "GritLM/GritLM-7B"
-            embedding_dim = 4096
-        except ImportError:
-            raise ImportError(
-                "GritLM encoder not available (deleted). Use --encoder sonar instead."
-            )
-
     print(f"Encoder ready: {model_name}")
 
     # Encode all instructions
@@ -245,12 +224,8 @@ def main():
         with torch.no_grad():
             if args.encoder == "sonar":
                 batch_embeddings = encoder.encode(batch)
-            elif args.encoder == "gtr":
+            else:  # gtr
                 batch_embeddings = torch.tensor(encoder.encode(batch))
-            else:  # gritlm
-                batch_embeddings = torch.tensor(
-                    encoder.encode_4096_numpy(batch, batch_size=len(batch))
-                )
 
         all_embeddings.append(batch_embeddings.cpu())
 
