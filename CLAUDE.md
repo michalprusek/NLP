@@ -16,7 +16,7 @@ Always optimize for this hardware:
 
 CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
 
-Prompt optimization framework implementing **ProTeGi**, **OPRO**, **LIPO**, and **BOLT** algorithms for automatic prompt engineering on GSM8K (math reasoning) dataset.
+Prompt optimization framework implementing **OPRO** (Optimization by PROmpting) and **ProTeGi** (Prompt Optimization with Textual Gradients) algorithms for automatic prompt engineering on GSM8K (math reasoning) dataset.
 
 ## Commands
 
@@ -30,12 +30,6 @@ uv run python run_opro.py --model Qwen/Qwen2.5-7B-Instruct --iterations 10
 
 # ProTeGi optimization
 uv run python run_protegi.py --model Qwen/Qwen2.5-7B-Instruct --iterations 10
-
-# LIPO (Latent Instruction Prompt Optimization)
-uv run python -m lipo.run --skip-hbbops --iterations 50
-
-# BOLT (Bayesian Optimization over Latent Templates)
-uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --iterations 30
 ```
 
 ## Architecture
@@ -53,6 +47,12 @@ uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --it
 - Top-K memory keeps best prompts; meta-LLM generates new candidates at temperature=1.0
 - Supports separate task and meta-optimizer models (`--meta-model`)
 
+**ProTeGi Optimizer** (`protegi.py`):
+- Uses textual gradients (LLM-generated critiques) to guide prompt improvement
+- Beam search with UCB (Upper Confidence Bound) bandit for exploration/exploitation
+- Monte Carlo paraphrasing for local search around promising prompts
+- Separate gradient and edit LLMs for modular optimization
+
 **GSM8K Evaluator** (`gsm8k_evaluator.py`):
 - Answer extraction: **Always extract the last number only** - no format-specific patterns like `####` or `\boxed{}`
 - Numerical comparison with 1e-6 tolerance for floats
@@ -63,12 +63,20 @@ uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --it
   A:
   ```
 
+### Prompt Templates (`src/prompts/gsm8k/`)
+
+- `opro_meta.txt`: Meta-optimizer prompt template for OPRO
+- `gradient.txt`, `protegi_gradient.txt`: Gradient generation prompts
+- `edit.txt`, `protegi_edit.txt`: Prompt editing instructions
+- `protegi_paraphrase.txt`: Paraphrasing for exploration
+
 ## Model Aliases
 
 ```python
-"haiku" → claude-haiku-4-5-20251001
+"haiku"  → claude-haiku-4-5-20251001
 "sonnet" → claude-sonnet-4-5-20251022
-"qwen" → Qwen/Qwen2.5-7B-Instruct
+"qwen"   → Qwen/Qwen2.5-7B-Instruct
+"llama"  → meta-llama/Llama-3.1-8B-Instruct
 ```
 
 ## Key Parameters
@@ -77,81 +85,27 @@ uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --it
 - `--backend`: `vllm` (fast, requires CUDA), `openai`, `deepinfra`, `auto`
 - `--minibatch-size`: Examples per evaluation (trade-off: stability vs speed)
 - `--tensor-parallel-size`: GPU count for vLLM tensor parallelism
+- `--beam-width`: (ProTeGi) Number of candidate prompts to maintain
+- `--ucb-c`: (ProTeGi) Exploration parameter for UCB bandit
+
+## Datasets
+
+### GSM8K (Math Reasoning)
+- `datasets/gsm8k/train/`: Training set (Arrow format)
+- `datasets/gsm8k/test/`: Test set (Arrow format)
+- Primary benchmark for evaluating prompt quality
+
+### HbBoPs (Hyperband Baseline of Prompts)
+- `datasets/hbbops/ape_instructions_1000.json`: APE instruction dataset
+- `datasets/hbbops/instructions_*.txt`: Filtered instruction sets
+- `datasets/hbbops/examples_*.txt`: Example sets for few-shot learning
+- `datasets/hbbops/full_grid_combined.jsonl`: Grid search results
 
 ## File Conventions
 
 - `datasets/`: Static input data (read-only, version controlled)
-- `results/`, `bolt/results/`, `lipo/results/`: Experiment outputs (gitignored)
-
-### LIPO - Latent Instruction Prompt Optimization (`lipo/`)
-
-**Instruction-only optimization with VAE latent space and direct GP on 32D latents:**
-
-```bash
-# Skip HbBoPs: Load pre-evaluated results and train GP only (DEFAULT - no LLM needed)
-uv run python -m lipo.run --skip-hbbops
-
-# Skip HbBoPs with custom evaluations file
-uv run python -m lipo.run --skip-hbbops --hyperband-evals-path path/to/evals.json
-
-# Full run with HbBoPs evaluation (requires LLM)
-uv run python -m lipo.run --iterations 10
-```
-
-**Datasets:**
-- APE instructions: `lipo/data/ape_instructions.json` (2000 instructions for VAE training)
-- HbBoPs results: `lipo/data/hbbops_results_{timestamp}.json` (evaluated prompts for GP training only)
-
-**Data separation:**
-- **VAE training**: Always uses APE instructions (2000) for diverse latent space coverage
-- **GP training**: Uses only HbBoPs-evaluated prompts with accuracy labels
-
-**Architecture:**
-- VAE: 768D GTR → 32D latent (frozen during GP training)
-- GP: Matern 5/2 kernel with ARD directly on 32D VAE latent (no adapter)
-
-**Optimization flow:**
-```
-z (32D VAE latent) → GP (ARD kernel) → qLogEI
-```
-
-**Skip HbBoPs Mode:**
-When `--skip-hbbops` is enabled:
-1. Loads HbBoPs evaluation results from `--hyperband-evals-path`
-2. Loads APE instructions from `lipo/data/ape_instructions.json` for VAE training
-3. Trains GP on evaluated instructions only (with accuracy labels)
-4. Runs InvBO inference without additional LLM calls
-
-**IMPORTANT - Documentation:**
-- **Always update `lipo/PIPELINE.md`** when making changes to LIPO code (dimensions, parameters, architecture)
-- PIPELINE.md is the single source of truth for LIPO architecture and parameters
-- Keep dimensions, loss functions, and training parameters in sync with `config.py`
-- **Always update `lipo/run.py` CLI argument defaults** when changing `config.py` defaults - CLI overrides config!
-
-### BOLT - Bayesian Optimization over Latent Templates (`bolt/`)
-
-**Joint instruction + exemplar optimization using VAE latent space and GP:**
-
-```bash
-# Run BOLT with pre-evaluated Hyperband results (DEFAULT - no LLM needed for initial training)
-uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --iterations 30
-
-# Full run with Hyperband evaluation (requires LLM)
-uv run python -m bolt.run --iterations 30
-```
-
-**Architecture:**
-- `StructureAwareVAE`: Joint instruction (16D) + exemplar (8D) VAE = 24D latent
-- `InstructionEncoder`: 768D GTR → 256 → 128 → 16D
-- `ExemplarSetEncoder`: Set Transformer with ISAB/PMA for permutation-invariant encoding
-- `CrossAttentionScorer`: Instruction↔exemplar matching with ListMLE ranking loss
-- Deep Kernel Learning GP on 24D joint latent space
-
-**IMPORTANT - Documentation & Code Quality:**
-- **Always update `bolt/PIPELINE.md`** when making ANY changes to BOLT code (architecture, parameters, losses, dimensions)
-- PIPELINE.md is the single source of truth for BOLT architecture and must stay in sync with code
-- **Always run code-simplifier agent** after implementing changes or modifications to BOLT code
-- Keep dimensions, loss functions, and training parameters in sync with `bolt/config.py`
+- `results/`: Experiment outputs (gitignored) - JSON, CSV, logs from OPRO/ProTeGi runs
+- `src/prompts/`: Prompt templates for meta-optimization
 
 ## Coding Standards
 
@@ -170,11 +124,14 @@ log(f"Generated:\n{prompt}")
 **Always run processes longer than ~30 seconds in tmux** with logging to results directory:
 
 ```bash
-# Pattern for LIPO runs
-tmux new-session -d -s <session_name> "CUDA_VISIBLE_DEVICES=<gpu> uv run python -m lipo.run <args> 2>&1 | tee lipo/results/<descriptive_name>_$(date +%Y%m%d_%H%M%S).log; exec bash"
+# Pattern for long-running optimization
+tmux new-session -d -s <session_name> "CUDA_VISIBLE_DEVICES=<gpu> uv run python <script> <args> 2>&1 | tee results/<descriptive_name>_$(date +%Y%m%d_%H%M%S).log; exec bash"
 
-# Example
-tmux new-session -d -s lipo_12d_beta0005 "CUDA_VISIBLE_DEVICES=0 uv run python -m lipo.run --skip-hbbops --latent-dim 12 --vae-beta 0.005 --iterations 50 2>&1 | tee lipo/results/12d_beta0005_$(date +%Y%m%d_%H%M%S).log; exec bash"
+# Example - OPRO with vLLM
+tmux new-session -d -s opro_qwen "CUDA_VISIBLE_DEVICES=0 uv run python run_opro.py --model qwen --backend vllm --iterations 200 2>&1 | tee results/opro_qwen_200it_$(date +%Y%m%d_%H%M%S).log; exec bash"
+
+# Example - ProTeGi with separate meta-model
+tmux new-session -d -s protegi_beam10 "CUDA_VISIBLE_DEVICES=1 uv run python run_protegi.py --model qwen --meta-model sonnet --beam-width 10 --iterations 50 2>&1 | tee results/protegi_beam10_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
 This ensures:
@@ -189,3 +146,47 @@ This ensures:
 - For 16GB RAM systems, use `--model Qwen/Qwen2.5-3B-Instruct`
 - **Always use `--backend vllm`** unless explicitly told otherwise
 - **NEVER stop/kill running processes** (tmux sessions, background jobs) unless user explicitly asks to stop them
+
+## Algorithm Comparison
+
+| Algorithm | Type | Strengths | Limitations |
+|-----------|------|-----------|-------------|
+| **OPRO** | Meta-optimization | Simple, interpretable, good for discrete prompt space | Requires many LLM calls, local optima |
+| **ProTeGi** | Gradient-based | Directed search via textual gradients, beam search diversity | Gradient quality depends on critique LLM |
+
+## Typical Workflows
+
+### Running a Quick Experiment
+```bash
+# 10 iterations with default settings
+uv run python run_opro.py --model qwen --iterations 10
+```
+
+### Production Run with Logging
+```bash
+# Create tmux session with full logging
+tmux new-session -d -s opro_production \
+  "CUDA_VISIBLE_DEVICES=0 uv run python run_opro.py \
+  --model qwen --backend vllm --iterations 200 \
+  --minibatch-size 512 --tensor-parallel-size 2 \
+  2>&1 | tee results/opro_production_$(date +%Y%m%d_%H%M%S).log; \
+  exec bash"
+
+# Attach to monitor progress
+tmux attach -t opro_production
+```
+
+### Comparing Models
+```bash
+# Run same configuration with different models
+tmux new-session -d -s opro_qwen "uv run python run_opro.py --model qwen --iterations 100 2>&1 | tee results/opro_qwen_$(date +%Y%m%d_%H%M%S).log"
+tmux new-session -d -s opro_llama "uv run python run_opro.py --model llama --iterations 100 2>&1 | tee results/opro_llama_$(date +%Y%m%d_%H%M%S).log"
+```
+
+## Development Guidelines
+
+- **Read before modifying**: Always use `Read` tool on files before suggesting changes
+- **Test changes**: Run small-scale experiments (5-10 iterations) before production runs
+- **Version control**: Commit working configurations before major refactors
+- **Documentation**: Update this file when adding new parameters, models, or workflows
+- **Error handling**: Always validate LLM outputs and handle API errors gracefully
