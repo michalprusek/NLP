@@ -171,6 +171,14 @@ lido_pp/results/
 
 # General checkpoints and data (all subprojects)
 **/checkpoints/
+**/checkpoints_*/
 **/data/*.pt
 **/data/*.bin
 **/data/*.safetensors
+
+# FlowPO-HD specific
+flowpo_hd/results/*.log
+flowpo_hd/results/*.json
+
+# GSM8K dataset splits
+datasets/gsm8k/
