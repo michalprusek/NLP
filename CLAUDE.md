@@ -128,6 +128,12 @@ When `--skip-hbbops` is enabled:
 - Keep dimensions, loss functions, and training parameters in sync with `config.py`
 - **Always update `lipo/run.py` CLI argument defaults** when changing `config.py` defaults - CLI overrides config!
 
+**IMPORTANT - HbBoPs Fidelity:**
+- **NEVER use accuracies evaluated on low fidelity (< 600 examples)**
+- Evaluations on 10-50 examples are statistically unreliable (high variance)
+- Always filter HbBoPs results with `--min-fidelity 600` or higher
+- Best accuracy at fidelity 1319: ~90.5% (vs misleading 100% at fidelity 10)
+
 ### BOLT - Bayesian Optimization over Latent Templates (`bolt/`)
 
 **Joint instruction + exemplar optimization using VAE latent space and GP:**
@@ -153,7 +159,74 @@ uv run python -m bolt.run --iterations 30
 - **Always run code-simplifier agent** after implementing changes or modifications to BOLT code
 - Keep dimensions, loss functions, and training parameters in sync with `bolt/config.py`
 
+### FlowPO-HD - High-Dimensional Flow-based Prompt Optimization (`flowpo_hd/`)
+
+**Direct optimization in 1024D SONAR space with FlowDiT manifold projection:**
+
+```bash
+# BetaGP + TuRBO optimization (requires space mapping first)
+uv run python -m flowpo_hd.scripts.run_beta_gp_turbo \
+    --mapping-results flowpo_hd/results/space_mapping_100x100.json \
+    --iterations 20 --acquisition nei
+```
+
+**Key Components:**
+- **FlowDiT (1024→1024)**: Flow matching model for manifold projection
+  - Checkpoint: `flowpo_hd/checkpoints_mega_aux2/best.pt`
+  - Architecture: 4 DiT blocks, hidden_dim=1024, no bottleneck
+  - Maps noise z ~ N(0,I) → instruction manifold via ODE integration
+- **BetaHeteroscedasticGP**: GP with Beta-smoothed observations
+  - Beta smoothing: `(k+α)/(n+α+β)` instead of raw `k/n`
+  - Heteroscedastic noise: `σ² = p(1-p)/(n+α+β+1)`
+  - Hvarfner (2024) dimension-scaled lengthscale prior
+- **TuRBO**: Trust Region BO for local optimization
+  - Adaptive trust region: expands on success, shrinks on failure
+  - Acquisitions: `ts` (Thompson Sampling), `ei`, `nei` (Noisy EI)
+
+**CRITICAL - Manifold & Decoding:**
+- **NEVER sample directly in SONAR bounds** - results in garbage text
+- **ALWAYS decode latents to text** - vždy dekóduj kandidáty přes SONAR aby vznikly nové instrukce:
+```python
+from flowpo_hd.utils import SONARHelper
+sonar = SONARHelper(device="cuda", normalize=False)
+instructions = sonar.decode(candidates)  # Always decode to see actual instructions!
+```
+- **Perturbation-based candidates** work better than FlowDiT projection:
+```python
+# Generate candidate as small perturbation of known-good embedding
+perturbation = torch.randn_like(parent) * parent.norm() * 0.02  # 2% of norm
+candidate = parent + perturbation
+instruction = sonar.decode(candidate)  # Decode to get new instruction text
+```
+
+**Data Files:**
+- Space mapping results: `flowpo_hd/results/space_mapping_*.json`
+- FlowDiT checkpoint: `flowpo_hd/checkpoints_mega_aux2/best.pt`
+
 ## Coding Standards
+
+### Caching Intermediate Results
+**Always implement caching for expensive operations in scripts.** When a script performs time-consuming operations (encoding, downloading, preprocessing), save intermediate results to disk and reload them on re-run. This saves hours of compute time when scripts crash or need to be re-run.
+
+```python
+# Pattern for caching expensive operations
+cache_path = "data/intermediate_embeddings.pt"
+if os.path.exists(cache_path):
+    logger.info(f"Loading cached embeddings from {cache_path}")
+    data = torch.load(cache_path)
+    embeddings = data["embeddings"]
+else:
+    logger.info("Computing embeddings (will be cached)...")
+    embeddings = expensive_encoding_operation(inputs)
+    torch.save({"embeddings": embeddings, "metadata": {...}}, cache_path)
+    logger.info(f"Saved cache to {cache_path}")
+```
+
+Key principles:
+- Save intermediate results BEFORE expensive operations that might fail (e.g., save after encoding, before deduplication)
+- Use descriptive cache filenames with timestamps or version info
+- Include metadata in cache files (source, parameters, timestamp)
+- Add `--no-cache` flag to force recomputation when needed
 
 ### Logging Generated Prompts
 **NEVER truncate prompts in log output.** Always log the full prompt text, not truncated versions like `"prompt text..."`. This is critical for debugging and reproducibility.
