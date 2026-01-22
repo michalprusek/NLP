@@ -213,7 +213,12 @@ def load_or_encode_dataset(
     # Try loading existing embeddings
     if embeddings_path.exists() and not force_encode:
         logger.info(f"Loading pre-encoded embeddings from {embeddings_path}")
-        data = torch.load(embeddings_path, map_location="cpu")
+        try:
+            data = torch.load(embeddings_path, map_location="cpu", weights_only=True)
+        except Exception as e:
+            # Fallback for embeddings with metadata (texts list)
+            logger.warning(f"weights_only=True failed, retrying: {e}")
+            data = torch.load(embeddings_path, map_location="cpu", weights_only=False)
 
         if isinstance(data, dict):
             embeddings = data["embeddings"]
@@ -255,7 +260,7 @@ def create_dataloader(
     dataset: InstructionDataset,
     batch_size: int = 256,
     shuffle: bool = True,
-    num_workers: int = 4,
+    num_workers: int = 8,  # CLAUDE.md: use num_workers=8 for 2x L40S setup
     pin_memory: bool = True,
     drop_last: bool = True,
 ) -> DataLoader:

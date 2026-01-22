@@ -16,6 +16,7 @@ Reference:
 """
 
 import logging
+import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Literal, Optional
@@ -47,16 +48,24 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def compute_ot_plan_exact(x_0: torch.Tensor, x_1: torch.Tensor) -> torch.Tensor:
-    """Compute exact OT assignment using Hungarian algorithm."""
+    """Compute exact OT assignment using Hungarian algorithm.
+
+    Returns permutation indices such that x_0[perm] is optimally paired with x_1.
+    """
     if not SCIPY_AVAILABLE:
+        logger.warning(
+            "scipy not available - using approximate Sinkhorn OT instead of exact Hungarian. "
+            "Install scipy for exact OT: pip install scipy"
+        )
         return compute_ot_plan_approx(x_0, x_1)
 
     cost = torch.cdist(x_0, x_1, p=2).pow(2)
     cost_np = cost.detach().cpu().numpy()
     row_ind, col_ind = linear_sum_assignment(cost_np)
 
-    perm = torch.zeros(x_0.shape[0], dtype=torch.long, device=x_0.device)
-    perm[col_ind] = torch.tensor(row_ind, device=x_0.device)
+    # row_ind[i] is the x_0 index that should be paired with x_1[col_ind[i]]
+    # Since col_ind is always [0, 1, ..., n-1], row_ind is the permutation
+    perm = torch.tensor(row_ind, device=x_0.device, dtype=torch.long)
 
     return perm
 
@@ -67,7 +76,20 @@ def compute_ot_plan_approx(
     num_iters: int = 20,
     reg: float = 0.05,
 ) -> torch.Tensor:
-    """Approximate OT using Sinkhorn algorithm (GPU-friendly)."""
+    """Approximate OT using Sinkhorn algorithm (GPU-friendly).
+
+    Args:
+        x_0: Source points (B, D)
+        x_1: Target points (B, D)
+        num_iters: Number of Sinkhorn iterations
+        reg: Regularization parameter (must be positive)
+
+    Returns:
+        Permutation indices such that x_0[perm] is approximately optimally paired with x_1
+    """
+    if reg <= 0:
+        raise ValueError(f"Sinkhorn regularization must be positive, got {reg}")
+
     B = x_0.shape[0]
     device = x_0.device
 
@@ -471,12 +493,41 @@ class ManifoldKeeperTrainer:
             torch.save(checkpoint, self.checkpoint_dir / f"epoch_{epoch}.pt")
 
     def load_checkpoint(self, path: str) -> int:
-        """Load checkpoint. Returns starting epoch."""
-        checkpoint = torch.load(path, map_location=self.device)
+        """Load checkpoint. Returns starting epoch.
 
-        self._unwrap_model().load_state_dict(checkpoint["model_state_dict"])
-        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        self.global_step = checkpoint["global_step"]
+        Raises:
+            FileNotFoundError: If checkpoint file doesn't exist
+            KeyError: If checkpoint is missing required keys
+            RuntimeError: If model state dict is incompatible
+        """
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        except (RuntimeError, pickle.UnpicklingError) as e:
+            # Checkpoint may contain non-tensor data (optimizer state, config)
+            if "weights_only" in str(e).lower() or "unpickl" in str(e).lower():
+                logger.warning(f"weights_only=True failed (legacy format?): {e}. Retrying.")
+                checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+            else:
+                raise
+        except Exception as e:
+            # Let other errors (FileNotFoundError, PermissionError) propagate
+            raise
+
+        required_keys = ["model_state_dict", "epoch"]
+        missing = [k for k in required_keys if k not in checkpoint]
+        if missing:
+            raise KeyError(f"Checkpoint missing required keys: {missing}")
+
+        try:
+            self._unwrap_model().load_state_dict(checkpoint["model_state_dict"])
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Model state dict incompatible - checkpoint may be from different architecture: {e}"
+            )
+
+        if "optimizer_state_dict" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.global_step = checkpoint.get("global_step", 0)
         self.best_val_loss = checkpoint.get("best_val_loss", float('inf'))
 
         logger.info(f"Loaded checkpoint from {path}, epoch {checkpoint['epoch']}")
@@ -669,7 +720,14 @@ def train_manifold_keeper(
     # Load best checkpoint
     best_path = Path(config.checkpoints_dir) / "best.pt"
     if best_path.exists():
-        checkpoint = torch.load(best_path, map_location=device)
+        try:
+            checkpoint = torch.load(best_path, map_location=device, weights_only=True)
+        except (RuntimeError, pickle.UnpicklingError) as e:
+            if "weights_only" in str(e).lower() or "unpickl" in str(e).lower():
+                logger.warning(f"weights_only=True failed for best checkpoint: {e}")
+                checkpoint = torch.load(best_path, map_location=device, weights_only=False)
+            else:
+                raise
         model.load_state_dict(checkpoint["model_state_dict"])
         logger.info(f"Loaded best checkpoint with val_loss={checkpoint['best_val_loss']:.4f}")
 

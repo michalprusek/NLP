@@ -174,8 +174,8 @@ class ManifoldKeeperMLP(nn.Module):
     to push candidates towards the manifold.
 
     Architecture (~15M parameters):
-        Input: x(1024D) concatenated with t_emb(256D)
-        Blocks: 3× ManifoldResBlock(1024→2048→1024)
+        Input: x(1024D) projected to hidden_dim, with t_emb(hidden_dim) applied via AdaLN conditioning
+        Blocks: 3× ManifoldResBlock(1024→2048→1024) with AdaLN(t_emb) modulation
         Output: 1024D velocity
 
     Why t=0.9 for manifold force:

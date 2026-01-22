@@ -19,14 +19,20 @@ def get_device(device: str = "auto") -> str:
     Args:
         device: Device specification:
             - "auto": Use CUDA if available, else CPU
-            - "cuda": Force CUDA (will fail if unavailable)
+            - "cuda": Force CUDA (falls back to CPU if unavailable)
             - "cpu": Force CPU
 
     Returns:
         Device string ("cuda" or "cpu")
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     if device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cuda" and not torch.cuda.is_available():
+        logger.warning("CUDA requested but not available - falling back to CPU")
+        return "cpu"
     return device
 
 
@@ -64,7 +70,7 @@ class FlowPOHDConfig:
     mk_num_blocks: int = 3  # Number of residual blocks
     mk_time_dim: int = 256  # Timestep embedding dimension
     mk_dropout: float = 0.1  # Dropout for regularization
-    # ~15M parameters: 3 blocks × (1024×2048 + 2048×1024) × 2 ≈ 25M, but shared time_emb reduces it
+    # ~15M parameters (actual count depends on num_blocks and hidden_dim)
 
     # === ManifoldKeeper Training ===
     mk_epochs: int = 50000  # Training epochs

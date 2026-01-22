@@ -204,9 +204,18 @@ class SaasGPWithAcquisition:
                 disable_progbar=False,
             )
 
-        except Exception as e:
-            logger.error(f"SAAS fitting failed: {e}")
+        except (ValueError, RuntimeError) as e:
+            if "NaN" in str(e) or "diverge" in str(e).lower():
+                logger.error(f"SAAS MCMC failed to converge: {e}. Try reducing data size or adjusting priors.")
+            else:
+                logger.error(f"SAAS fitting failed: {e}", exc_info=True)
             return False
+        except torch.cuda.OutOfMemoryError as e:
+            logger.error(f"SAAS fitting OOM: {e}. Try fit_on_cpu=True or reduce num_samples.")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in SAAS fitting: {type(e).__name__}: {e}", exc_info=True)
+            raise
 
         # Extract relevant dimensions
         self._extract_relevant_dims()
@@ -237,8 +246,12 @@ class SaasGPWithAcquisition:
                 f"lengthscales: {[f'{ls:.3f}' for ls in top_ls]}"
             )
 
+        except AttributeError as e:
+            logger.warning(f"Could not extract relevant dims - model structure may have changed: {e}")
+            self.relevant_dims = []  # Explicit empty fallback
         except Exception as e:
-            logger.warning(f"Could not extract relevant dims: {e}")
+            logger.warning(f"Could not extract relevant dims: {type(e).__name__}: {e}", exc_info=True)
+            self.relevant_dims = []  # Explicit empty fallback
 
     def predict(self, X: torch.Tensor) -> SaasPrediction:
         """Make predictions with uncertainty.
@@ -336,12 +349,19 @@ class SaasGPWithAcquisition:
                         "method": "L-BFGS-B",  # Explicit method specification
                     },
                 )
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
+                # Expected optimization failures (convergence issues, numerical problems)
                 logger.warning(f"Primary acquisition optimization failed: {e}")
                 # Fallback: use best from raw samples
                 candidates_norm, acq_value = self._fallback_acquisition(
                     acq_func, bounds_norm, batch_size
                 )
+            except torch.cuda.OutOfMemoryError:
+                logger.error("CUDA OOM during acquisition optimization")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error in acquisition: {type(e).__name__}: {e}", exc_info=True)
+                raise
 
         # Denormalize candidates
         candidates = candidates_norm * self._X_range + self._X_min
@@ -378,10 +398,19 @@ class SaasGPWithAcquisition:
                 n=n_samples,
                 q=batch_size,
             ).squeeze(1)  # (n_samples, D)
-        except Exception:
-            # Pure random if Sobol fails
+        except ImportError as e:
+            logger.warning(f"Sobol sampling unavailable (botorch not installed?): {e}. Using random sampling.")
             samples = torch.rand(n_samples, D, device=bounds_norm.device, dtype=bounds_norm.dtype)
             samples = samples * (bounds_norm[1] - bounds_norm[0]) + bounds_norm[0]
+        except (ValueError, RuntimeError) as e:
+            # Sobol can fail with certain dimension/batch combinations
+            logger.warning(f"Sobol sampling failed: {type(e).__name__}: {e}. Using random sampling.")
+            samples = torch.rand(n_samples, D, device=bounds_norm.device, dtype=bounds_norm.dtype)
+            samples = samples * (bounds_norm[1] - bounds_norm[0]) + bounds_norm[0]
+        except Exception as e:
+            # Unexpected errors should propagate
+            logger.error(f"Unexpected error in Sobol sampling: {type(e).__name__}: {e}")
+            raise
 
         # Evaluate acquisition on samples
         with torch.no_grad():

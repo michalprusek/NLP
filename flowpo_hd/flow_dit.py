@@ -186,7 +186,8 @@ if __name__ == "__main__":
     ckpt_path = sys.argv[1] if len(sys.argv) > 1 else "flowpo_hd/checkpoints_mega_aux2/best.pt"
 
     print(f"Loading {ckpt_path}...")
-    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    # Note: weights_only=True for security; checkpoint should only contain tensors
+    ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=True)
 
     model = FlowDiT(
         latent_dim=1024,

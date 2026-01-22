@@ -152,11 +152,22 @@ class BetaHeteroscedasticGP:
 
         Args:
             accuracies: Raw accuracy values [0, 1]
-            fidelities: Number of examples per observation
+            fidelities: Number of examples per observation (must be positive)
 
         Returns:
             BetaSmoothedData with smoothed error rates and noise variances
+
+        Raises:
+            ValueError: If accuracies are not in [0, 1] or fidelities are not positive
         """
+        # Input validation
+        if (accuracies < 0).any() or (accuracies > 1).any():
+            raise ValueError(
+                f"Accuracies must be in [0, 1], got range [{accuracies.min():.4f}, {accuracies.max():.4f}]"
+            )
+        if (fidelities <= 0).any():
+            raise ValueError(f"Fidelities must be positive, got min={fidelities.min():.4f}")
+
         alpha = self.config.beta_alpha
         beta = self.config.beta_beta
 

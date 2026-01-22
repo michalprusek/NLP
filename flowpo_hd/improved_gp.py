@@ -729,9 +729,18 @@ class ImprovedSAAS:
                     f"median={self.lengthscales.median():.2f}"
                 )
 
-        except Exception as e:
-            logger.error(f"SAAS fitting failed: {e}")
+        except (ValueError, RuntimeError) as e:
+            if "NaN" in str(e) or "diverge" in str(e).lower():
+                logger.error(f"SAAS MCMC failed to converge: {e}. Try reducing data size or adjusting priors.")
+            else:
+                logger.error(f"SAAS fitting failed: {e}", exc_info=True)
             return False
+        except torch.cuda.OutOfMemoryError as e:
+            logger.error(f"SAAS fitting OOM: {e}. Try fit_on_cpu=True or reduce num_samples.")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in SAAS fitting: {type(e).__name__}: {e}", exc_info=True)
+            raise
 
         self.training_time = time.time() - start_time
         logger.info(f"ImprovedSAAS fitted in {self.training_time:.1f}s")
@@ -1047,7 +1056,8 @@ class VanillaGPWithAcquisition:
                 )
                 acq_val = acq_value.item() if torch.is_tensor(acq_value) else acq_value
                 logger.info(f"qLogNEI optimization succeeded: acq_value={acq_val:.4f}")
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
+                # Expected optimization failures (convergence issues, numerical problems)
                 logger.warning(f"BoTorch optimize_acqf failed: {e}, falling back to Sobol sampling")
                 samples = draw_sobol_samples(bounds=bounds_norm, n=512, q=1).squeeze(1)
                 with torch.no_grad():
@@ -1055,6 +1065,12 @@ class VanillaGPWithAcquisition:
                 best_idx = acq_values.argmax()
                 candidates_norm = samples[best_idx:best_idx+1]
                 acq_value = acq_values[best_idx]
+            except torch.cuda.OutOfMemoryError:
+                logger.error("CUDA OOM during acquisition optimization")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during acquisition: {type(e).__name__}: {e}", exc_info=True)
+                raise
 
         candidates = candidates_norm * self._X_std.to(candidates_norm.device) + self._X_mean.to(candidates_norm.device)
         return candidates, acq_value.item() if torch.is_tensor(acq_value) else acq_value

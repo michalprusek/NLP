@@ -180,8 +180,13 @@ class WarmStartLoader:
         logger.info(f"Loading HbBoPs results from {self.hbbops_path}")
 
         # Load JSON
-        with open(self.hbbops_path) as f:
-            data = json.load(f)
+        try:
+            with open(self.hbbops_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in {self.hbbops_path}: {e}")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"HbBoPs results not found: {self.hbbops_path}")
 
         # Parse based on format
         points = self._parse_hbbops(data)
@@ -293,6 +298,9 @@ class WarmStartLoader:
                                 fidelity=item.get("fidelity", item.get("n_samples", 100)),
                             ))
 
+        if not points:
+            logger.warning(f"Could not parse HbBoPs format. Keys found: {list(data.keys())[:5]}")
+
         return points
 
     def _get_embeddings(self, instructions: List[str]) -> List[torch.Tensor]:
@@ -301,7 +309,12 @@ class WarmStartLoader:
         # Check cache
         if self.cache_path and self.cache_path.exists():
             logger.info(f"  Loading cached embeddings from {self.cache_path}")
-            cache = torch.load(self.cache_path, weights_only=False)
+            # Cache may contain non-tensor data (instruction list), use fallback pattern
+            try:
+                cache = torch.load(self.cache_path, weights_only=True)
+            except Exception as e:
+                logger.warning(f"weights_only=True failed for cache, retrying: {e}")
+                cache = torch.load(self.cache_path, weights_only=False)
 
             # Verify cache matches
             if cache.get("instructions") == instructions:

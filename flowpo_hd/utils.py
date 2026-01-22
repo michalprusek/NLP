@@ -181,7 +181,8 @@ class FlowDiTHelper:
         from flowpo_hd.flow_dit import FlowDiT
 
         # Load checkpoint
-        ckpt = torch.load(self.checkpoint_path, map_location='cpu', weights_only=False)
+        # Note: weights_only=True is safer; checkpoint must contain only tensors
+        ckpt = torch.load(self.checkpoint_path, map_location='cpu', weights_only=True)
 
         # Create model with inferred architecture
         self._model = FlowDiT(
@@ -372,7 +373,12 @@ def load_checkpoint(
     Returns:
         Checkpoint dict with epoch, step, metrics, etc.
     """
-    checkpoint = torch.load(path, map_location=device)
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
+    except Exception as e:
+        # Fallback for checkpoints with non-tensor data (e.g., config dicts)
+        logger.warning(f"weights_only=True failed, retrying with weights_only=False: {e}")
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
 
     # Handle DDP wrapped models
     if hasattr(model, 'module'):
