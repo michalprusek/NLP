@@ -1,0 +1,6 @@
+{
+  "training": {
+    "per_device_batch_size": 8,
+    "gradient_accumulation_steps": 8
+  }
+}

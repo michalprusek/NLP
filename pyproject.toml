@@ -31,4 +31,10 @@ dependencies = [
     "vec2text>=0.0.13",
     "vllm>=0.10.0,<0.11.0",
     "sonar-space>=0.5.0",
+    # Soft-Prompt VAE dependencies
+    "peft>=0.14.0", # LoRA adapters
+    "datasketch>=1.6.0", # MinHash deduplication
+    "fasttext-wheel>=0.9.2", # Language detection
+    "torchmetrics>=1.0.0", # BLEU/ROUGE metrics
+    "tensorboard>=2.20.0",
 ]

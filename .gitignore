@@ -182,3 +182,8 @@ flowpo_hd/results/*.json
 
 # GSM8K dataset splits
 datasets/gsm8k/
+
+# Soft-Prompt VAE
+soft_prompt_vae/processed/
+soft_prompt_vae/checkpoints/
+soft_prompt_vae/data/*.bin
