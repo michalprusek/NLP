@@ -123,7 +123,9 @@ class LanguageFilter:
             confidence = predictions[1][0]
 
             return label == self.language and confidence >= self.threshold
-        except Exception:
+        except (ValueError, RuntimeError) as e:
+            # FastText can fail on unusual inputs; log and pass through
+            logger.debug(f"FastText prediction failed: {e}")
             return True  # Pass through on errors
 
 

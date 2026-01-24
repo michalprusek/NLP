@@ -594,6 +594,7 @@ def main():
     # Training loop
     logger.info("Starting training...")
     log_gpu_memory("Before training: ")
+    epoch = start_epoch  # Initialize for finally block safety
     try:
         for epoch in range(start_epoch, config.training.num_epochs):
             # Reset collapse monitor statistics at epoch start (optional)

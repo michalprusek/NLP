@@ -186,4 +186,5 @@ datasets/gsm8k/
 # Soft-Prompt VAE
 soft_prompt_vae/processed/
 soft_prompt_vae/checkpoints/
+soft_prompt_vae/logs/
 soft_prompt_vae/data/*.bin

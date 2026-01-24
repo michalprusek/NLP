@@ -34,9 +34,9 @@ class VAEOutput:
     loss: Optional[torch.Tensor] = None
 
     # Latent space
-    z: torch.Tensor = None  # (batch, latent_dim)
-    mu: torch.Tensor = None  # (batch, latent_dim)
-    logvar: torch.Tensor = None  # (batch, latent_dim)
+    z: Optional[torch.Tensor] = None  # (batch, latent_dim)
+    mu: Optional[torch.Tensor] = None  # (batch, latent_dim)
+    logvar: Optional[torch.Tensor] = None  # (batch, latent_dim)
 
     # For analysis
     kl_loss: Optional[torch.Tensor] = None

@@ -288,6 +288,7 @@ class MomentumQueue:
         # Queue storage (on CPU to save GPU memory)
         self._queue: Optional[torch.Tensor] = None
         self._ptr = 0  # Current insertion pointer
+        self._filled = False  # True once queue has been filled at least once
 
     def enqueue(self, z: torch.Tensor) -> None:
         """Add new latents to the queue.
@@ -311,7 +312,10 @@ class MomentumQueue:
             self._queue[self._ptr:] = z_detached[: self.queue_size - self._ptr]
             self._queue[:overflow] = z_detached[self.queue_size - self._ptr :]
 
-        self._ptr = (self._ptr + batch_size) % self.queue_size
+        new_ptr = self._ptr + batch_size
+        if new_ptr >= self.queue_size:
+            self._filled = True  # Queue has wrapped around at least once
+        self._ptr = new_ptr % self.queue_size
 
     def get_queue(self, device: torch.device) -> Optional[torch.Tensor]:
         """Get current queue contents.
@@ -328,7 +332,7 @@ class MomentumQueue:
 
     def is_full(self) -> bool:
         """Check if queue has been filled at least once."""
-        return self._queue is not None and self._ptr >= self.queue_size
+        return self._queue is not None and self._filled
 
 
 def compute_bow_loss(

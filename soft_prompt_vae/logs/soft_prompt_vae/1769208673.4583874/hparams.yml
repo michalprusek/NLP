@@ -1,4 +1,0 @@
-batch_size: 24
-epochs: 5
-learning_rate: 0.0002
-phase: 1
