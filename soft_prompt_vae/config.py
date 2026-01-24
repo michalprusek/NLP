@@ -26,6 +26,13 @@ class ModelConfig:
     # Soft prompt
     num_soft_tokens: int = 32
 
+    # ========== Matryoshka Representation Learning ==========
+    # Nested latent dimensions for coarse-to-fine LSBO optimization
+    # When set (e.g., (16, 32, 64)), training randomly samples active_dim
+    # and masks higher dimensions, forcing hierarchical structure
+    matryoshka_dims: Optional[Tuple[int, ...]] = None  # e.g., (16, 32, 64)
+    full_dim_probability: float = 0.33  # Probability of using full dimension during training
+
     # LoRA configuration
     lora_r: int = 64
     lora_alpha: int = 128
@@ -77,6 +84,18 @@ class ModelConfig:
         assert 0.0 <= self.contrastive_weight <= 1.0, "contrastive_weight must be in [0, 1]"
         assert 0.0 < self.contrastive_temperature <= 1.0, "contrastive_temperature must be in (0, 1]"
 
+        # Matryoshka validation
+        if self.matryoshka_dims is not None:
+            assert len(self.matryoshka_dims) >= 2, "matryoshka_dims must have at least 2 levels"
+            assert self.matryoshka_dims[-1] == self.latent_dim, (
+                f"Last matryoshka_dim ({self.matryoshka_dims[-1]}) must equal latent_dim ({self.latent_dim})"
+            )
+            assert self.matryoshka_dims == tuple(sorted(self.matryoshka_dims)), (
+                "matryoshka_dims must be in ascending order"
+            )
+            assert all(d > 0 for d in self.matryoshka_dims), "All matryoshka_dims must be positive"
+            assert 0.0 <= self.full_dim_probability <= 1.0, "full_dim_probability must be in [0, 1]"
+
 
 @dataclass
 class TrainingConfig:
@@ -88,10 +107,17 @@ class TrainingConfig:
     warmup_ratio: float = 0.1
     max_grad_norm: float = 1.0
 
-    # Batch sizes (L40S 48GB - reduced for VAE + BoW memory overhead)
+    # Batch sizes for 2x L40S (48GB each)
+    # NOTE: Small batch_size=8 is intentional for VAE training due to:
+    # - Llama-8B model weights (~16GB)
+    # - LoRA adapter gradients
+    # - VAE encoder/decoder overhead
+    # - BoW vocabulary logits (vocab_size * batch)
+    # - Contrastive learning similarity matrices
+    # Profile with larger values if VRAM allows
     per_device_batch_size: int = 8
     gradient_accumulation_steps: int = 12
-    # Effective batch = 8 * 12 = 96 (single GPU)
+    # Effective batch = 8 * 12 * 2 GPUs = 192
 
     # Training duration
     num_epochs: int = 10

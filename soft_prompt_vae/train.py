@@ -130,19 +130,15 @@ def train_epoch(
             # Monitor for collapse and apply adaptive interventions
             if collapse_monitor is not None and intervention_scheduler is not None:
                 collapse_metrics = collapse_monitor.update(
-                    output.mu, output.logvar, output.mu_augmented
+                    output.mu, output.logvar, output.mu_augmented,
+                    active_matryoshka_dim=output.active_matryoshka_dim,
                 )
-                if collapse_metrics.is_collapsing:
-                    intervention = intervention_scheduler.intervene(collapse_metrics)
-                    # Update loss function weights dynamically
-                    loss_fn.bow_loss_weight = intervention["bow_weight"]
-                    loss_fn.contrastive_weight = intervention["contrastive_weight"]
-                    # Update model word dropout rate
-                    unwrapped = accelerator.unwrap_model(model)
-                    unwrapped.config.word_dropout_rate = intervention["word_dropout"]
-                else:
-                    # Gradually relax back to initial values
-                    intervention_scheduler.intervene(collapse_metrics)
+                # Always intervene - scheduler handles both escalation and relaxation
+                intervention = intervention_scheduler.intervene(collapse_metrics)
+                loss_fn.bow_loss_weight = intervention["bow_weight"]
+                loss_fn.contrastive_weight = intervention["contrastive_weight"]
+                unwrapped = accelerator.unwrap_model(model)
+                unwrapped.config.word_dropout_rate = intervention["word_dropout"]
 
             # Compute loss with annealing (includes BoW and contrastive if enabled)
             loss_output = loss_fn(
@@ -153,6 +149,7 @@ def train_epoch(
                 step=global_step,
                 bow_logits=output.bow_logits,
                 mu_augmented=output.mu_augmented,
+                active_matryoshka_dim=output.active_matryoshka_dim,
             )
 
             # Backward pass
@@ -188,27 +185,19 @@ def train_epoch(
 
         # Update progress bar
         if num_batches % 10 == 0:
-            avg_loss = total_loss / num_batches
-            avg_recon = total_recon / num_batches
-            avg_kl = total_kl / num_batches
             active_units, au_ratio, _ = au_counter.compute()
-
             postfix = {
-                "loss": f"{avg_loss:.4f}",
-                "recon": f"{avg_recon:.4f}",
-                "kl": f"{avg_kl:.4f}",
+                "loss": f"{total_loss / num_batches:.4f}",
+                "recon": f"{total_recon / num_batches:.4f}",
+                "kl": f"{total_kl / num_batches:.4f}",
                 "beta": f"{loss_output.beta:.3f}",
                 "AU": f"{active_units}",
                 "lr": f"{scheduler.get_last_lr()[0]:.2e}",
             }
-            # Add BoW to progress bar if enabled
             if loss_output.bow is not None:
-                avg_bow = total_bow / num_batches
-                postfix["bow"] = f"{avg_bow:.4f}"
-            # Add contrastive to progress bar if enabled
+                postfix["bow"] = f"{total_bow / num_batches:.4f}"
             if loss_output.contrastive is not None:
-                avg_contrastive = total_contrastive / num_batches
-                postfix["nce"] = f"{avg_contrastive:.4f}"
+                postfix["nce"] = f"{total_contrastive / num_batches:.4f}"
 
             progress_bar.set_postfix(postfix)
 
@@ -242,6 +231,9 @@ def train_epoch(
                 log_dict["intervention/bow_weight"] = status["bow_weight"]
                 log_dict["intervention/contrastive_weight"] = status["contrastive_weight"]
                 log_dict["intervention/word_dropout"] = status["word_dropout"]
+            # Add Matryoshka active dimension if enabled
+            if output.active_matryoshka_dim is not None:
+                log_dict["matryoshka/active_dim"] = output.active_matryoshka_dim
 
             accelerator.log(log_dict, step=global_step)
 
@@ -309,16 +301,88 @@ def load_checkpoint(
     optimizer=None,
     scheduler=None,
 ) -> tuple:
-    """Load training checkpoint."""
-    checkpoint = torch.load(checkpoint_path / "checkpoint.pt", weights_only=False)
+    """Load training checkpoint with validation.
 
-    model.load_state_dict(checkpoint["model_state_dict"])
+    Args:
+        checkpoint_path: Path to checkpoint directory
+        model: Model to load weights into
+        optimizer: Optional optimizer to restore state
+        scheduler: Optional scheduler to restore state
 
-    if optimizer:
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    if scheduler:
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    Returns:
+        Tuple of (epoch, global_step)
 
+    Raises:
+        RuntimeError: If checkpoint is invalid or incompatible
+    """
+    checkpoint_file = checkpoint_path / "checkpoint.pt"
+
+    try:
+        # Use weights_only=True for security when possible
+        # Fall back to weights_only=False only for legacy checkpoints
+        try:
+            checkpoint = torch.load(checkpoint_file, weights_only=True)
+        except Exception:
+            logger.warning(
+                f"Loading checkpoint with weights_only=False (legacy format). "
+                f"Future checkpoints will use safer format."
+            )
+            checkpoint = torch.load(checkpoint_file, weights_only=False)
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"Checkpoint not found: {checkpoint_file}. "
+            f"Check that the path is correct."
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load checkpoint from {checkpoint_file}: {e}. "
+            f"Checkpoint may be corrupted."
+        ) from e
+
+    # Validate required keys
+    required_keys = ["model_state_dict", "epoch", "global_step"]
+    missing_keys = [k for k in required_keys if k not in checkpoint]
+    if missing_keys:
+        raise RuntimeError(
+            f"Invalid checkpoint - missing keys: {missing_keys}. "
+            f"Checkpoint may be from an older version."
+        )
+
+    # Load model state with compatibility check
+    try:
+        incompatible = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+        if incompatible.missing_keys:
+            logger.warning(
+                f"Checkpoint missing model keys (will be randomly initialized): "
+                f"{incompatible.missing_keys[:5]}{'...' if len(incompatible.missing_keys) > 5 else ''}"
+            )
+        if incompatible.unexpected_keys:
+            logger.warning(
+                f"Checkpoint has extra keys (will be ignored): "
+                f"{incompatible.unexpected_keys[:5]}{'...' if len(incompatible.unexpected_keys) > 5 else ''}"
+            )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load model weights: {e}. "
+            f"Model architecture may have changed."
+        ) from e
+
+    # Load optimizer/scheduler (non-fatal if fails)
+    if optimizer and "optimizer_state_dict" in checkpoint:
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        except Exception as e:
+            logger.warning(f"Could not restore optimizer state: {e}. Starting fresh.")
+
+    if scheduler and "scheduler_state_dict" in checkpoint:
+        try:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        except Exception as e:
+            logger.warning(f"Could not restore scheduler state: {e}. Starting fresh.")
+
+    logger.info(
+        f"Loaded checkpoint: epoch={checkpoint['epoch']}, step={checkpoint['global_step']}"
+    )
     return checkpoint["epoch"], checkpoint["global_step"]
 
 
@@ -393,6 +457,18 @@ def main():
         action="store_true",
         help="Enable memory-efficient mode: batch_size=4, disable augmentation, disable contrastive",
     )
+    parser.add_argument(
+        "--matryoshka-dims",
+        type=str,
+        default=None,
+        help="Matryoshka nested dimensions as comma-separated values (e.g., '16,32,64')",
+    )
+    parser.add_argument(
+        "--full-dim-probability",
+        type=float,
+        default=0.33,
+        help="Probability of using full dimension during Matryoshka training (default: 0.33)",
+    )
 
     args = parser.parse_args()
 
@@ -410,6 +486,12 @@ def main():
         config.training.gradient_accumulation_steps = args.gradient_accumulation
     if args.no_deep_prefix:
         config.model.use_deep_prefix = False
+    if args.matryoshka_dims:
+        # Parse comma-separated dimensions (e.g., "16,32,64")
+        dims = tuple(int(d.strip()) for d in args.matryoshka_dims.split(","))
+        config.model.matryoshka_dims = dims
+        config.model.full_dim_probability = args.full_dim_probability
+        logger.info(f"Matryoshka enabled: dims={dims}, full_dim_prob={args.full_dim_probability}")
 
     # Memory-efficient mode: reduce memory usage at cost of training quality
     if args.memory_efficient:
@@ -622,13 +704,26 @@ def main():
             )
 
     except KeyboardInterrupt:
-        logger.info("Training interrupted")
+        logger.info(
+            f"Training interrupted by user at epoch {epoch}, step {global_step}. "
+            f"Saving checkpoint..."
+        )
+    except Exception as e:
+        logger.error(
+            f"Training failed at epoch {epoch}, step {global_step}: {e}",
+            exc_info=True
+        )
+        raise
 
     finally:
         # Save final checkpoint
-        save_checkpoint(
-            model, optimizer, scheduler, epoch, global_step, config, accelerator
-        )
+        try:
+            save_checkpoint(
+                model, optimizer, scheduler, epoch, global_step, config, accelerator
+            )
+            logger.info(f"Final checkpoint saved at epoch {epoch}, step {global_step}")
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to save final checkpoint: {e}")
         accelerator.end_training()
 
     logger.info("Training complete!")

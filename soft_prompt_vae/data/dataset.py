@@ -65,7 +65,14 @@ class InstructionDataset(IterableDataset):
         self.deduplicator = create_deduplicator(config)
 
     def _load_and_convert(self) -> Iterator[InstructionResponse]:
-        """Load datasets and convert to unified format."""
+        """Load datasets and convert to unified format.
+
+        Raises:
+            RuntimeError: If all datasets fail to load (training cannot proceed)
+        """
+        successful_datasets = 0
+        failed_datasets = []
+
         for dataset_name in self.dataset_names:
             logger.info(f"Loading dataset: {dataset_name}")
             try:
@@ -73,13 +80,31 @@ class InstructionDataset(IterableDataset):
                     dataset_name,
                     split=self.split,
                     streaming=True,
-                                    )
-
+                )
                 yield from convert_to_instruction_response(dataset, dataset_name)
+                successful_datasets += 1
 
             except Exception as e:
-                logger.error(f"Failed to load {dataset_name}: {e}")
+                logger.error(
+                    f"FAILED to load dataset {dataset_name}: {e}. "
+                    f"This dataset will be SKIPPED."
+                )
+                failed_datasets.append(dataset_name)
                 continue
+
+        # Warn if any datasets failed
+        if failed_datasets:
+            logger.warning(
+                f"Dataset loading summary: {successful_datasets} succeeded, "
+                f"{len(failed_datasets)} failed: {failed_datasets}"
+            )
+
+        # Fail if ALL datasets failed
+        if successful_datasets == 0 and failed_datasets:
+            raise RuntimeError(
+                f"All datasets failed to load: {failed_datasets}. "
+                f"Training cannot proceed without data."
+            )
 
     def _shard_data(
         self, data: Iterator[InstructionResponse]
@@ -137,7 +162,15 @@ class PreprocessedDataset(Dataset):
 
     def _load_tensor_data(self) -> None:
         """Load preprocessed tensor data."""
-        data = torch.load(self.data_path, weights_only=False)
+        try:
+            # Try secure loading first
+            data = torch.load(self.data_path, weights_only=True)
+        except Exception:
+            # Fall back for legacy format
+            logger.warning(
+                f"Loading {self.data_path} with weights_only=False (legacy format)"
+            )
+            data = torch.load(self.data_path, weights_only=False)
 
         self.instruction_ids = data["instruction_ids"]
         self.instruction_attention_mask = data["instruction_attention_mask"]

@@ -126,6 +126,7 @@ class CollapseMonitor:
         mu: Tensor,
         logvar: Tensor,
         mu_augmented: Optional[Tensor] = None,
+        active_matryoshka_dim: Optional[int] = None,
     ) -> CollapseMetrics:
         """Update statistics and compute collapse metrics.
 
@@ -133,6 +134,7 @@ class CollapseMonitor:
             mu: Latent means (batch, latent_dim)
             logvar: Latent log variances (batch, latent_dim)
             mu_augmented: Augmented latent means for MI estimate (batch, latent_dim)
+            active_matryoshka_dim: Active Matryoshka dimension for AU computation (None = use full dim)
 
         Returns:
             CollapseMetrics with current health assessment
@@ -165,19 +167,31 @@ class CollapseMonitor:
         variance = (self._mu_sq_sum / self._count) - (mean ** 2)
         variance = torch.clamp(variance, min=0)  # Numerical safety
 
-        # Active Units: dimensions with variance > threshold
-        cfg = self.config
-        active_mask = variance > cfg.au_variance_threshold
-        active_units = active_mask.sum().item()
-        au_ratio = active_units / self.latent_dim
+        # Determine effective latent dimension for AU computation
+        # When Matryoshka is enabled, only count active dimensions
+        effective_dim = active_matryoshka_dim if active_matryoshka_dim else self.latent_dim
 
-        # Compute mean KL per dimension
+        # Active Units: dimensions with variance > threshold (within active dims only)
+        cfg = self.config
+        active_variance = variance[:effective_dim]  # Only consider active dimensions
+        active_mask = active_variance > cfg.au_variance_threshold
+        active_units = active_mask.sum().item()
+        au_ratio = active_units / effective_dim
+
+        # Compute mean KL per dimension (only for active dimensions)
         # KL = 0.5 * (mu^2 + exp(logvar) - 1 - logvar)
         kl_per_dim = 0.5 * (mu.pow(2) + logvar.exp() - 1 - logvar)
-        mean_kl = kl_per_dim.mean().item()
+        # Only average over active dimensions for meaningful KL
+        mean_kl = kl_per_dim[:, :effective_dim].mean().item()
 
         # Estimate Mutual Information using InfoNCE bound
-        mi_estimate = self._estimate_mutual_info(mu, mu_augmented)
+        # For MI estimation, we use only active dimensions for fair comparison
+        if active_matryoshka_dim:
+            mu_active = mu[:, :effective_dim]
+            mu_aug_active = mu_augmented[:, :effective_dim] if mu_augmented is not None else None
+            mi_estimate = self._estimate_mutual_info(mu_active, mu_aug_active)
+        else:
+            mi_estimate = self._estimate_mutual_info(mu, mu_augmented)
 
         # Update histories
         self._au_history.append(au_ratio)
@@ -327,8 +341,10 @@ class CollapseMonitor:
             recent = list(history)
             start_avg = sum(recent[:5]) / 5
             end_avg = sum(recent[-5:]) / 5
-            if start_avg == 0:
-                return 0.0
+            # Guard against division by near-zero (numerical stability)
+            if abs(start_avg) < 1e-8:
+                # If start is ~0, return binary indicator: 1.0 if end changed, else 0.0
+                return 1.0 if abs(end_avg) >= 1e-8 else 0.0
             return (end_avg - start_avg) / start_avg
 
         return {

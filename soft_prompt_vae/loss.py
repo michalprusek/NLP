@@ -194,7 +194,12 @@ class InfoNCELoss(nn.Module):
 
     def _get_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Get or create cached diagonal mask."""
-        if self._cached_mask is None or self._cached_batch_size != batch_size or self._cached_mask.device != device:
+        needs_update = (
+            self._cached_mask is None
+            or self._cached_batch_size != batch_size
+            or self._cached_mask.device != device
+        )
+        if needs_update:
             self._cached_mask = torch.eye(batch_size, device=device, dtype=torch.bool)
             self._cached_batch_size = batch_size
         return self._cached_mask
@@ -222,7 +227,8 @@ class InfoNCELoss(nn.Module):
 
         if batch_size < 2:
             # Need at least 2 samples for contrastive learning
-            return torch.tensor(0.0, device=z_anchor.device, requires_grad=True)
+            # Return zero loss without gradient (no computation needed)
+            return torch.tensor(0.0, device=z_anchor.device)
 
         # Normalize if requested (fused with temperature scaling below)
         if self.normalize:
@@ -295,27 +301,44 @@ class MomentumQueue:
 
         Args:
             z: Latent vectors to add (batch, latent_dim)
+
+        Raises:
+            ValueError: If batch_size > queue_size or latent_dim mismatch
         """
         batch_size = z.size(0)
+
+        # Validate inputs
+        if batch_size > self.queue_size:
+            raise ValueError(
+                f"Batch size ({batch_size}) exceeds queue size ({self.queue_size}). "
+                f"Increase queue_size or reduce batch_size."
+            )
+        if z.size(1) != self.latent_dim:
+            raise ValueError(
+                f"Latent dimension mismatch: expected {self.latent_dim}, got {z.size(1)}"
+            )
+
         z_detached = z.detach().cpu()
 
         if self._queue is None:
-            # Initialize queue
             self._queue = torch.zeros(self.queue_size, self.latent_dim)
 
-        # Insert with wraparound
-        if self._ptr + batch_size <= self.queue_size:
-            self._queue[self._ptr : self._ptr + batch_size] = z_detached
-        else:
-            # Wraparound case
-            overflow = (self._ptr + batch_size) - self.queue_size
-            self._queue[self._ptr:] = z_detached[: self.queue_size - self._ptr]
-            self._queue[:overflow] = z_detached[self.queue_size - self._ptr :]
+        # Insert with wraparound using modulo indexing
+        end_ptr = self._ptr + batch_size
 
-        new_ptr = self._ptr + batch_size
-        if new_ptr >= self.queue_size:
-            self._filled = True  # Queue has wrapped around at least once
-        self._ptr = new_ptr % self.queue_size
+        if end_ptr <= self.queue_size:
+            # No wraparound needed
+            self._queue[self._ptr:end_ptr] = z_detached
+        else:
+            # Wraparound: split into two slices
+            first_chunk_size = self.queue_size - self._ptr
+            self._queue[self._ptr:] = z_detached[:first_chunk_size]
+            self._queue[:batch_size - first_chunk_size] = z_detached[first_chunk_size:]
+            self._filled = True
+
+        if end_ptr >= self.queue_size:
+            self._filled = True
+        self._ptr = end_ptr % self.queue_size
 
     def get_queue(self, device: torch.device) -> Optional[torch.Tensor]:
         """Get current queue contents.
@@ -448,6 +471,7 @@ class SoftPromptVAELoss(nn.Module):
         step: int,
         bow_logits: Optional[torch.Tensor] = None,
         mu_augmented: Optional[torch.Tensor] = None,
+        active_matryoshka_dim: Optional[int] = None,
     ) -> LossOutput:
         """Compute total loss.
 
@@ -459,6 +483,7 @@ class SoftPromptVAELoss(nn.Module):
             step: Current training step
             bow_logits: Bag-of-Words logits from z (batch, vocab_size), optional
             mu_augmented: Augmented latent means for contrastive loss (batch, latent_dim), optional
+            active_matryoshka_dim: Active Matryoshka dimension for KL scaling (None = use full dim)
 
         Returns:
             LossOutput with detailed breakdown
@@ -478,9 +503,11 @@ class SoftPromptVAELoss(nn.Module):
         # KL loss with free bits
         kl_loss, kl_raw, active_dims = self.free_bits(mu, logvar)
 
-        # Scale KL by latent dimension for comparable magnitude
-        latent_dim = mu.size(1)
-        kl_loss = kl_loss / latent_dim
+        # Scale KL by active dimension for comparable magnitude
+        # When Matryoshka is enabled, scale by active_dim (e.g., 16) not full latent_dim (64)
+        # This ensures KL contribution is consistent across different active dimensions
+        scale_dim = active_matryoshka_dim if active_matryoshka_dim else mu.size(1)
+        kl_loss = kl_loss / scale_dim
 
         # Get current beta
         beta = self.annealing.get_beta(step)
@@ -531,6 +558,7 @@ def compute_vae_loss(
     """
     # Get mu_augmented if available in output
     mu_augmented = getattr(output, "mu_augmented", None)
+    active_matryoshka_dim = getattr(output, "active_matryoshka_dim", None)
 
     return loss_fn(
         logits=output.logits,
@@ -540,4 +568,5 @@ def compute_vae_loss(
         step=step,
         bow_logits=output.bow_logits,
         mu_augmented=mu_augmented,
+        active_matryoshka_dim=active_matryoshka_dim,
     )

@@ -48,6 +48,9 @@ class VAEOutput:
     # Contrastive learning (CDP-VAE)
     mu_augmented: Optional[torch.Tensor] = None  # (batch, latent_dim) - augmented view for InfoNCE
 
+    # Matryoshka representation learning
+    active_matryoshka_dim: Optional[int] = None  # Currently active dimension (e.g., 16, 32, or 64)
+
 
 class AttentionPooling(nn.Module):
     """Learnable attention pooling over sequence dimension.
@@ -334,18 +337,13 @@ class DeepPrefixProjector(nn.Module):
 
         past_key_values = []
         for layer_idx in range(self.num_layers):
-            # Fused K+V projection
-            kv = self.kv_projections[layer_idx](shared)
-            kv = kv * self.layer_scales[layer_idx]
-
-            # Split and reshape
+            # Fused K+V projection with layer-specific scaling
+            kv = self.kv_projections[layer_idx](shared) * self.layer_scales[layer_idx]
             key, value = kv.chunk(2, dim=-1)
 
-            key = key.view(batch_size, self.prefix_len, self.num_heads, self.head_dim)
-            key = key.permute(0, 2, 1, 3).contiguous()
-
-            value = value.view(batch_size, self.prefix_len, self.num_heads, self.head_dim)
-            value = value.permute(0, 2, 1, 3).contiguous()
+            # Reshape to (batch, num_heads, prefix_len, head_dim)
+            key = key.view(batch_size, self.prefix_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+            value = value.view(batch_size, self.prefix_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
 
             past_key_values.append((key, value))
 
@@ -440,10 +438,24 @@ class LlamaSoftPromptVAE(nn.Module):
                 "Ensure you have sufficient VRAM (~48GB+ for Llama-8B)."
             )
 
+        # Matryoshka masker for hierarchical latent dimensions
+        self.matryoshka_masker = None
+        if config.matryoshka_dims is not None:
+            from soft_prompt_vae.matryoshka import MatryoshkaMasker
+            self.matryoshka_masker = MatryoshkaMasker(
+                nested_dims=config.matryoshka_dims,
+                full_dim_probability=config.full_dim_probability,
+            )
+            logger.info(
+                f"Matryoshka masker enabled: dims={config.matryoshka_dims}, "
+                f"full_dim_prob={config.full_dim_probability}"
+            )
+
         logger.info(
             f"VAE initialized: latent_dim={config.latent_dim}, "
             f"num_soft_tokens={config.num_soft_tokens}, dtype={model_dtype}, "
-            f"bow_head=True, deep_prefix={config.use_deep_prefix}"
+            f"bow_head=True, deep_prefix={config.use_deep_prefix}, "
+            f"matryoshka={config.matryoshka_dims is not None}"
         )
 
     def _apply_lora(self) -> None:
@@ -473,17 +485,20 @@ class LlamaSoftPromptVAE(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        force_matryoshka_dim: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[int]]:
         """Encode instruction to latent distribution.
 
         Args:
             input_ids: Instruction token IDs (batch, seq_len)
             attention_mask: Attention mask (batch, seq_len)
+            force_matryoshka_dim: Force a specific Matryoshka dimension (None = random during training)
 
         Returns:
             z: Sampled latent (batch, latent_dim)
             mu: Mean (batch, latent_dim)
             logvar: Log variance (batch, latent_dim)
+            active_dim: Active Matryoshka dimension (None if Matryoshka disabled)
         """
         # Get Llama hidden states
         # For PEFT models, access the underlying transformer model
@@ -504,10 +519,22 @@ class LlamaSoftPromptVAE(nn.Module):
         # Encode to latent distribution
         mu, logvar = self.variational_encoder(pooled)
 
-        # Sample z
+        # Apply Matryoshka masking if enabled
+        active_dim = None
+        if self.matryoshka_masker is not None:
+            matryoshka_out = self.matryoshka_masker(
+                mu, logvar,
+                training=self.training,
+                force_dim=force_matryoshka_dim,
+            )
+            mu = matryoshka_out.mu_masked
+            logvar = matryoshka_out.logvar_masked
+            active_dim = matryoshka_out.active_dim
+
+        # Sample z (using potentially masked mu/logvar)
         z = self.variational_encoder.reparameterize(mu, logvar, self.training)
 
-        return z, mu, logvar
+        return z, mu, logvar, active_dim
 
     def encode_with_augmentation(
         self,
@@ -515,47 +542,36 @@ class LlamaSoftPromptVAE(nn.Module):
         attention_mask: torch.Tensor,
         augmenter: Optional["TextAugmenter"] = None,
         augmentation_prob: float = 0.5,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[int]]:
         """Encode with optional augmentation for contrastive learning.
-
-        Creates two views of the input for InfoNCE loss:
-        1. Original encoding (z, mu, logvar)
-        2. Augmented encoding (mu_augmented) using text augmentation
-
-        Memory optimization: Only computes augmented encoding with probability
-        `augmentation_prob` to reduce forward passes (augmented encoding requires
-        a full encoder forward pass).
 
         Args:
             input_ids: Instruction token IDs (batch, seq_len)
             attention_mask: Attention mask (batch, seq_len)
             augmenter: Optional TextAugmenter instance for creating positive pairs
-            augmentation_prob: Probability of computing augmented encoding (0.5 = 50% of steps)
+            augmentation_prob: Probability of computing augmented encoding
 
         Returns:
             z: Sampled latent (batch, latent_dim)
             mu: Mean (batch, latent_dim)
             logvar: Log variance (batch, latent_dim)
             mu_augmented: Augmented mean (batch, latent_dim) or None
+            active_dim: Active Matryoshka dimension (None if Matryoshka disabled)
         """
-        # Encode original input
-        z, mu, logvar = self.encode(input_ids, attention_mask)
+        z, mu, logvar, active_dim = self.encode(input_ids, attention_mask)
 
-        # Create augmented view for contrastive learning (probabilistically)
         mu_augmented = None
-        if self.training and augmenter is not None:
-            # Only compute augmented encoding with given probability (memory optimization)
-            if torch.rand(1).item() < augmentation_prob:
-                aug_ids, aug_mask = augmenter.augment(input_ids, attention_mask)
+        if self.training and augmenter is not None and torch.rand(1).item() < augmentation_prob:
+            aug_ids, aug_mask = augmenter.augment(input_ids, attention_mask)
+            with torch.no_grad():
+                # IMPORTANT: Use same active_dim for augmented view to ensure
+                # contrastive learning compares like-with-like
+                _, mu_augmented, _, _ = self.encode(
+                    aug_ids, aug_mask,
+                    force_matryoshka_dim=active_dim,
+                )
 
-                # Encode augmented view without gradients (memory optimization)
-                with torch.no_grad():
-                    _, mu_aug, _ = self.encode(aug_ids, aug_mask)
-
-                # Detach but keep on same device for loss computation
-                mu_augmented = mu_aug.detach()
-
-        return z, mu, logvar, mu_augmented
+        return z, mu, logvar, mu_augmented, active_dim
 
     def apply_word_dropout(
         self,
@@ -564,9 +580,6 @@ class LlamaSoftPromptVAE(nn.Module):
         dropout_rate: float,
     ) -> torch.Tensor:
         """Apply word dropout to input tokens during training.
-
-        Randomly replaces tokens with UNK (pad_token_id) to force decoder
-        to rely on latent representation instead of autoregressive context.
 
         Args:
             input_ids: Input token IDs (batch, seq_len)
@@ -579,19 +592,13 @@ class LlamaSoftPromptVAE(nn.Module):
         if not self.training or dropout_rate <= 0:
             return input_ids
 
-        # Create dropout mask (1 = keep, 0 = drop)
         dropout_mask = torch.bernoulli(
             torch.full_like(input_ids, 1.0 - dropout_rate, dtype=torch.float)
         ).bool()
+        dropout_mask[:, 0] = True  # Preserve BOS token
 
-        # Never drop the first token (BOS) - keep at least some context
-        dropout_mask[:, 0] = True
-
-        # Replace dropped tokens with pad_token_id (acts as UNK)
         pad_token_id = self.llama.config.pad_token_id or 0
-        dropped_ids = torch.where(dropout_mask, input_ids, pad_token_id)
-
-        return dropped_ids
+        return torch.where(dropout_mask, input_ids, pad_token_id)
 
     def decode(
         self,
@@ -625,32 +632,27 @@ class LlamaSoftPromptVAE(nn.Module):
         embed_tokens = self.llama.base_model.model.model.embed_tokens
         target_embeds = embed_tokens(target_ids)
 
+        # Create prefix mask (used by both modes)
+        prefix_mask = torch.ones(
+            batch_size, self.config.num_soft_tokens,
+            dtype=target_attention_mask.dtype,
+            device=target_attention_mask.device,
+        )
+        full_attention_mask = torch.cat([prefix_mask, target_attention_mask], dim=1)
+
         if self.deep_prefix_projector is not None:
             # Deep Prefix Mode: Inject z into attention layers via past_key_values
             past_key_values_tuple = self.deep_prefix_projector(z)
-
-            # Wrap in DynamicCache for transformers >=4.36 compatibility
             cache = DynamicCache()
             for layer_idx, (key, value) in enumerate(past_key_values_tuple):
                 cache.update(key, value, layer_idx)
 
-            # Extend attention mask for prefix positions
-            prefix_mask = torch.ones(
-                batch_size, self.config.num_soft_tokens,
-                dtype=target_attention_mask.dtype,
-                device=target_attention_mask.device,
-            )
-            full_attention_mask = torch.cat([prefix_mask, target_attention_mask], dim=1)
-
-            # Forward with past_key_values (no soft prompt concatenation needed)
             outputs = self.llama(
                 inputs_embeds=target_embeds,
                 attention_mask=full_attention_mask,
                 past_key_values=cache,
                 return_dict=True,
             )
-
-            # All logits correspond to target positions (no prefix in input)
             logits = outputs.logits
 
         else:
@@ -658,23 +660,11 @@ class LlamaSoftPromptVAE(nn.Module):
             soft_prompts = self.soft_prompt_projector(z)
             inputs_embeds = torch.cat([soft_prompts, target_embeds], dim=1)
 
-            # Create attention mask for concatenated sequence
-            soft_prompt_mask = torch.ones(
-                batch_size, self.config.num_soft_tokens,
-                dtype=target_attention_mask.dtype,
-                device=target_attention_mask.device,
-            )
-            full_attention_mask = torch.cat(
-                [soft_prompt_mask, target_attention_mask], dim=1
-            )
-
-            # Forward through Llama
             outputs = self.llama(
                 inputs_embeds=inputs_embeds,
                 attention_mask=full_attention_mask,
                 return_dict=True,
             )
-
             # Extract logits for target positions (skip soft prompt positions)
             logits = outputs.logits[:, self.config.num_soft_tokens:, :]
 
@@ -703,7 +693,7 @@ class LlamaSoftPromptVAE(nn.Module):
             VAEOutput with logits, loss, latent info, bow_logits, and mu_augmented
         """
         # Encode instruction to latent (with optional augmentation for contrastive loss)
-        z, mu, logvar, mu_augmented = self.encode_with_augmentation(
+        z, mu, logvar, mu_augmented, active_matryoshka_dim = self.encode_with_augmentation(
             instruction_ids, instruction_attention_mask, augmenter,
             augmentation_prob=self.config.augmentation_probability,
         )
@@ -750,6 +740,7 @@ class LlamaSoftPromptVAE(nn.Module):
             recon_loss=recon_loss,
             bow_logits=bow_logits,
             mu_augmented=mu_augmented,
+            active_matryoshka_dim=active_matryoshka_dim,
         )
 
     def generate(

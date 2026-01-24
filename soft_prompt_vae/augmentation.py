@@ -207,7 +207,7 @@ class TextAugmenter:
             (dropped_ids, attention_mask) - mask unchanged since tokens not removed
         """
         if self.config.word_dropout_rate <= 0:
-            return input_ids, attention_mask  # No clone needed if no-op
+            return input_ids.clone(), attention_mask.clone()  # Clone for consistency
 
         cfg = self.config
 

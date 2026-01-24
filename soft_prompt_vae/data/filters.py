@@ -30,7 +30,12 @@ class FilterStats:
 
     def __str__(self) -> str:
         if self.total == 0:
-            return "No samples processed"
+            return (
+                "No samples processed - possible causes: "
+                "(1) empty input dataset, "
+                "(2) upstream loading failure, "
+                "(3) all samples filtered by previous stage"
+            )
         pass_rate = 100 * self.passed / self.total
         return (
             f"Total: {self.total}, Passed: {self.passed} ({pass_rate:.1f}%), "
@@ -94,13 +99,33 @@ class LanguageFilter:
             try:
                 import fasttext
 
-                # Suppress FastText warnings
+                # Suppress FastText warnings (non-critical)
                 fasttext.FastText.eprint = lambda x: None
                 self._model = fasttext.load_model(str(self._model_path))
                 logger.info(f"Loaded FastText model from {self._model_path}")
+            except ImportError as e:
+                logger.error(
+                    f"FastText not installed: {e}. "
+                    f"Install with: pip install fasttext-wheel"
+                )
+                logger.warning(
+                    "Language filtering DISABLED - non-English samples may be included"
+                )
+                self._model = "disabled"
+            except FileNotFoundError:
+                logger.error(
+                    f"FastText model not found at {self._model_path}. "
+                    f"Download with: wget https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
+                )
+                logger.warning(
+                    "Language filtering DISABLED - non-English samples may be included"
+                )
+                self._model = "disabled"
             except Exception as e:
-                logger.warning(f"Could not load FastText model: {e}")
-                logger.warning("Language filtering will be skipped")
+                logger.error(f"Failed to load FastText model: {e}")
+                logger.warning(
+                    "Language filtering DISABLED - non-English samples may be included"
+                )
                 self._model = "disabled"
         return self._model
 
@@ -124,9 +149,12 @@ class LanguageFilter:
 
             return label == self.language and confidence >= self.threshold
         except (ValueError, RuntimeError) as e:
-            # FastText can fail on unusual inputs; log and pass through
-            logger.debug(f"FastText prediction failed: {e}")
-            return True  # Pass through on errors
+            # FastText can fail on unusual inputs; log at WARNING level and pass through
+            logger.warning(
+                f"FastText prediction failed (text len={len(text)}): {e}. "
+                f"Sample will be INCLUDED in training."
+            )
+            return True
 
 
 class QualityFilter:
@@ -147,22 +175,19 @@ class QualityFilter:
     def __call__(self, item: InstructionResponse) -> bool:
         """Check if item passes quality filter."""
         for text in [item.instruction, item.response]:
-            # Check for control characters
             if self.CONTROL_CHAR_PATTERN.search(text):
                 return False
 
-            # Check for repeated characters
             if self.REPEATED_CHAR_PATTERN.search(text):
                 return False
 
-            # Check for repeated words
             if self.REPEATED_WORD_PATTERN.search(text):
                 return False
 
-            # Check special character ratio
+            # Check special character ratio (reject if >30% special chars)
             if text:
-                alnum_count = sum(c.isalnum() or c.isspace() for c in text)
-                if alnum_count / len(text) < (1 - self.SPECIAL_CHAR_THRESHOLD):
+                normal_char_ratio = sum(c.isalnum() or c.isspace() for c in text) / len(text)
+                if normal_char_ratio < (1 - self.SPECIAL_CHAR_THRESHOLD):
                     return False
 
         return True

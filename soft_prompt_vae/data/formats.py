@@ -274,7 +274,14 @@ def convert_to_instruction_response(
         else:
             failed += 1
 
-    logger.info(
-        f"Dataset {dataset_name}: converted {converted}, failed {failed} "
-        f"({100 * converted / (converted + failed):.1f}% success)"
-    )
+    total = converted + failed
+    if total == 0:
+        logger.warning(
+            f"Dataset {dataset_name}: No examples processed. "
+            f"Check if dataset is empty or format detection failed."
+        )
+    else:
+        logger.info(
+            f"Dataset {dataset_name}: converted {converted}, failed {failed} "
+            f"({100 * converted / total:.1f}% success)"
+        )
