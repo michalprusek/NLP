@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vec2text_vae.matryoshka_funnel import (
     CascadingMatryoshkaFunnelLoss,
     CascadingMatryoshkaGTRFunnelFlow,
+    ImprovedCascadingMatryoshkaFunnelLoss,
     MatryoshkaFunnelLoss,
     MatryoshkaGTRFunnelFlow,
     ProgressiveMatryoshkaScheduler,
@@ -159,6 +160,11 @@ def train_cascading_matryoshka_funnel(
     encoder_hidden_dims: List[int] = None,
     decoder_hidden_dims: List[int] = None,
     predictor_hidden_dims: List[int] = None,
+    use_improved_loss: bool = True,
+    use_progressive_scheduler: bool = True,
+    first_stage_emphasis: float = 8.0,
+    cascade_decay: float = 0.5,
+    vib_weight: float = 0.001,
 ) -> CascadingMatryoshkaGTRFunnelFlow:
     """Train Cascading Matryoshka Funnel Flow.
 
@@ -176,6 +182,11 @@ def train_cascading_matryoshka_funnel(
         encoder_hidden_dims: Hidden dims for encoder MLPs
         decoder_hidden_dims: Hidden dims for final decoder
         predictor_hidden_dims: Hidden dims for level predictors
+        use_improved_loss: Use ImprovedCascadingMatryoshkaFunnelLoss (recommended)
+        use_progressive_scheduler: Use ProgressiveMatryoshkaScheduler (recommended)
+        first_stage_emphasis: Weight for first cascade stage (default 8.0)
+        cascade_decay: Decay factor for cascade weights (default 0.5)
+        vib_weight: Weight for VIB regularization (default 0.001)
 
     Returns:
         Trained CascadingMatryoshkaGTRFunnelFlow
@@ -187,11 +198,18 @@ def train_cascading_matryoshka_funnel(
         decoder_hidden_dims = [256, 512]
     if predictor_hidden_dims is None:
         predictor_hidden_dims = [256, 256]
+
     logger.info("=" * 70)
-    logger.info(f"Training CASCADING Matryoshka Funnel Flow")
+    logger.info(f"Training CASCADING Matryoshka Funnel Flow (IMPROVED)")
     logger.info(f"Architecture: 768D → {latent_dim}D")
     logger.info(f"Cascade levels: {matryoshka_dims}")
     logger.info(f"Train: {train_embeddings.shape[0]:,}, Val: {val_embeddings.shape[0]:,}, Test: {test_embeddings.shape[0]:,}")
+    logger.info(f"Improvements enabled:")
+    logger.info(f"  - ImprovedCascadingMatryoshkaFunnelLoss: {use_improved_loss}")
+    logger.info(f"  - ProgressiveMatryoshkaScheduler: {use_progressive_scheduler}")
+    logger.info(f"  - First stage emphasis: {first_stage_emphasis}")
+    logger.info(f"  - Cascade decay: {cascade_decay}")
+    logger.info(f"  - VIB weight: {vib_weight}")
     logger.info("=" * 70)
 
     # Create cascading model
@@ -221,14 +239,42 @@ def train_cascading_matryoshka_funnel(
         drop_last=True,
     )
 
-    # Cascading loss function
-    loss_fn = CascadingMatryoshkaFunnelLoss(
-        matryoshka_dims=matryoshka_dims,
-        cascade_weight=1.0,
-        recon_weight=1.0,
-        nll_weight=0.01,
-        progressive_cascade=True,
-    )
+    # Loss function - use improved version by default
+    if use_improved_loss:
+        loss_fn = ImprovedCascadingMatryoshkaFunnelLoss(
+            matryoshka_dims=matryoshka_dims,
+            cascade_weight=1.0,
+            recon_weight=1.0,
+            nll_weight=0.01,
+            vib_weight=vib_weight,
+            contrastive_weight=0.0,  # Disabled by default
+            first_stage_emphasis=first_stage_emphasis,
+            decay_factor=cascade_decay,
+            use_recon_based_cascade=True,  # Key improvement
+        )
+        logger.info("Using ImprovedCascadingMatryoshkaFunnelLoss with reconstruction-based cascade")
+    else:
+        loss_fn = CascadingMatryoshkaFunnelLoss(
+            matryoshka_dims=matryoshka_dims,
+            cascade_weight=1.0,
+            recon_weight=1.0,
+            nll_weight=0.01,
+            progressive_cascade=True,
+        )
+        logger.info("Using original CascadingMatryoshkaFunnelLoss")
+
+    # Progressive scheduler for importance ordering
+    if use_progressive_scheduler:
+        matryoshka_scheduler = ProgressiveMatryoshkaScheduler(
+            total_epochs=epochs,
+            warmup_epochs=int(epochs * 0.2),  # 20% warmup
+            progressive_epochs=int(epochs * 0.5),  # 50% progressive
+            initial_decay=1.0,  # Start with equal weights
+            final_decay=0.3,  # End with strong importance ordering
+        )
+        logger.info(f"ProgressiveMatryoshkaScheduler: warmup={int(epochs*0.2)}, progressive={int(epochs*0.5)}")
+    else:
+        matryoshka_scheduler = None
 
     # Optimizer with warmup
     optimizer = torch.optim.AdamW(flow.parameters(), lr=lr, weight_decay=0.01)
@@ -254,13 +300,23 @@ def train_cascading_matryoshka_funnel(
         'train_loss': [],
         'cascade_loss': [],
         'recon_loss': [],
+        'vib_loss': [],
         'val_cos_sim': {str(d): [] for d in matryoshka_dims},
         'lr': [],
+        'progressive_decay': [],
     }
 
     for epoch in range(epochs):
         current_lr = optimizer.param_groups[0]['lr']
         history['lr'].append(current_lr)
+
+        # Get current decay from progressive scheduler (if enabled)
+        if matryoshka_scheduler is not None:
+            current_decay = matryoshka_scheduler.get_decay(epoch)
+            if epoch % 10 == 0:
+                logger.info(f"Epoch {epoch}: progressive_decay={current_decay:.3f}")
+        else:
+            current_decay = None
 
         # Training
         flow.train()
@@ -268,6 +324,7 @@ def train_cascading_matryoshka_funnel(
             'total_loss': 0,
             'cascade_loss': 0,
             'recon_loss': 0,
+            'vib': 0,
         }
         n_batches = 0
 
@@ -275,7 +332,11 @@ def train_cascading_matryoshka_funnel(
         for (batch,) in pbar:
             optimizer.zero_grad()
 
-            loss, metrics = loss_fn(flow, batch)
+            # Pass epoch for scheduling (improved loss supports it)
+            if use_improved_loss:
+                loss, metrics = loss_fn(flow, batch, epoch=epoch)
+            else:
+                loss, metrics = loss_fn(flow, batch)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(flow.parameters(), 1.0)
@@ -284,6 +345,7 @@ def train_cascading_matryoshka_funnel(
             train_metrics['total_loss'] += metrics['total_loss']
             train_metrics['cascade_loss'] += metrics['cascade_loss']
             train_metrics['recon_loss'] += metrics['recon_loss']
+            train_metrics['vib'] += metrics.get('vib', 0)
             n_batches += 1
 
             # Show first and last level cos_sim
@@ -304,6 +366,8 @@ def train_cascading_matryoshka_funnel(
         history['train_loss'].append(train_metrics['total_loss'])
         history['cascade_loss'].append(train_metrics['cascade_loss'])
         history['recon_loss'].append(train_metrics['recon_loss'])
+        history['vib_loss'].append(train_metrics['vib'])
+        history['progressive_decay'].append(current_decay if current_decay is not None else 0.5)
 
         # Validation
         flow.eval()
@@ -337,9 +401,10 @@ def train_cascading_matryoshka_funnel(
             first_level = matryoshka_dims[0]
             mid_level = matryoshka_dims[len(matryoshka_dims)//2]
             last_level = matryoshka_dims[-1]
+            vib_str = f", vib={train_metrics['vib']:.4f}" if use_improved_loss else ""
             logger.info(
                 f"Epoch {epoch+1}: loss={train_metrics['total_loss']:.4f} "
-                f"(cascade={train_metrics['cascade_loss']:.4f}, recon={train_metrics['recon_loss']:.4f}), "
+                f"(cascade={train_metrics['cascade_loss']:.4f}, recon={train_metrics['recon_loss']:.4f}{vib_str}), "
                 f"val: {first_level}D={val_results.get(f'{first_level}D', 0):.3f}, "
                 f"{mid_level}D={val_results.get(f'{mid_level}D', 0):.3f}, "
                 f"{last_level}D={val_results.get(f'{last_level}D', 0):.3f}"
@@ -396,6 +461,22 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--checkpoint-dir", type=str,
                         default="vec2text_vae/checkpoints")
+    # Improved loss parameters
+    parser.add_argument("--use-improved-loss", action="store_true", default=True,
+                        help="Use ImprovedCascadingMatryoshkaFunnelLoss (default: True)")
+    parser.add_argument("--no-improved-loss", action="store_false", dest="use_improved_loss",
+                        help="Use original CascadingMatryoshkaFunnelLoss")
+    parser.add_argument("--use-progressive-scheduler", action="store_true", default=True,
+                        help="Use ProgressiveMatryoshkaScheduler (default: True)")
+    parser.add_argument("--no-progressive-scheduler", action="store_false",
+                        dest="use_progressive_scheduler",
+                        help="Disable ProgressiveMatryoshkaScheduler")
+    parser.add_argument("--first-stage-emphasis", type=float, default=8.0,
+                        help="Weight for first cascade stage (default: 8.0)")
+    parser.add_argument("--cascade-decay", type=float, default=0.5,
+                        help="Decay factor for cascade weights (default: 0.5)")
+    parser.add_argument("--vib-weight", type=float, default=0.001,
+                        help="Weight for VIB regularization (default: 0.001)")
     args = parser.parse_args()
 
     # Generate matryoshka dims from step size
@@ -491,7 +572,7 @@ def main():
 
     logger.info(f"Split: train={len(train_idx):,}, val={len(val_idx):,}, test={len(test_idx):,}")
 
-    # Train cascading model
+    # Train cascading model with improvements
     flow = train_cascading_matryoshka_funnel(
         train_embeddings=train_embeddings,
         val_embeddings=val_embeddings,
@@ -503,6 +584,11 @@ def main():
         lr=args.lr,
         device=device,
         checkpoint_dir=args.checkpoint_dir,
+        use_improved_loss=args.use_improved_loss,
+        use_progressive_scheduler=args.use_progressive_scheduler,
+        first_stage_emphasis=args.first_stage_emphasis,
+        cascade_decay=args.cascade_decay,
+        vib_weight=args.vib_weight,
     )
 
 

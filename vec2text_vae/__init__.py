@@ -3,15 +3,19 @@
 from vec2text_vae.matryoshka_funnel import (
     CascadingMatryoshkaGTRFunnelFlow,
     CascadingMatryoshkaFunnelLoss,
+    ImprovedCascadingMatryoshkaFunnelLoss,
     MatryoshkaGTRFunnelFlow,
     MatryoshkaFunnelLoss,
+    ProgressiveMatryoshkaScheduler,
     evaluate_matryoshka_reconstruction,
 )
 
 __all__ = [
     "CascadingMatryoshkaGTRFunnelFlow",
     "CascadingMatryoshkaFunnelLoss",
+    "ImprovedCascadingMatryoshkaFunnelLoss",
     "MatryoshkaGTRFunnelFlow",
     "MatryoshkaFunnelLoss",
+    "ProgressiveMatryoshkaScheduler",
     "evaluate_matryoshka_reconstruction",
 ]
