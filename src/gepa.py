@@ -1,8 +1,8 @@
 """
 GEPA: Genetic-Pareto Prompt Optimization
 
-Based on "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning"
-https://arxiv.org/abs/2507.19457
+Combines ideas from evolutionary algorithms with LLM-based reflection for prompt optimization.
+Inspired by OPRO, ProTeGi, and genetic algorithm approaches.
 
 Key innovations over OPRO/ProTeGi:
 1. Pareto selection - maintains non-dominated candidates balancing multiple metrics
@@ -23,10 +23,29 @@ from tqdm import tqdm
 from gsm8k_evaluator import extract_answer, extract_ground_truth, compare_answers
 
 
-# Load prompt templates
+# Load prompt templates with helpful error messages
 PROMPTS_DIR = Path(__file__).parent / 'prompts' / 'gsm8k'
-REFLECT_PROMPT_TEMPLATE = (PROMPTS_DIR / 'gepa_reflect.txt').read_text(encoding='utf-8')
-MUTATE_PROMPT_TEMPLATE = (PROMPTS_DIR / 'gepa_mutate.txt').read_text(encoding='utf-8')
+
+
+def _load_template(filename: str) -> str:
+    """Load a prompt template with helpful error messages."""
+    template_path = PROMPTS_DIR / filename
+    try:
+        return template_path.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Required prompt template not found: {template_path}\n"
+            f"Please ensure the file exists. Expected location: {PROMPTS_DIR}"
+        ) from None
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            f"Prompt template {template_path} has invalid encoding: {e}\n"
+            "Template files must be UTF-8 encoded."
+        ) from e
+
+
+REFLECT_PROMPT_TEMPLATE = _load_template('gepa_reflect.txt')
+MUTATE_PROMPT_TEMPLATE = _load_template('gepa_mutate.txt')
 
 
 @dataclass
@@ -43,7 +62,7 @@ class ReasoningTrace:
         status = "CORRECT" if self.is_correct else "INCORRECT"
         return f"""Question: {self.question}
 Expected Answer: {self.expected_answer}
-Model Response: {self.model_response[:500]}{'...' if len(self.model_response) > 500 else ''}
+Model Response: {self.model_response}
 Extracted Answer: {self.extracted_answer}
 Status: {status}
 """
@@ -72,7 +91,7 @@ class ScoredCandidate:
         return dominated_by_accuracy and dominated_by_length and strictly_better
 
     def __repr__(self):
-        return f"Accuracy: {self.accuracy:.1%} | Length: {self.avg_response_length:.0f} | Prompt: {self.prompt[:80]}..."
+        return f"Accuracy: {self.accuracy:.1%} | Length: {self.avg_response_length:.0f} | Prompt: {self.prompt}"
 
 
 @dataclass
@@ -206,6 +225,11 @@ class GEPA:
 
             total_length += len(response)
 
+        if not self.fixed_eval_set:
+            raise RuntimeError(
+                "Evaluation set is empty - cannot evaluate prompts. "
+                "Check that the GSM8K dataset loaded correctly."
+            )
         accuracy = correct / len(self.fixed_eval_set)
         avg_length = total_length / len(self.fixed_eval_set)
 
@@ -308,7 +332,7 @@ class GEPA:
         response = self.meta_llm.generate(mutate_prompt, max_new_tokens=self.meta_max_tokens * 2)
         self.meta_calls += 1
 
-        # Parse mutations
+        # Parse mutations with validation
         mutations = []
         for i in range(1, self.mutations_per_iteration + 1):
             pattern = rf'<prompt_{i}>(.*?)</prompt_{i}>'
@@ -317,6 +341,13 @@ class GEPA:
                 mutation = match.group(1).strip()
                 if mutation and len(mutation) > 20:
                     mutations.append(mutation)
+
+        if not mutations:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"No valid mutations parsed from LLM response. "
+                f"Response length: {len(response)}, expected {self.mutations_per_iteration} mutations."
+            )
 
         return mutations
 
@@ -351,7 +382,7 @@ class GEPA:
             self.update_pareto_front(candidate)
 
             if verbose:
-                print(f"Accuracy: {candidate.accuracy:.1%} | {prompt[:50]}...", flush=True)
+                print(f"Accuracy: {candidate.accuracy:.1%}", flush=True)
 
         iteration = 0
         while self.budget_used < self.total_budget:
@@ -390,7 +421,7 @@ class GEPA:
                 candidates_this_iter += 1
 
                 if verbose:
-                    print(f"  Candidate: {candidate.accuracy:.1%} | {mutation[:50]}...")
+                    print(f"  Candidate: {candidate.accuracy:.1%}")
 
             # Record iteration
             best_in_pareto = max(self.pareto_front, key=lambda c: c.accuracy)
@@ -412,6 +443,11 @@ class GEPA:
                 print(f"Best in Pareto front: {best_in_pareto.accuracy:.1%}")
 
         # Return best candidate
+        if not self.pareto_front:
+            raise RuntimeError(
+                "Pareto front is empty - no prompts were successfully evaluated. "
+                "Check LLM client connectivity and prompt format."
+            )
         best = max(self.pareto_front, key=lambda c: c.accuracy)
 
         if verbose:
@@ -451,6 +487,8 @@ class GEPA:
             if compare_answers(extracted, expected):
                 correct += 1
 
+        if not test_set:
+            raise RuntimeError("Test set is empty - cannot evaluate.")
         accuracy = correct / len(test_set)
 
         if verbose:
@@ -461,13 +499,19 @@ class GEPA:
         return accuracy
 
     def save_results(self, output_dir: str = "results") -> Tuple[str, str]:
-        """Save optimization results"""
+        """Save optimization results with error handling."""
         output_path = Path(output_dir)
-        output_path.mkdir(exist_ok=True)
+
+        try:
+            output_path.mkdir(exist_ok=True)
+        except PermissionError as e:
+            raise PermissionError(f"Cannot create output directory {output_path}: {e}") from e
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # Get best candidate
+        if not self.pareto_front:
+            raise RuntimeError("Pareto front is empty - nothing to save.")
         best = max(self.pareto_front, key=lambda c: c.accuracy)
 
         # Save JSON results
@@ -495,15 +539,39 @@ class GEPA:
         }
 
         json_path = output_path / f"gepa_{timestamp}.json"
-        with open(json_path, 'w') as f:
-            json.dump(results, f, indent=2)
-
-        # Save best prompt text
         txt_path = output_path / f"gepa_{timestamp}.txt"
-        with open(txt_path, 'w') as f:
-            f.write(f"# GEPA Best Prompt\n")
-            f.write(f"# Timestamp: {timestamp}\n")
-            f.write(f"# Accuracy: {best.accuracy:.2%}\n\n")
-            f.write(best.prompt)
+
+        try:
+            with open(json_path, 'w') as f:
+                json.dump(results, f, indent=2)
+        except (OSError, PermissionError) as e:
+            # Try fallback to home directory
+            fallback_json = Path.home() / f"gepa_backup_{timestamp}.json"
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Failed to save to {json_path}: {e}. Trying fallback: {fallback_json}"
+            )
+            with open(fallback_json, 'w') as f:
+                json.dump(results, f, indent=2)
+            json_path = fallback_json
+
+        try:
+            with open(txt_path, 'w') as f:
+                f.write(f"# GEPA Best Prompt\n")
+                f.write(f"# Timestamp: {timestamp}\n")
+                f.write(f"# Accuracy: {best.accuracy:.2%}\n\n")
+                f.write(best.prompt)
+        except (OSError, PermissionError) as e:
+            fallback_txt = Path.home() / f"gepa_backup_{timestamp}.txt"
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Failed to save to {txt_path}: {e}. Trying fallback: {fallback_txt}"
+            )
+            with open(fallback_txt, 'w') as f:
+                f.write(f"# GEPA Best Prompt\n")
+                f.write(f"# Timestamp: {timestamp}\n")
+                f.write(f"# Accuracy: {best.accuracy:.2%}\n\n")
+                f.write(best.prompt)
+            txt_path = fallback_txt
 
         return str(json_path), str(txt_path)

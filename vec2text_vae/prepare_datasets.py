@@ -252,18 +252,45 @@ def prepare_combined_dataset(
     """Download and combine all datasets for prompt optimization. Target: 2M instructions."""
 
     all_texts = []
+    failed_datasets = []
 
-    # Priority datasets - maximize CoT and reasoning
-    all_texts.extend(extract_openorca(500000))          # CoT reasoning (largest)
-    all_texts.extend(extract_wizardlm(196000))          # Complex instructions (full dataset)
-    all_texts.extend(extract_metamath(395000))          # Math reasoning (full dataset)
-    all_texts.extend(extract_flan(500000))              # Diverse NLP tasks
+    # Define datasets with their extractors and expected sizes
+    datasets = [
+        ("OpenOrca", lambda: extract_openorca(500000)),
+        ("WizardLM", lambda: extract_wizardlm(196000)),
+        ("MetaMath", lambda: extract_metamath(395000)),
+        ("FLAN", lambda: extract_flan(500000)),
+        ("UltraChat", lambda: extract_ultrachat(200000)),
+        ("ShareGPT", lambda: extract_sharegpt(90000)),
+        ("GSM8K", extract_gsm8k_cot),
+        ("CodeAlpaca", lambda: extract_code_alpaca(20000)),
+    ]
 
-    # Secondary datasets
-    all_texts.extend(extract_ultrachat(200000))         # Multi-turn dialogue
-    all_texts.extend(extract_sharegpt(90000))           # Real conversations (full)
-    all_texts.extend(extract_gsm8k_cot())               # Math CoT (~7.5k)
-    all_texts.extend(extract_code_alpaca(20000))        # Code instructions (full)
+    for name, extractor in datasets:
+        try:
+            texts = extractor()
+            if not texts:
+                logger.warning(f"{name}: returned empty (0 texts)")
+                failed_datasets.append((name, "empty result"))
+            else:
+                logger.info(f"{name}: loaded {len(texts)} texts")
+                all_texts.extend(texts)
+        except Exception as e:
+            logger.error(f"{name}: failed with {type(e).__name__}: {e}")
+            failed_datasets.append((name, str(e)))
+
+    # Check if too many datasets failed
+    if len(failed_datasets) > 3:
+        logger.error(
+            f"Too many dataset failures ({len(failed_datasets)}/{len(datasets)}): "
+            f"{[name for name, _ in failed_datasets]}"
+        )
+        raise RuntimeError(
+            f"Data preparation failed: {len(failed_datasets)} datasets failed to load. "
+            f"Check network connectivity and dataset availability."
+        )
+    elif failed_datasets:
+        logger.warning(f"Some datasets failed ({len(failed_datasets)}): {[name for name, _ in failed_datasets]}")
 
     logger.info(f"Total before dedup: {len(all_texts)} texts")
 

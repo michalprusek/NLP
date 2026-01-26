@@ -10,9 +10,9 @@ Architecture:
     → 4× AffineCoupling + Permutation (in 64D)
     → 64D importance-ordered latent (dim 0 > dim 1 > ... > dim 63)
 
-Key insight: Multi-level decoders learn p(z[k:64] | z[0:k]) for k ∈ {16, 32, 48},
-enabling reconstruction from partial latent prefixes with quality degradation
-proportional to the prefix size.
+Key insight: Multi-level decoders learn p(z[k:latent_dim] | z[0:k]) for each k
+in matryoshka_dims[:-1], enabling reconstruction from partial latent prefixes
+with quality degradation proportional to the prefix size.
 
 References:
     - Matryoshka Representation Learning (NeurIPS 2022): https://arxiv.org/abs/2205.13147

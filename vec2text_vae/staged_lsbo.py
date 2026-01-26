@@ -1,15 +1,17 @@
 """Staged Latent Space Bayesian Optimization (Staged LSBO).
 
 Implements ECI-BO style staged optimization for Matryoshka Funnel Flow latents.
-Instead of optimizing all 64 dimensions at once (which GPs struggle with),
-we decompose into 4 stages of 16 dimensions each.
+Instead of optimizing all dimensions at once (which GPs struggle with),
+we decompose into stages of 16 dimensions each.
 
-Stage 1: GP optimizes z[0:16], z[16:64]=0  → 50 trials (coarse search)
-Stage 2: Fix z[0:16], GP optimizes z[16:32], z[32:64]=0  → 40 trials
-Stage 3: Fix z[0:32], GP optimizes z[32:48], z[48:64]=0  → 30 trials
-Stage 4: Fix z[0:48], GP optimizes z[48:64]  → 20 trials
+Example with 64D latent (4 stages):
+    Stage 1: GP optimizes z[0:16], z[16:64]=0  → 50 trials (coarse search)
+    Stage 2: Fix z[0:16], GP optimizes z[16:32], z[32:64]=0  → 40 trials
+    Stage 3: Fix z[0:32], GP optimizes z[32:48], z[48:64]=0  → 30 trials
+    Stage 4: Fix z[0:48], GP optimizes z[48:64]  → 20 trials
+    Total: 140 evaluations
 
-Total: 140 evaluations, each stage is 16D (GP handles well!)
+For 128D latent (primary architecture), use 8 stages with ~225 total evaluations.
 
 References:
     - Expected Coordinate Improvement (2024): https://arxiv.org/abs/2404.11917
@@ -38,7 +40,10 @@ try:
     BOTORCH_AVAILABLE = True
 except ImportError:
     BOTORCH_AVAILABLE = False
-    logger.warning("BoTorch not available. Install with: pip install botorch")
+    logger.warning(
+        "BoTorch not available. Staged LSBO will not work. "
+        "Install with: pip install botorch gpytorch"
+    )
 
 
 # =============================================================================

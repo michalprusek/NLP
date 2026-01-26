@@ -464,9 +464,14 @@ def main():
         logger.info(f"Loaded {len(texts):,} texts")
         embeddings = get_vec2text_embeddings(texts, device)
 
-        # Cache for next time
-        logger.info(f"Caching embeddings to {embeddings_cache}...")
-        torch.save(embeddings, embeddings_cache)
+        # Cache for next time - use full cache path
+        try:
+            embeddings_cache_full.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Caching embeddings to {embeddings_cache_full}...")
+            torch.save(embeddings, embeddings_cache_full)
+            logger.info(f"Successfully cached {embeddings.shape[0]:,} embeddings")
+        except (OSError, PermissionError) as e:
+            logger.warning(f"Could not cache embeddings: {e}. Continuing without caching.")
 
     logger.info(f"Embeddings shape: {embeddings.shape}")
 
