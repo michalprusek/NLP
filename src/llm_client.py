@@ -19,6 +19,25 @@ class LLMClient(ABC):
         pass
 
 
+def _patch_vllm_platform():
+    """Patch vLLM platform detection when NVML is broken but CUDA works."""
+    import torch
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        # Force CUDA platform by monkey-patching before vLLM initializes
+        import vllm.platforms
+        from vllm.platforms.cuda import CudaPlatform
+
+        # Replace the current_platform with CudaPlatform
+        cuda_platform = CudaPlatform()
+        vllm.platforms.current_platform = cuda_platform
+        vllm.platforms._current_platform = cuda_platform
+    except (ImportError, AttributeError) as e:
+        print(f"  Warning: Could not patch vLLM platform: {e}")
+
+
 class VLLMClient(LLMClient):
     """LLM client using vLLM for fast local inference"""
 
@@ -28,6 +47,13 @@ class VLLMClient(LLMClient):
         tensor_parallel_size: int = 1,
         gpu_memory_utilization: float = 0.90,
     ):
+        os.environ["VLLM_USE_V1"] = "0"
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        os.environ["VLLM_TARGET_DEVICE"] = "cuda"
+
+        # Patch vLLM platform before importing LLM
+        _patch_vllm_platform()
+
         from vllm import LLM
         from transformers import AutoTokenizer
 
@@ -36,9 +62,6 @@ class VLLMClient(LLMClient):
         print(f"Loading model with vLLM: {model_name}")
         print(f"  Tensor parallel size: {tensor_parallel_size}")
         print(f"  GPU memory utilization: {gpu_memory_utilization:.0%}")
-
-        os.environ["VLLM_USE_V1"] = "0"
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
         self.llm = LLM(
             model=model_name,
@@ -236,6 +259,8 @@ def create_llm_client(model_name: str, backend: str = "auto", **kwargs) -> LLMCl
     ALIASES = {
         "gpt-3.5": "gpt-3.5-turbo",
         "gemma-3-4b": "google/gemma-3-4b-it",
+        "qwen": "Qwen/Qwen2.5-7B-Instruct",
+        "llama": "meta-llama/Llama-3.1-8B-Instruct",
     }
 
     if model_name.lower() in ALIASES:

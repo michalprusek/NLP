@@ -1,0 +1,34 @@
+You are an expert prompt engineer analyzing failures in a math problem-solving system.
+
+## Current Prompt Being Optimized
+{current_prompt}
+
+## Failed Examples with Reasoning Traces
+
+{failure_traces}
+
+## Your Task
+
+Analyze these failures and provide:
+
+1. **Root Cause Analysis**: What common patterns or issues caused these failures?
+   - Are there specific problem types that fail?
+   - Is the reasoning approach flawed?
+   - Are there calculation errors or misunderstandings?
+
+2. **Specific Weaknesses**: List 2-3 concrete weaknesses in the current prompt.
+
+3. **Improvement Suggestions**: For each weakness, suggest a specific fix.
+
+Provide your analysis in the following format:
+
+<analysis>
+ROOT CAUSES:
+- [cause 1]
+- [cause 2]
+
+WEAKNESSES:
+1. [weakness]: [suggested fix]
+2. [weakness]: [suggested fix]
+3. [weakness]: [suggested fix]
+</analysis>
