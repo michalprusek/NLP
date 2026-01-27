@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple
 class EncoderConfig:
     """Configuration for MatryoshkaEncoder."""
     input_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 8
-    hidden_dims: List[int] = field(default_factory=lambda: [512, 256, 128, 64])
+    latent_dim: int = 8  # Keep at 8D for efficient GP optimization
+    hidden_dims: List[int] = field(default_factory=lambda: [768, 512, 256, 128, 64, 32, 16])
     dropout: float = 0.1  # Enables SimCSE-style augmentation
 
     # Matryoshka settings: which prefix dimensions to supervise
@@ -24,10 +24,10 @@ class EncoderConfig:
 class VelocityNetConfig:
     """Configuration for VelocityNetwork (CFM/Rectified Flow)."""
     data_dim: int = 768  # GTR embedding dimension
-    condition_dim: int = 8  # Latent dimension
-    hidden_dim: int = 1024
-    n_layers: int = 6
-    time_embed_dim: int = 256
+    condition_dim: int = 8  # Latent dimension (must match encoder)
+    hidden_dim: int = 2048  # Increased from 1024 for larger capacity
+    n_layers: int = 12  # Increased from 6 for deeper network
+    time_embed_dim: int = 512  # Increased from 256
     dropout: float = 0.1
 
 
@@ -84,7 +84,7 @@ class TrainingConfig:
 class GPConfig:
     """Configuration for LatentSpaceGP."""
     # Coarse-to-fine schedule: which dims to activate at each stage
-    # Stage 0: dims [0,1], Stage 1: dims [0,1,2,3], Stage 2: all 8 dims
+    # Stage 0: dims [0,1], Stage 1: dims [0-3], Stage 2: all 8 dims
     active_dims_schedule: List[List[int]] = field(
         default_factory=lambda: [[0, 1], [0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7]]
     )

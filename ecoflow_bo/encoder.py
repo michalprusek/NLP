@@ -32,6 +32,32 @@ class ResidualBlock(nn.Module):
         return x + self.net(x)
 
 
+class ResidualDownBlock(nn.Module):
+    """Residual block with dimension reduction and projection shortcut."""
+
+    def __init__(self, in_dim: int, out_dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.norm = nn.LayerNorm(in_dim)
+        self.fc1 = nn.Linear(in_dim, out_dim)
+        self.fc2 = nn.Linear(out_dim, out_dim)
+        self.dropout = nn.Dropout(dropout)
+
+        # Projection shortcut for dimension change
+        self.shortcut = nn.Linear(in_dim, out_dim) if in_dim != out_dim else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Main path
+        h = self.norm(x)
+        h = self.fc1(h)
+        h = torch.nn.functional.gelu(h)
+        h = self.dropout(h)
+        h = self.fc2(h)
+        h = self.dropout(h)
+
+        # Residual with projection
+        return h + self.shortcut(x)
+
+
 class MatryoshkaEncoder(nn.Module):
     """
     Probabilistic encoder with Matryoshka representation learning.
@@ -55,23 +81,18 @@ class MatryoshkaEncoder(nn.Module):
         self.latent_dim = config.latent_dim
         self.matryoshka_dims = config.matryoshka_dims
 
-        # Build encoder MLP
-        layers = []
+        # Build encoder with residual connections at every layer
+        blocks = []
         prev_dim = config.input_dim
 
-        for i, hidden_dim in enumerate(config.hidden_dims):
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(nn.LayerNorm(hidden_dim))
-            layers.append(nn.GELU())
-            layers.append(nn.Dropout(config.dropout))
-
-            # Add residual block every 2 layers
-            if (i + 1) % 2 == 0:
-                layers.append(ResidualBlock(hidden_dim, config.dropout))
-
+        for hidden_dim in config.hidden_dims:
+            # Residual block with projection shortcut for dimension change
+            blocks.append(ResidualDownBlock(prev_dim, hidden_dim, config.dropout))
+            # Additional same-dim residual block for more capacity
+            blocks.append(ResidualBlock(hidden_dim, config.dropout))
             prev_dim = hidden_dim
 
-        self.encoder = nn.Sequential(*layers)
+        self.encoder = nn.Sequential(*blocks)
 
         # Output heads for mu and log_sigma
         self.fc_mu = nn.Linear(prev_dim, config.latent_dim)
