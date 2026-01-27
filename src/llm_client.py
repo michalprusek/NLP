@@ -200,7 +200,11 @@ class OpenAIClient(LLMClient):
                     temperature=temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                results.append(response.choices[0].message.content)
+                if not response.choices:
+                    print(f"[ERROR] OpenAI returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
+                    results.append(None)
+                else:
+                    results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
                 raise  # Never swallow keyboard interrupt
             except Exception as e:
@@ -247,7 +251,11 @@ class DeepInfraClient(LLMClient):
                     temperature=temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                results.append(response.choices[0].message.content)
+                if not response.choices:
+                    print(f"[ERROR] DeepInfra returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
+                    results.append(None)
+                else:
+                    results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
                 raise  # Never swallow keyboard interrupt
             except Exception as e:

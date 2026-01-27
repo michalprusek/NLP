@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from tqdm import tqdm
@@ -50,9 +50,9 @@ from ecoflow_bo.losses import EcoFlowLoss
 from ecoflow_bo.data import create_dataloaders, ReflowDataset
 
 
-def setup_a100_optimizations():
-    """Enable A100-specific optimizations."""
-    # TF32 for faster matmuls on A100/H100
+def setup_gpu_optimizations():
+    """Enable GPU optimizations for Ampere/Hopper/Ada GPUs (A100, H100, L40S)."""
+    # TF32 for faster matmuls on A100/H100/L40S
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     # Enable cuDNN autotuner
@@ -221,7 +221,7 @@ def train_epoch(
 
         optimizer.zero_grad()
 
-        with autocast(enabled=use_amp, dtype=torch.bfloat16):
+        with autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
             # Encode with two views for contrastive learning
             z1, mu, log_sigma = encoder(x)
 
@@ -382,7 +382,7 @@ def train_reflow(
 
             optimizer.zero_grad()
 
-            with autocast(enabled=use_amp, dtype=torch.bfloat16):
+            with autocast(device_type="cuda", enabled=use_amp, dtype=torch.bfloat16):
                 loss = decoder.compute_reflow_loss(x_0_batch, z_batch, x_1_batch)
 
             scaler.scale(loss).backward()
@@ -451,7 +451,7 @@ def main():
     device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
 
     # Enable A100/H100 optimizations (TF32, cuDNN benchmark)
-    setup_a100_optimizations()
+    setup_gpu_optimizations()
 
     if is_main_process(rank):
         print("=" * 60)
@@ -535,12 +535,13 @@ def main():
 
     # Loss and scaler
     loss_fn = EcoFlowLoss(config.encoder, config.training)
-    scaler = GradScaler(enabled=config.training.use_amp)
+    scaler = GradScaler("cuda", enabled=config.training.use_amp)
 
     # Resume from checkpoint
     start_epoch = 0
     if args.resume:
-        checkpoint = torch.load(args.resume, map_location=device)
+        # weights_only=False required for EcoFlowConfig dataclass in checkpoint
+        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
         encoder.load_state_dict(checkpoint["encoder"])
         velocity_net.load_state_dict(checkpoint["velocity_net"])
         optimizer.load_state_dict(checkpoint["optimizer"])

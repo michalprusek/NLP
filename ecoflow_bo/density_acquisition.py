@@ -4,8 +4,8 @@ Density-Aware Acquisition Function for Bayesian Optimization.
 Combines UCB (Upper Confidence Bound) with prior density weighting
 to prefer candidates that lie on the learned manifold.
 
-α_new(z) = α_UCB(z) · p_prior(z)
-         = (μ(z) + β·σ(z)) + λ · log p(z)
+α(z) = UCB(z) + λ · log p_prior(z)
+     = (μ(z) + β·σ(z)) + λ · log p(z)
 
 This prevents GP from proposing candidates far from the training
 distribution where the decoder might hallucinate.

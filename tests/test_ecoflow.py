@@ -201,10 +201,10 @@ class TestLosses:
         config = EncoderConfig(matryoshka_dims=[2, 4, 8])
         loss_fn = EcoFlowLoss(config)
 
-        # Early epoch: low KL weight
+        # Early epoch: low KL weight, small contrastive weight
         cfm_w, kl_w, contr_w = loss_fn.get_loss_weights(epoch=0)
         assert kl_w <= 0.0002  # Should be at kl_weight_start=0.0001
-        assert contr_w == 0.0  # Contrastive starts at epoch 20
+        assert contr_w == 0.005  # Matches contrastive_weight_start (annealing starts at epoch 5)
 
         # Late epoch: full weights
         cfm_w, kl_w, contr_w = loss_fn.get_loss_weights(epoch=80)

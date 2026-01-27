@@ -206,6 +206,10 @@ class GEPA:
             response = self.task_llm.generate(full_prompt, max_new_tokens=self.task_max_tokens)
             self.budget_used += 1
 
+            # Handle None responses from API errors
+            if response is None:
+                response = ""  # Treat as empty response (will be marked incorrect)
+
             # Extract answer and check
             extracted = extract_answer(response)
             is_correct = compare_answers(extracted, expected)
@@ -304,6 +308,10 @@ class GEPA:
         reflection = self.meta_llm.generate(reflect_prompt, max_new_tokens=self.meta_max_tokens)
         self.meta_calls += 1
 
+        # Handle None responses from API errors
+        if reflection is None:
+            reflection = "Unable to generate reflection due to API error."
+
         return reflection
 
     def generate_mutations(self, parent: ScoredCandidate, reflection: str) -> List[str]:
@@ -331,6 +339,10 @@ class GEPA:
         # Get mutations from meta LLM
         response = self.meta_llm.generate(mutate_prompt, max_new_tokens=self.meta_max_tokens * 2)
         self.meta_calls += 1
+
+        # Handle None responses from API errors
+        if response is None:
+            response = ""
 
         # Parse mutations with validation
         mutations = []
@@ -482,6 +494,10 @@ class GEPA:
 
             full_prompt = f"Q: {question}\n{prompt}\nA:"
             response = self.task_llm.generate(full_prompt, max_new_tokens=self.task_max_tokens)
+
+            # Handle None responses from API errors
+            if response is None:
+                response = ""
 
             extracted = extract_answer(response)
             if compare_answers(extracted, expected):

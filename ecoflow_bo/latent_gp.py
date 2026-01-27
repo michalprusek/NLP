@@ -135,9 +135,13 @@ class LatentSpaceGP:
 
         mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        import logging
+        logger = logging.getLogger(__name__)
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
             fit_gpytorch_mll(mll)
+            for w in caught_warnings:
+                logger.debug(f"GP fitting warning: {w.message}")
 
     def fit(self, z: torch.Tensor, y: torch.Tensor):
         """

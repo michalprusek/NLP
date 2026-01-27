@@ -68,6 +68,7 @@ class EcoFlowBO:
         self.best_z = None
         self.best_embedding = None
         self.best_score = float("-inf")
+        self._initialized = False
 
         # History for analysis
         self.history: List[Dict[str, Any]] = []
@@ -103,7 +104,8 @@ class EcoFlowBO:
         Returns:
             EcoFlowBO instance
         """
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+        # weights_only=False required for EcoFlowConfig dataclass in checkpoint
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
         if config is None:
             config = checkpoint.get("config", EcoFlowConfig())
@@ -161,6 +163,8 @@ class EcoFlowBO:
         # Calibrate cycle checker on valid samples
         self.cycle_checker.calibrate(z)
 
+        self._initialized = True
+
         print(f"Initialized with {len(initial_scores)} points")
         print(f"  Best initial score: {self.best_score:.4f}")
         print(f"  GP stage: {self.gp.current_stage} ({self.gp.n_active_dims}D)")
@@ -179,7 +183,16 @@ class EcoFlowBO:
 
         Returns:
             Dict with step results
+
+        Raises:
+            RuntimeError: If initialize() was not called first
         """
+        if not self._initialized:
+            raise RuntimeError(
+                "EcoFlowBO.step() called before initialize(). "
+                "Call initialize(initial_embeddings, initial_scores) first."
+            )
+
         # Generate and score candidates
         candidates = self.acquisition.generate_candidates(
             self.gp, self.best_z

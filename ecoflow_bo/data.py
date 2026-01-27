@@ -19,7 +19,7 @@ class EmbeddingDataset(Dataset):
     """
     Dataset of GTR embeddings for manifold learning.
 
-    Loads embeddings lazily and provides train/val/test splits.
+    Loads all embeddings into memory at initialization and provides train/val/test splits.
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class EmbeddingDataset(Dataset):
 
         # Load embeddings
         print(f"Loading embeddings from {embeddings_path}...")
-        self.embeddings = torch.load(embeddings_path, map_location="cpu")
+        self.embeddings = torch.load(embeddings_path, map_location="cpu", weights_only=True)
 
         if isinstance(self.embeddings, dict):
             # Handle dict format (e.g., {"embeddings": tensor})
