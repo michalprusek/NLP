@@ -12,11 +12,11 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ecoflow_bo.config import EcoFlowConfig, EncoderConfig, VelocityNetConfig, DecoderConfig
-from ecoflow_bo.encoder import MatryoshkaEncoder, SimCSEAugmentor
+from ecoflow_bo.config import EcoFlowConfig, EncoderConfig, DiTVelocityNetConfig, DecoderConfig
+from ecoflow_bo.encoder import MatryoshkaEncoder
 from ecoflow_bo.velocity_network import VelocityNetwork
 from ecoflow_bo.cfm_decoder import RectifiedFlowDecoder
-from ecoflow_bo.losses import EcoFlowLoss, KLDivergenceLoss, MatryoshkaContrastiveLoss
+from ecoflow_bo.losses import KLDivergenceLoss, InfoNCELoss, MatryoshkaCFMLoss
 from ecoflow_bo.latent_gp import CoarseToFineGP
 from ecoflow_bo.density_acquisition import DensityAwareAcquisition
 from ecoflow_bo.cycle_consistency import CycleConsistencyChecker
@@ -41,11 +41,13 @@ def encoder_config():
 
 @pytest.fixture
 def velocity_config():
-    return VelocityNetConfig(
+    """DiT-based velocity network config for testing."""
+    return DiTVelocityNetConfig(
         data_dim=768,
         condition_dim=8,
-        hidden_dim=256,
+        hidden_dim=128,  # Small for fast tests
         n_layers=2,
+        n_heads=4,
     )
 
 
@@ -94,12 +96,13 @@ class TestMatryoshkaEncoder:
         assert z_list[2].shape == (32, 8)
 
     def test_simcse_augmentation(self, encoder, device):
-        """Two forward passes with dropout should give different z."""
+        """Two forward passes with dropout should give different z (SimCSE-style)."""
         x = torch.randn(32, 768, device=device)
 
+        # SimCSE augmentation: two forward passes with different dropout masks
         encoder.train()
-        augmentor = SimCSEAugmentor(encoder)
-        z1, z2 = augmentor.get_positive_pairs(x)
+        z1, _, _ = encoder(x)
+        z2, _, _ = encoder(x)
 
         # Different due to dropout
         assert not torch.allclose(z1, z2)
@@ -180,36 +183,34 @@ class TestLosses:
         loss = kl_loss(mu, log_sigma)
         assert loss > 0.1
 
-    def test_matryoshka_contrastive_loss(self, device):
-        loss_fn = MatryoshkaContrastiveLoss(
-            matryoshka_dims=[2, 4, 8],
-            matryoshka_weights=[0.4, 0.3, 0.3],
-            temperature=0.05,
-        )
+    def test_infonce_loss(self, device):
+        """Test InfoNCE loss for contrastive learning."""
+        loss_fn = InfoNCELoss(temperature=0.05)
 
         z1 = torch.randn(64, 8, device=device)
-        z2 = z1 + 0.1 * torch.randn_like(z1)  # Small perturbation
+        z2 = z1 + 0.1 * torch.randn_like(z1)  # Small perturbation (positive pairs)
 
-        loss, details = loss_fn(z1, z2)
+        loss = loss_fn(z1, z2)
 
         assert loss > 0
-        assert "contrastive_dim2" in details
-        assert "contrastive_dim4" in details
-        assert "contrastive_dim8" in details
+        assert loss.ndim == 0  # Scalar
 
-    def test_ecoflow_loss_annealing(self, device):
-        config = EncoderConfig(matryoshka_dims=[2, 4, 8])
-        loss_fn = EcoFlowLoss(config)
+    def test_matryoshka_cfm_loss(self, encoder, decoder, device):
+        """Test Matryoshka CFM loss at multiple dimensions."""
+        loss_fn = MatryoshkaCFMLoss(
+            matryoshka_dims=[2, 4, 8],
+            matryoshka_weights=[0.4, 0.35, 0.25],
+        )
 
-        # Early epoch: low KL weight, small contrastive weight
-        cfm_w, kl_w, contr_w = loss_fn.get_loss_weights(epoch=0)
-        assert kl_w <= 0.0002  # Should be at kl_weight_start=0.0001
-        assert contr_w == 0.005  # Matches contrastive_weight_start (annealing starts at epoch 5)
+        x = torch.randn(16, 768, device=device)
+        z = torch.randn(16, 8, device=device)
 
-        # Late epoch: full weights
-        cfm_w, kl_w, contr_w = loss_fn.get_loss_weights(epoch=80)
-        assert kl_w >= 0.01
-        assert contr_w >= 0.1
+        loss, details = loss_fn(decoder, x, z)
+
+        assert loss > 0
+        assert "cfm_dim2" in details
+        assert "cfm_dim4" in details
+        assert "cfm_dim8" in details
 
 
 # GP tests

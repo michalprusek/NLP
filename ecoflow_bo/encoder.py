@@ -197,38 +197,3 @@ class MatryoshkaEncoder(nn.Module):
         return torch.cat(z_samples, dim=0)
 
 
-class SimCSEAugmentor:
-    """
-    SimCSE-style augmentation using dropout.
-
-    Two forward passes through the encoder with different dropout masks
-    produce two different z samples for the same input. These form
-    positive pairs for contrastive learning.
-    """
-
-    def __init__(self, encoder: MatryoshkaEncoder):
-        self.encoder = encoder
-
-    def get_positive_pairs(
-        self, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get two augmented views of the same input.
-
-        Args:
-            x: Input embeddings [B, 768]
-
-        Returns:
-            z1, z2: Two different samples from q(z|x) [B, latent_dim]
-        """
-        # Ensure encoder is in training mode for dropout
-        was_training = self.encoder.training
-        self.encoder.train()
-
-        z1, _, _ = self.encoder(x)
-        z2, _, _ = self.encoder(x)
-
-        if not was_training:
-            self.encoder.eval()
-
-        return z1, z2

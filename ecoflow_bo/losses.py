@@ -2,17 +2,15 @@
 Loss functions for EcoFlow-BO training.
 
 Components:
-- CFM Loss: Flow matching loss (handled in decoder)
-- KL Loss: KL(q(z|x) || N(0,I))
-- Matryoshka Contrastive Loss: SimCSE-style InfoNCE with hierarchical supervision
+- KLDivergenceLoss: KL(q(z|x) || N(0,I)) for VAE regularization
+- InfoNCELoss: SimCSE-style contrastive loss
+- MatryoshkaCFMLoss: Hierarchical CFM loss at multiple latent dimensions
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Tuple, Optional
-
-from .config import EncoderConfig, TrainingConfig
 
 
 class KLDivergenceLoss(nn.Module):
@@ -105,236 +103,78 @@ class InfoNCELoss(nn.Module):
         return (loss_12 + loss_21) / 2
 
 
-class MatryoshkaContrastiveLoss(nn.Module):
+class MatryoshkaCFMLoss(nn.Module):
     """
-    Matryoshka-aware contrastive loss.
+    Matryoshka-aware Conditional Flow Matching loss.
 
-    Applies InfoNCE at multiple dimension levels to ensure that
-    prefix dimensions (e.g., first 2 dims) carry more information.
+    Computes CFM loss at multiple latent dimension levels (4, 8, 16) with
+    weighted sum to encourage hierarchical information encoding.
 
-    This enables coarse-to-fine GP optimization:
-    - Train GP on dims [0,1] first (2D is easy)
-    - Then expand to [0:4], then [0:8]
-    """
+    Loss = 0.2 * CFM(z[:4]) + 0.3 * CFM(z[:8]) + 0.5 * CFM(z[:16])
 
-    def __init__(
-        self,
-        matryoshka_dims: List[int],
-        matryoshka_weights: List[float],
-        temperature: float = 0.05,
-    ):
-        super().__init__()
-        self.matryoshka_dims = matryoshka_dims
-        self.matryoshka_weights = matryoshka_weights
-        self.temperature = temperature
-        self.infonce = InfoNCELoss(temperature)
-
-    def forward(
-        self, z1: torch.Tensor, z2: torch.Tensor
-    ) -> Tuple[torch.Tensor, dict]:
-        """
-        Compute Matryoshka contrastive loss.
-
-        Args:
-            z1: First view [B, latent_dim]
-            z2: Second view [B, latent_dim]
-
-        Returns:
-            loss: Weighted sum of InfoNCE at each level
-            details: Dict with loss at each level
-        """
-        total_loss = 0.0
-        details = {}
-
-        for dim, weight in zip(self.matryoshka_dims, self.matryoshka_weights):
-            # Get prefix
-            z1_prefix = z1[:, :dim]
-            z2_prefix = z2[:, :dim]
-
-            # InfoNCE at this level
-            loss_level = self.infonce(z1_prefix, z2_prefix)
-            total_loss = total_loss + weight * loss_level
-
-            details[f"contrastive_dim{dim}"] = loss_level.item()
-
-        return total_loss, details
-
-
-class EcoFlowLoss(nn.Module):
-    """
-    Combined loss for EcoFlow-BO training.
-
-    L_total = L_CFM + λ_KL * L_KL + λ_contrastive * L_contrastive
-
-    With annealing schedule:
-    - Epoch 0-20:  CFM only, KL=0.0001
-    - Epoch 20-50: Ramp KL to 0.01, add contrastive
-    - Epoch 50+:   Full loss
+    This ensures:
+    - First 4 dims capture coarse semantic structure
+    - Dims 5-8 add finer details
+    - Dims 9-16 capture remaining nuances
     """
 
     def __init__(
         self,
-        encoder_config: Optional[EncoderConfig] = None,
-        training_config: Optional[TrainingConfig] = None,
+        matryoshka_dims: List[int] = None,
+        matryoshka_weights: List[float] = None,
     ):
         super().__init__()
-        if encoder_config is None:
-            encoder_config = EncoderConfig()
-        if training_config is None:
-            training_config = TrainingConfig()
+        if matryoshka_dims is None:
+            matryoshka_dims = [4, 8, 16]
+        if matryoshka_weights is None:
+            matryoshka_weights = [0.2, 0.3, 0.5]
 
-        self.encoder_config = encoder_config
-        self.training_config = training_config
+        assert len(matryoshka_dims) == len(matryoshka_weights)
+        assert abs(sum(matryoshka_weights) - 1.0) < 1e-6
 
-        self.kl_loss = KLDivergenceLoss()
-        self.contrastive_loss = MatryoshkaContrastiveLoss(
-            matryoshka_dims=encoder_config.matryoshka_dims,
-            matryoshka_weights=encoder_config.matryoshka_weights,
-            temperature=training_config.contrastive_temperature,
-        )
-
-    def get_loss_weights(self, epoch: int) -> Tuple[float, float, float]:
-        """
-        Get loss weights for current epoch based on annealing schedule.
-
-        Returns:
-            cfm_weight, kl_weight, contrastive_weight
-        """
-        cfg = self.training_config
-
-        # CFM weight is always 1.0
-        cfm_weight = cfg.cfm_weight
-
-        # KL annealing
-        if epoch < cfg.kl_anneal_start:
-            kl_weight = cfg.kl_weight_start
-        elif epoch >= cfg.kl_anneal_end:
-            kl_weight = cfg.kl_weight_end
-        else:
-            # Linear interpolation
-            progress = (epoch - cfg.kl_anneal_start) / (cfg.kl_anneal_end - cfg.kl_anneal_start)
-            kl_weight = cfg.kl_weight_start + progress * (cfg.kl_weight_end - cfg.kl_weight_start)
-
-        # Contrastive annealing
-        if epoch < cfg.contrastive_anneal_start:
-            contrastive_weight = cfg.contrastive_weight_start
-        elif epoch >= cfg.contrastive_anneal_end:
-            contrastive_weight = cfg.contrastive_weight_end
-        else:
-            progress = (epoch - cfg.contrastive_anneal_start) / (
-                cfg.contrastive_anneal_end - cfg.contrastive_anneal_start
-            )
-            contrastive_weight = (
-                cfg.contrastive_weight_start
-                + progress * (cfg.contrastive_weight_end - cfg.contrastive_weight_start)
-            )
-
-        return cfm_weight, kl_weight, contrastive_weight
-
-    def forward(
-        self,
-        cfm_loss: torch.Tensor,
-        mu: torch.Tensor,
-        log_sigma: torch.Tensor,
-        z1: torch.Tensor,
-        z2: torch.Tensor,
-        epoch: int,
-    ) -> Tuple[torch.Tensor, dict]:
-        """
-        Compute total loss.
-
-        Args:
-            cfm_loss: Flow matching loss from decoder
-            mu: Encoder mean [B, latent_dim]
-            log_sigma: Encoder log std [B, latent_dim]
-            z1, z2: Two views for contrastive learning [B, latent_dim]
-            epoch: Current epoch for annealing
-
-        Returns:
-            total_loss: Combined loss
-            details: Dict with individual loss components
-        """
-        cfm_w, kl_w, contrastive_w = self.get_loss_weights(epoch)
-
-        # KL loss
-        kl_loss = self.kl_loss(mu, log_sigma)
-
-        # Contrastive loss (with Matryoshka weighting)
-        contrastive_loss, contrastive_details = self.contrastive_loss(z1, z2)
-
-        # Total loss
-        total_loss = cfm_w * cfm_loss + kl_w * kl_loss + contrastive_w * contrastive_loss
-
-        # Detailed logging
-        details = {
-            "loss_total": total_loss.item(),
-            "loss_cfm": cfm_loss.item(),
-            "loss_kl": kl_loss.item(),
-            "loss_contrastive": contrastive_loss.item(),
-            "weight_cfm": cfm_w,
-            "weight_kl": kl_w,
-            "weight_contrastive": contrastive_w,
-            **contrastive_details,
-        }
-
-        return total_loss, details
-
-
-class MatryoshkaReconstructionLoss(nn.Module):
-    """
-    Matryoshka-aware reconstruction loss.
-
-    Decodes from prefix dimensions and computes reconstruction error.
-    Higher weight on smaller prefixes encourages information compression.
-
-    Used during training to ensure prefix dimensions are sufficient
-    for reasonable reconstruction.
-    """
-
-    def __init__(
-        self,
-        matryoshka_dims: List[int],
-        matryoshka_weights: List[float],
-    ):
-        super().__init__()
         self.matryoshka_dims = matryoshka_dims
         self.matryoshka_weights = matryoshka_weights
 
     def forward(
         self,
         decoder,
-        z: torch.Tensor,
         x_target: torch.Tensor,
+        z: torch.Tensor,
+        t: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, dict]:
         """
-        Compute Matryoshka reconstruction loss.
+        Compute Matryoshka CFM loss at multiple latent levels.
 
         Args:
-            decoder: RectifiedFlowDecoder
-            z: Full latent [B, latent_dim]
+            decoder: RectifiedFlowDecoder with compute_cfm_loss method
             x_target: Target embeddings [B, data_dim]
+            z: Full latent [B, latent_dim]
+            t: Optional time values [B] (shared across all levels for consistency)
 
         Returns:
-            loss: Weighted reconstruction loss
+            loss: Weighted sum of CFM losses
             details: Dict with loss at each level
         """
+        B = x_target.shape[0]
+        device = x_target.device
+
+        # Sample shared time for all Matryoshka levels (consistency)
+        if t is None:
+            t = torch.rand(B, device=device)
+
         total_loss = 0.0
         details = {}
 
         for dim, weight in zip(self.matryoshka_dims, self.matryoshka_weights):
-            # Create masked z with only prefix active
+            # Mask latent to use only first `dim` dimensions
             z_masked = z.clone()
             z_masked[:, dim:] = 0.0
 
-            # Decode with masked z
-            x_recon = decoder.decode(z_masked)
-
-            # Cosine distance (1 - cosine_sim) as loss
-            cos_sim = F.cosine_similarity(x_recon, x_target, dim=-1).mean()
-            loss_level = 1 - cos_sim
+            # Compute CFM loss with masked latent
+            loss_level = decoder.compute_cfm_loss(x_target, z_masked, t=t)
 
             total_loss = total_loss + weight * loss_level
-            details[f"recon_dim{dim}"] = loss_level.item()
-            details[f"cosine_dim{dim}"] = cos_sim.item()
+            details[f"cfm_dim{dim}"] = loss_level.item()
 
+        details["cfm_total"] = total_loss.item()
         return total_loss, details

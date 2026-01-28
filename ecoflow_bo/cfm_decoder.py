@@ -324,3 +324,52 @@ class RectifiedFlowDecoder(nn.Module):
         straightness = (straight_dist / (path_length + 1e-8)).mean().item()
 
         return straightness
+
+    @torch.no_grad()
+    def decode_with_refinement(
+        self,
+        z: torch.Tensor,
+        encoder,
+        n_refinement_steps: int = 3,
+        correction_scale: float = 0.5,
+        n_decode_steps: Optional[int] = None,
+    ) -> torch.Tensor:
+        """
+        Decode with iterative refinement for improved reconstruction.
+
+        Process:
+        1. Initial decode: x = decode(z)
+        2. For each refinement step:
+           a. Re-encode: z_reenc = encoder(x)
+           b. Compute correction: correction = z - z_reenc
+           c. Apply correction: z_corrected = z + correction_scale * correction
+           d. Re-decode: x = decode(z_corrected)
+
+        This iterative process corrects for accumulated errors in the
+        encode-decode cycle, improving final reconstruction quality.
+
+        Args:
+            z: Latent codes [B, condition_dim]
+            encoder: MatryoshkaEncoder with encode_deterministic method
+            n_refinement_steps: Number of refinement iterations (default: 3)
+            correction_scale: How much correction to apply (default: 0.5)
+            n_decode_steps: ODE steps for decoding (uses config if None)
+
+        Returns:
+            x: Refined embeddings [B, data_dim]
+        """
+        # Initial decode
+        x = self.decode(z, n_steps=n_decode_steps)
+
+        for step in range(n_refinement_steps):
+            # Re-encode current reconstruction
+            z_reenc = encoder.encode_deterministic(x)
+
+            # Compute correction (how far off are we in latent space?)
+            correction = z - z_reenc
+
+            # Apply scaled correction and re-decode
+            z_corrected = z + correction_scale * correction
+            x = self.decode(z_corrected, n_steps=n_decode_steps)
+
+        return x

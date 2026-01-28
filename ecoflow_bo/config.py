@@ -8,27 +8,39 @@ from typing import List, Optional, Tuple
 class EncoderConfig:
     """Configuration for MatryoshkaEncoder."""
     input_dim: int = 768  # GTR embedding dimension
-    latent_dim: int = 8  # Keep at 8D for efficient GP optimization
-    hidden_dims: List[int] = field(default_factory=lambda: [768, 512, 256, 128, 64, 32, 16])
+    latent_dim: int = 16  # Matryoshka max dimension
+    hidden_dims: List[int] = field(default_factory=lambda: [768, 512, 256, 128, 64, 32])
     dropout: float = 0.1  # Enables SimCSE-style augmentation
 
     # Matryoshka settings: which prefix dimensions to supervise
-    # e.g., [2, 4, 8] means we supervise reconstructions at dims 2, 4, and 8
-    matryoshka_dims: List[int] = field(default_factory=lambda: [2, 4, 8])
+    # e.g., [4, 8, 16] means we supervise reconstructions at dims 4, 8, and 16
+    matryoshka_dims: List[int] = field(default_factory=lambda: [4, 8, 16])
     # Relative importance weights for each Matryoshka level
     # Higher weight on smaller dims encourages more information in early dims
-    matryoshka_weights: List[float] = field(default_factory=lambda: [0.4, 0.3, 0.3])
+    matryoshka_weights: List[float] = field(default_factory=lambda: [0.4, 0.35, 0.25])
 
 
 @dataclass
-class VelocityNetConfig:
-    """Configuration for VelocityNetwork (CFM/Rectified Flow)."""
+class DiTVelocityNetConfig:
+    """Configuration for DiT-based VelocityNetwork (CFM/Rectified Flow).
+
+    DiT (Diffusion Transformer) architecture with cross-attention to latent tokens.
+    Each latent dimension becomes a separate token, enabling selective influence.
+
+    Default config (~150M params) designed for 2x L40S (96GB VRAM).
+    """
     data_dim: int = 768  # GTR embedding dimension
-    condition_dim: int = 8  # Latent dimension (must match encoder)
-    hidden_dim: int = 2048  # Increased from 1024 for larger capacity
-    n_layers: int = 12  # Increased from 6 for deeper network
-    time_embed_dim: int = 512  # Increased from 256
+    condition_dim: int = 16  # Latent dimension (must match encoder)
+    hidden_dim: int = 512  # Token dimension for transformer (512 → ~70M params)
+    n_layers: int = 16  # Number of DiT blocks (more depth for capacity)
+    n_heads: int = 8  # Attention heads (hidden_dim must be divisible by n_heads)
+    mlp_ratio: int = 4  # MLP hidden = hidden_dim * mlp_ratio
     dropout: float = 0.1
+
+    # Multi-token input representation
+    # Split 768D into n_input_tokens tokens for better self-attention
+    n_input_tokens: int = 12  # 768 / 12 = 64D per token
+    input_token_dim: int = 64  # data_dim / n_input_tokens
 
 
 @dataclass
@@ -50,21 +62,10 @@ class TrainingConfig:
     weight_decay: float = 0.01
     warmup_epochs: int = 10
 
-    # Loss weights and annealing schedule
-    # Phase 1 (epoch 0-5): CFM with minimal KL, contrastive starts
-    # Phase 2 (epoch 5-30): Ramp contrastive to full, continue KL annealing
-    # Phase 3 (epoch 30-50): Continue KL ramp to full
-    # Phase 4 (epoch 50+): Full loss (all weights at target)
+    # Loss weights (fixed, no annealing - simpler and works well)
     cfm_weight: float = 1.0
-    kl_weight_start: float = 0.0001
-    kl_weight_end: float = 0.01
-    kl_anneal_start: int = 0
-    kl_anneal_end: int = 50
-
-    contrastive_weight_start: float = 0.005  # Start with small nonzero weight
-    contrastive_weight_end: float = 0.1
-    contrastive_anneal_start: int = 5  # Start earlier to shape latent structure
-    contrastive_anneal_end: int = 30  # Shorter ramp for full effect sooner
+    kl_weight: float = 0.001
+    contrastive_weight: float = 0.05
     contrastive_temperature: float = 0.05
 
     # Mixed precision
@@ -84,12 +85,16 @@ class TrainingConfig:
 class GPConfig:
     """Configuration for LatentSpaceGP."""
     # Coarse-to-fine schedule: which dims to activate at each stage
-    # Stage 0: dims [0,1], Stage 1: dims [0-3], Stage 2: all 8 dims
+    # Stage 0: dims [0-3], Stage 1: dims [0-7], Stage 2: all 16 dims
     active_dims_schedule: List[List[int]] = field(
-        default_factory=lambda: [[0, 1], [0, 1, 2, 3], [0, 1, 2, 3, 4, 5, 6, 7]]
+        default_factory=lambda: [
+            [0, 1, 2, 3],
+            [0, 1, 2, 3, 4, 5, 6, 7],
+            list(range(16))
+        ]
     )
     # Points to collect before advancing to next stage
-    points_per_stage: List[int] = field(default_factory=lambda: [10, 10, 30])
+    points_per_stage: List[int] = field(default_factory=lambda: [10, 15, 30])
 
     # GP hyperparameters
     noise_prior_mean: float = 0.1
@@ -117,7 +122,7 @@ class CycleConfig:
 class EcoFlowConfig:
     """Master configuration for EcoFlow-BO."""
     encoder: EncoderConfig = field(default_factory=EncoderConfig)
-    velocity_net: VelocityNetConfig = field(default_factory=VelocityNetConfig)
+    velocity_net: DiTVelocityNetConfig = field(default_factory=DiTVelocityNetConfig)
     decoder: DecoderConfig = field(default_factory=DecoderConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     gp: GPConfig = field(default_factory=GPConfig)
