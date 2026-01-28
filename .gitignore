@@ -191,3 +191,7 @@ soft_prompt_vae/data/*.bin
 
 # Vec2Text VAE
 vec2text_vae/cache/
+
+# Large dataset files
+datasets/*.pt
+datasets/*.json
