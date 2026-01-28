@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -35,6 +35,25 @@ class PerceiverDecoderConfig:
 
     # Readout config
     readout_heads: int = 8  # Heads for cross-attention readout
+
+    def __post_init__(self):
+        """Validate configuration consistency."""
+        if self.hidden_size % self.num_heads != 0:
+            raise ValueError(
+                f"hidden_size ({self.hidden_size}) must be divisible by "
+                f"num_heads ({self.num_heads})"
+            )
+        if self.hidden_size % self.readout_heads != 0:
+            raise ValueError(
+                f"hidden_size ({self.hidden_size}) must be divisible by "
+                f"readout_heads ({self.readout_heads})"
+            )
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
+        if self.depth < 1:
+            raise ValueError(f"depth must be >= 1, got {self.depth}")
+        if self.latent_dim < 1:
+            raise ValueError(f"latent_dim must be >= 1, got {self.latent_dim}")
 
 
 class LatentExpander(nn.Module):

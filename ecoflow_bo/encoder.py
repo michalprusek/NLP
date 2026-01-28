@@ -1,9 +1,9 @@
 """
-Matryoshka Probabilistic Encoder: 768D GTR → 8D hierarchical latent.
+Matryoshka Probabilistic Encoder: 768D GTR → 16D hierarchical latent.
 
 Key features:
 - Probabilistic output (mu, log_sigma) for VAE training
-- Matryoshka structure: first 2 dims carry most information
+- Matryoshka structure: first 4 dims carry most information (weights: 0.4, 0.35, 0.25)
 - Dropout-based SimCSE augmentation for contrastive learning
 """
 
@@ -67,8 +67,8 @@ class MatryoshkaEncoder(nn.Module):
     first 2 dims) carry disproportionate information.
 
     This enables coarse-to-fine Bayesian optimization:
-    - Start GP with dims [0,1] only (2D is easy with 20 points)
-    - Progressively unlock [0:4], then [0:8]
+    - Start GP with dims [0:4] only (4D is tractable with ~10 points)
+    - Progressively unlock [0:8], then [0:16]
     """
 
     def __init__(self, config: Optional[EncoderConfig] = None):
@@ -143,7 +143,7 @@ class MatryoshkaEncoder(nn.Module):
 
     def get_matryoshka_embeddings(
         self, x: torch.Tensor
-    ) -> List[torch.Tensor]:
+    ) -> Tuple[List[torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Get embeddings at each Matryoshka dimension level.
 
@@ -153,10 +153,10 @@ class MatryoshkaEncoder(nn.Module):
             x: Input embeddings [B, 768]
 
         Returns:
-            List of latent embeddings at each Matryoshka level:
-            - z[:, :2] for dim=2
-            - z[:, :4] for dim=4
-            - z[:, :8] for dim=8
+            embeddings: List of latent embeddings at each Matryoshka level
+                (z[:, :4], z[:, :8], z[:, :16] by default)
+            mu: Posterior mean [B, latent_dim]
+            log_sigma: Posterior log std [B, latent_dim]
         """
         z, mu, log_sigma = self.forward(x)
         return [z[:, :dim] for dim in self.matryoshka_dims], mu, log_sigma

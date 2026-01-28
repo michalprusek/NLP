@@ -139,9 +139,22 @@ class LatentSpaceGP:
         logger = logging.getLogger(__name__)
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always")
-            fit_gpytorch_mll(mll)
+            try:
+                fit_gpytorch_mll(mll)
+            except Exception as e:
+                logger.error(
+                    f"GP fitting failed: {e}. "
+                    f"Train data: z shape={train_z_active.shape}, "
+                    f"y range=[{train_y.min():.3f}, {train_y.max():.3f}]"
+                )
+                raise
+            # Log warnings at appropriate severity level
             for w in caught_warnings:
-                logger.debug(f"GP fitting warning: {w.message}")
+                msg = str(w.message)
+                if "cholesky" in msg.lower() or "singular" in msg.lower():
+                    logger.error(f"GP fitting critical warning: {msg}")
+                else:
+                    logger.warning(f"GP fitting warning: {msg}")
 
     def fit(self, z: torch.Tensor, y: torch.Tensor):
         """

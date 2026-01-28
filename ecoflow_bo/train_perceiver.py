@@ -212,9 +212,12 @@ def validate(
     total_mse = 0.0
     n = 0
 
+    # Unwrap DDP modules for accessing custom methods
+    enc = encoder.module if hasattr(encoder, "module") else encoder
+
     for x in val_loader:
         x = x.to(device)
-        z = encoder.encode_deterministic(x)
+        z = enc.encode_deterministic(x)
         x_recon = decoder(z)
 
         cos_sim = F.cosine_similarity(x, x_recon, dim=-1).sum()
@@ -226,6 +229,9 @@ def validate(
 
         if n >= n_samples:
             break
+
+    if n == 0:
+        return {"val_cosine": 0.0, "val_mse": float("inf")}
 
     return {
         "val_cosine": total_cosine / n,

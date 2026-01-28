@@ -134,14 +134,16 @@ class CycleConsistencyChecker:
         valid_mask = errors < self.error_threshold
 
         if not valid_mask.any():
-            # No valid candidates - return best (lowest error) with warning
+            # No valid candidates - critical error condition
             import logging
             logger = logging.getLogger(__name__)
             best_idx = errors.argmin()
-            logger.warning(
-                f"No candidates passed cycle consistency check (threshold={self.error_threshold:.3f}). "
-                f"Returning best invalid candidate with error={errors[best_idx].item():.3f}. "
-                f"Consider increasing threshold or improving encoder/decoder quality."
+            error_stats = f"min={errors.min():.3f}, median={errors.median():.3f}, max={errors.max():.3f}"
+            logger.error(
+                f"CRITICAL: All {len(z_candidates)} candidates failed cycle consistency! "
+                f"Threshold={self.error_threshold:.3f}, error stats: {error_stats}. "
+                f"This indicates decoder hallucinations or encoder-decoder misalignment. "
+                f"Returning best invalid candidate with error={errors[best_idx].item():.3f}."
             )
             return (
                 z_candidates[best_idx:best_idx + 1],

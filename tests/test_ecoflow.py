@@ -20,6 +20,7 @@ from ecoflow_bo.losses import KLDivergenceLoss, InfoNCELoss, MatryoshkaCFMLoss
 from ecoflow_bo.latent_gp import CoarseToFineGP
 from ecoflow_bo.density_acquisition import DensityAwareAcquisition
 from ecoflow_bo.cycle_consistency import CycleConsistencyChecker
+from ecoflow_bo.perceiver_decoder import PerceiverDecoder, PerceiverDecoderConfig
 
 
 # Fixtures
@@ -219,20 +220,21 @@ class TestCoarseToFineGP:
         gp = CoarseToFineGP()
 
         assert gp.current_stage == 0
-        assert gp.active_dims == [0, 1]
+        # Default config: active_dims_schedule=[[0,1,2,3], [0-7], [0-15]]
+        assert gp.active_dims == [0, 1, 2, 3]
 
-        # Default config: points_per_stage=[10, 10, 30], so need 10 to advance to stage 1
+        # Default config: points_per_stage=[10, 15, 30], so need 10 to advance to stage 1
         # Add points incrementally to trigger stage advance
-        z = torch.randn(10, 8, device=device)
+        z = torch.randn(10, 16, device=device)  # latent_dim=16
         y = torch.randn(10, device=device)
         gp.fit(z, y)
 
         # Now update with more points to trigger advancement
-        z_new = torch.randn(5, 8, device=device)
+        z_new = torch.randn(5, 16, device=device)
         y_new = torch.randn(5, device=device)
         gp.update(z_new, y_new)
 
-        # With 15 points (> 10), should advance to stage 1
+        # With 15 points (>= 10), should advance to stage 1
         assert gp.current_stage >= 1
 
     def test_predict(self, device):
@@ -331,6 +333,84 @@ class TestIntegration:
         # Note: Without training, this is just random, so we just check it runs
         cosine_sim = torch.nn.functional.cosine_similarity(x, x_recon, dim=-1).mean()
         assert not torch.isnan(cosine_sim)
+
+
+# Perceiver Decoder tests
+class TestPerceiverDecoder:
+    @pytest.fixture
+    def perceiver_config(self):
+        return PerceiverDecoderConfig(
+            latent_dim=16,
+            output_dim=768,
+            hidden_size=256,  # Small for fast tests
+            depth=2,
+            num_heads=8,
+            readout_heads=8,
+        )
+
+    @pytest.fixture
+    def perceiver(self, perceiver_config, device):
+        return PerceiverDecoder(perceiver_config).to(device)
+
+    def test_forward_shape(self, perceiver, device):
+        """Test basic forward pass shape."""
+        z = torch.randn(32, 16, device=device)
+        out = perceiver(z)
+        assert out.shape == (32, 768)
+
+    def test_forward_with_matryoshka(self, perceiver, device):
+        """Test forward with Matryoshka masking."""
+        z = torch.randn(8, 16, device=device)
+
+        # Full dims
+        out_full = perceiver(z)
+
+        # Masked to 8 dims
+        out_8d = perceiver.forward_with_matryoshka(z, active_dims=8)
+
+        # Masked to 4 dims
+        out_4d = perceiver.forward_with_matryoshka(z, active_dims=4)
+
+        assert out_full.shape == (8, 768)
+        assert out_8d.shape == (8, 768)
+        assert out_4d.shape == (8, 768)
+
+        # Outputs should differ for different active dims
+        assert not torch.allclose(out_full, out_8d, atol=1e-5)
+        assert not torch.allclose(out_8d, out_4d, atol=1e-5)
+
+    def test_matryoshka_masking_zeros_tokens(self, perceiver, device):
+        """Verify that tokens for z=0 dims are properly zeroed."""
+        z = torch.randn(4, 16, device=device)
+        z[:, 8:] = 0.0  # Mask last 8 dims
+
+        # Access expander directly to check token zeroing
+        tokens = perceiver.expander(z)
+
+        # Tokens for masked dims should be zero (after pos_embed and masking)
+        assert torch.allclose(tokens[:, 8:, :], torch.zeros_like(tokens[:, 8:, :]))
+        # Tokens for active dims should be non-zero
+        assert not torch.allclose(tokens[:, :8, :], torch.zeros_like(tokens[:, :8, :]))
+
+    def test_single_sample(self, perceiver, device):
+        """Test with batch size 1."""
+        z = torch.randn(1, 16, device=device)
+        out = perceiver(z)
+        assert out.shape == (1, 768)
+
+    def test_config_validation(self):
+        """Test that invalid configs raise errors."""
+        # hidden_size not divisible by num_heads
+        with pytest.raises(ValueError, match="divisible by num_heads"):
+            PerceiverDecoderConfig(hidden_size=100, num_heads=16)
+
+        # Invalid dropout
+        with pytest.raises(ValueError, match="dropout"):
+            PerceiverDecoderConfig(dropout=1.5)
+
+        # Invalid depth
+        with pytest.raises(ValueError, match="depth"):
+            PerceiverDecoderConfig(depth=0)
 
 
 if __name__ == "__main__":

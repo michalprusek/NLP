@@ -42,6 +42,23 @@ class DiTVelocityNetConfig:
     n_input_tokens: int = 12  # 768 / 12 = 64D per token
     input_token_dim: int = 64  # data_dim / n_input_tokens
 
+    def __post_init__(self):
+        """Validate configuration consistency."""
+        if self.hidden_dim % self.n_heads != 0:
+            raise ValueError(
+                f"hidden_dim ({self.hidden_dim}) must be divisible by "
+                f"n_heads ({self.n_heads})"
+            )
+        if self.data_dim != self.n_input_tokens * self.input_token_dim:
+            raise ValueError(
+                f"data_dim ({self.data_dim}) must equal "
+                f"n_input_tokens * input_token_dim "
+                f"({self.n_input_tokens} * {self.input_token_dim} = "
+                f"{self.n_input_tokens * self.input_token_dim})"
+            )
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {self.dropout}")
+
 
 @dataclass
 class DecoderConfig:
