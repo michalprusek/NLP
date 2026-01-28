@@ -13,13 +13,13 @@ distribution where the decoder might hallucinate.
 
 import torch
 from typing import Optional, Tuple, List
-import numpy as np
 
+from scipy.stats import qmc
 from botorch.acquisition import UpperConfidenceBound
 from botorch.optim import optimize_acqf
 
 from .latent_gp import CoarseToFineGP
-from .config import AcquisitionConfig
+from .config import AcquisitionConfig, clamp_to_search_bounds
 
 
 class DensityAwareAcquisition:
@@ -148,7 +148,7 @@ class DensityAwareAcquisition:
             noise[:, dim] = 0.0
         z_local = z_local + noise
         # Clip to bounds
-        z_local = torch.clamp(z_local, lower, upper)
+        z_local = clamp_to_search_bounds(z_local, lower, upper)
         candidates.append(z_local)
 
         # 3. Latin hypercube in search bounds (20% of candidates)
@@ -163,12 +163,15 @@ class DensityAwareAcquisition:
     def _latin_hypercube(
         self, n: int, d: int, device: torch.device, dtype: torch.dtype
     ) -> torch.Tensor:
-        """Generate Latin hypercube samples in [0, 1]^d."""
-        samples = torch.zeros(n, d, device=device, dtype=dtype)
-        for i in range(d):
-            perm = torch.randperm(n, device=device)
-            samples[:, i] = (perm + torch.rand(n, device=device)) / n
-        return samples
+        """
+        Generate Latin hypercube samples in [0, 1]^d using scipy QMC.
+
+        Uses scipy's LatinHypercube sampler for better space-filling
+        properties than the basic implementation.
+        """
+        sampler = qmc.LatinHypercube(d=d)
+        samples = sampler.random(n=n)
+        return torch.tensor(samples, device=device, dtype=dtype)
 
     def select_best_candidates(
         self,

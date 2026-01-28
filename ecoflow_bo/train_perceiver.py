@@ -1,20 +1,19 @@
 """
-EcoFlow-BO Training with Perceiver Decoder (Direct Reconstruction).
+EcoFlow-BO Training with Residual Latent Architecture.
 
-This is a simpler training setup that uses:
-- MatryoshkaEncoder: 768D → 16D
-- PerceiverDecoder: 16D → 768D (direct, no flow matching)
+Architecture:
+- MatryoshkaEncoder: 768D → z_core (16D) + z_detail (32D) = 48D
+- PerceiverDecoder: 48D → 768D (direct reconstruction)
 
-Loss: MSE reconstruction + KL regularization + Contrastive learning
+Loss: ResidualMatryoshkaCFM (4D, 8D, 16D z_core + full 48D) + KL + Contrastive
 
-No ODE, no time conditioning, no flow matching - just clean autoencoding.
+Key Innovation: GP optimizes only z_core (16D), z_detail enhances reconstruction.
 """
 
 import argparse
 import os
 import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
@@ -26,12 +25,12 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from tqdm import tqdm
-from typing import Tuple, Optional
+from typing import Tuple
 
-from ecoflow_bo.config import EcoFlowConfig, EncoderConfig, TrainingConfig
+from ecoflow_bo.config import EcoFlowConfig, EncoderConfig
 from ecoflow_bo.encoder import MatryoshkaEncoder
 from ecoflow_bo.perceiver_decoder import PerceiverDecoder, PerceiverDecoderConfig
-from ecoflow_bo.losses import KLDivergenceLoss, InfoNCELoss
+from ecoflow_bo.losses import KLDivergenceLoss, InfoNCELoss, ResidualKLLoss
 from ecoflow_bo.data import create_dataloaders
 
 
@@ -47,51 +46,60 @@ def setup_distributed() -> Tuple[int, int, int, bool]:
 
 
 def cleanup_distributed():
-    """Cleanup distributed training."""
     if torch.distributed.is_initialized():
         destroy_process_group()
 
 
 def is_main(rank: int) -> bool:
-    """Check if this is the main process."""
     return rank == 0
 
 
-class MatryoshkaReconstructionLoss(nn.Module):
+class ResidualMatryoshkaLoss(nn.Module):
     """
-    Matryoshka-aware reconstruction loss.
+    Residual Matryoshka reconstruction loss for z_full = [z_core, z_detail].
 
-    Computes MSE at multiple z truncation levels (4D, 8D, 16D) with weights.
-    This ensures first dimensions carry most information.
+    Training strategy (from NeurIPS feedback):
+    - loss_4:  z[:4] active, rest=0   → Coarse semantics (weight=1.0)
+    - loss_8:  z[:8] active, rest=0   → Medium detail (weight=0.5)
+    - loss_16: z[:16] active, rest=0  → Fine z_core (weight=0.25)
+    - loss_48: z[:48] active          → Full reconstruction (weight=0.1)
+
+    High weight on early dims forces encoder to pack meaning into first dims.
     """
 
     def __init__(
         self,
+        core_dim: int = 16,
+        detail_dim: int = 32,
         matryoshka_dims: list = None,
         matryoshka_weights: list = None,
+        full_weight: float = 0.1,
     ):
         super().__init__()
         if matryoshka_dims is None:
             matryoshka_dims = [4, 8, 16]
         if matryoshka_weights is None:
-            matryoshka_weights = [0.4, 0.35, 0.25]
+            matryoshka_weights = [1.0, 0.5, 0.25]
 
-        assert len(matryoshka_dims) == len(matryoshka_weights)
+        self.core_dim = core_dim
+        self.detail_dim = detail_dim
+        self.full_dim = core_dim + detail_dim
         self.matryoshka_dims = matryoshka_dims
         self.matryoshka_weights = matryoshka_weights
+        self.full_weight = full_weight
 
     def forward(
         self,
         decoder: PerceiverDecoder,
-        z: torch.Tensor,
+        z_full: torch.Tensor,
         x_target: torch.Tensor,
     ) -> Tuple[torch.Tensor, dict]:
         """
-        Compute Matryoshka reconstruction loss.
+        Compute Residual Matryoshka reconstruction loss.
 
         Args:
             decoder: PerceiverDecoder
-            z: Full latent [B, latent_dim]
+            z_full: Full latent [B, 48] = [z_core (16D), z_detail (32D)]
             x_target: Target embeddings [B, 768]
 
         Returns:
@@ -100,22 +108,34 @@ class MatryoshkaReconstructionLoss(nn.Module):
         """
         total_loss = 0.0
         details = {}
+        total_weight = sum(self.matryoshka_weights) + self.full_weight
 
+        # 1. Matryoshka levels on z_core (z_detail = 0)
         for dim, weight in zip(self.matryoshka_dims, self.matryoshka_weights):
-            # Decode with masked z
-            x_recon = decoder.forward_with_matryoshka(z, active_dims=dim)
+            z_masked = torch.zeros_like(z_full)
+            z_masked[:, :dim] = z_full[:, :dim]
 
-            # MSE loss (normalized by dimension)
+            x_recon = decoder(z_masked)
             mse = F.mse_loss(x_recon, x_target)
-
-            # Cosine similarity for logging
             cos_sim = F.cosine_similarity(x_recon, x_target, dim=-1).mean()
 
             total_loss = total_loss + weight * mse
-            details[f"mse_dim{dim}"] = mse.item()
-            details[f"cosine_dim{dim}"] = cos_sim.item()
+            details[f"mse_core_{dim}"] = mse.item()
+            details[f"cos_core_{dim}"] = cos_sim.item()
 
+        # 2. Full reconstruction (z_core + z_detail)
+        x_recon_full = decoder(z_full)
+        mse_full = F.mse_loss(x_recon_full, x_target)
+        cos_full = F.cosine_similarity(x_recon_full, x_target, dim=-1).mean()
+
+        total_loss = total_loss + self.full_weight * mse_full
+        details["mse_full_48"] = mse_full.item()
+        details["cos_full_48"] = cos_full.item()
+
+        # Normalize
+        total_loss = total_loss / total_weight
         details["recon_total"] = total_loss.item()
+
         return total_loss, details
 
 
@@ -126,14 +146,13 @@ def train_epoch(
     optimizer,
     scaler: GradScaler,
     device: str,
-    recon_loss_fn: MatryoshkaReconstructionLoss,
-    kl_loss_fn: KLDivergenceLoss,
+    recon_loss_fn: ResidualMatryoshkaLoss,
+    kl_loss_fn: ResidualKLLoss,
     contrastive_loss_fn: InfoNCELoss,
     kl_weight: float,
     contrastive_weight: float,
-    matryoshka_dims: list,
 ) -> dict:
-    """Train for one epoch."""
+    """Train for one epoch with residual latent."""
     encoder.train()
     decoder.train()
 
@@ -143,26 +162,33 @@ def train_epoch(
     total_contr = 0.0
     n_batches = 0
 
+    # Unwrap DDP for custom methods
+    enc = encoder.module if hasattr(encoder, "module") else encoder
+
     pbar = tqdm(train_loader, desc="Training")
     for x in pbar:
         x = x.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
 
         with autocast("cuda", dtype=torch.bfloat16):
-            # Encoder forward (two views for contrastive)
-            z1, mu, log_sigma = encoder(x)
-            z2, _, _ = encoder(x)  # Different dropout
+            # Encoder forward - get full residual latent
+            out1 = enc.forward_full(x)
+            out2 = enc.forward_full(x)  # Different dropout for contrastive
 
-            # Reconstruction loss (Matryoshka)
-            recon_loss, recon_details = recon_loss_fn(decoder, z1, x)
+            z_full_1 = out1.z_full  # [B, 48]
+            z_full_2 = out2.z_full
 
-            # KL loss
-            kl_loss = kl_loss_fn(mu, log_sigma)
+            # Reconstruction loss (Residual Matryoshka)
+            recon_loss, recon_details = recon_loss_fn(decoder, z_full_1, x)
 
-            # Contrastive loss (random Matryoshka dim)
-            dim_idx = torch.randint(len(matryoshka_dims), (1,)).item()
-            dim = matryoshka_dims[dim_idx]
-            contr_loss = contrastive_loss_fn(z1[:, :dim], z2[:, :dim])
+            # KL loss on both z_core and z_detail
+            kl_loss, kl_details = kl_loss_fn(
+                out1.mu_core, out1.log_sigma_core,
+                out1.mu_detail, out1.log_sigma_detail,
+            )
+
+            # Contrastive loss on z_core (what GP will optimize)
+            contr_loss = contrastive_loss_fn(out1.z_core, out2.z_core)
 
             # Total loss
             loss = recon_loss + kl_weight * kl_loss + contrastive_weight * contr_loss
@@ -204,26 +230,38 @@ def validate(
     device: str,
     n_samples: int = 1000,
 ) -> dict:
-    """Validate reconstruction quality."""
+    """Validate reconstruction quality with residual latent."""
     encoder.eval()
     decoder.eval()
 
-    total_cosine = 0.0
+    total_cosine_full = 0.0
+    total_cosine_core = 0.0
     total_mse = 0.0
     n = 0
 
-    # Unwrap DDP modules for accessing custom methods
     enc = encoder.module if hasattr(encoder, "module") else encoder
 
     for x in val_loader:
         x = x.to(device)
-        z = enc.encode_deterministic(x)
-        x_recon = decoder(z)
 
-        cos_sim = F.cosine_similarity(x, x_recon, dim=-1).sum()
-        mse = F.mse_loss(x, x_recon, reduction="sum")
+        # Get full latent
+        z_core, z_detail = enc.encode_deterministic_full(x)
+        z_full = torch.cat([z_core, z_detail], dim=-1)
 
-        total_cosine += cos_sim.item()
+        # Full reconstruction
+        x_recon_full = decoder(z_full)
+
+        # Core-only reconstruction (z_detail = 0)
+        z_core_only = torch.zeros_like(z_full)
+        z_core_only[:, :z_core.shape[-1]] = z_core
+        x_recon_core = decoder(z_core_only)
+
+        cos_full = F.cosine_similarity(x, x_recon_full, dim=-1).sum()
+        cos_core = F.cosine_similarity(x, x_recon_core, dim=-1).sum()
+        mse = F.mse_loss(x, x_recon_full, reduction="sum")
+
+        total_cosine_full += cos_full.item()
+        total_cosine_core += cos_core.item()
         total_mse += mse.item()
         n += x.shape[0]
 
@@ -231,26 +269,25 @@ def validate(
             break
 
     if n == 0:
-        return {"val_cosine": 0.0, "val_mse": float("inf")}
+        return {"val_cos_full": 0.0, "val_cos_core": 0.0, "val_mse": float("inf")}
 
     return {
-        "val_cosine": total_cosine / n,
-        "val_mse": total_mse / n / 768,  # Per dimension
+        "val_cos_full": total_cosine_full / n,
+        "val_cos_core": total_cosine_core / n,
+        "val_mse": total_mse / n / 768,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="EcoFlow-BO Training (Perceiver)")
+    parser = argparse.ArgumentParser(description="EcoFlow-BO Residual Latent Training")
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--decoder-lr-mult", type=float, default=1.0,
-                        help="LR multiplier for decoder (default: same as encoder)")
-    parser.add_argument("--latent-dim", type=int, default=16)
-    parser.add_argument("--hidden-size", type=int, default=1024,
-                        help="Perceiver hidden size (can be large - only 16 tokens)")
-    parser.add_argument("--depth", type=int, default=12,
-                        help="Perceiver depth (number of self-attention layers)")
+    parser.add_argument("--decoder-lr-mult", type=float, default=1.0)
+    parser.add_argument("--core-dim", type=int, default=16)
+    parser.add_argument("--detail-dim", type=int, default=32)
+    parser.add_argument("--hidden-size", type=int, default=1024)
+    parser.add_argument("--depth", type=int, default=12)
     parser.add_argument("--kl-weight", type=float, default=0.001)
     parser.add_argument("--contrastive-weight", type=float, default=0.05)
     parser.add_argument("--checkpoint-dir", type=str, default="results/ecoflow_checkpoints")
@@ -258,31 +295,34 @@ def main():
     parser.add_argument("--embeddings-path", type=str, default="datasets/gtr_embeddings_full.pt")
     args = parser.parse_args()
 
+    full_dim = args.core_dim + args.detail_dim
+
     # Distributed setup
     rank, world_size, local_rank, distributed = setup_distributed()
     device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
 
-    # GPU optimizations
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
 
     if is_main(rank):
         print("=" * 60)
-        print("EcoFlow-BO Training (Perceiver Decoder)")
+        print("EcoFlow-BO: Residual Latent Training")
         print("=" * 60)
         print(f"Device: {device}, Distributed: {distributed} (world_size={world_size})")
         print(f"Batch size: {args.batch_size} per GPU")
-        print(f"Epochs: {args.epochs}")
-        print(f"Latent dim: {args.latent_dim}")
+        print(f"Latent: z_core={args.core_dim}D + z_detail={args.detail_dim}D = {full_dim}D")
         print(f"Perceiver: hidden={args.hidden_size}, depth={args.depth}")
         print(f"Loss weights: KL={args.kl_weight}, Contrastive={args.contrastive_weight}")
         print("=" * 60)
 
     # Config
-    encoder_config = EncoderConfig(latent_dim=args.latent_dim)
+    encoder_config = EncoderConfig(
+        latent_dim=args.core_dim,
+        detail_dim=args.detail_dim,
+    )
     decoder_config = PerceiverDecoderConfig(
-        latent_dim=args.latent_dim,
+        latent_dim=full_dim,  # 48D input
         output_dim=768,
         hidden_size=args.hidden_size,
         depth=args.depth,
@@ -300,7 +340,6 @@ def main():
         print(f"Decoder: {dec_p:,} params")
         print(f"Total: {enc_p + dec_p:,} params")
 
-    # DDP
     if distributed:
         encoder = DDP(encoder, device_ids=[local_rank])
         decoder = DDP(decoder, device_ids=[local_rank])
@@ -312,7 +351,7 @@ def main():
         distributed=distributed,
     )
 
-    # Optimizer with separate LR for encoder and decoder
+    # Optimizer
     scale = min(args.batch_size / 256, 64.0)
     encoder_lr = args.lr * scale
     decoder_lr = encoder_lr * args.decoder_lr_mult
@@ -325,7 +364,7 @@ def main():
     if is_main(rank):
         print(f"LAMB optimizer:")
         print(f"  Encoder LR: {encoder_lr:.2e} (scaled {scale:.1f}x)")
-        print(f"  Decoder LR: {decoder_lr:.2e} ({args.decoder_lr_mult:.1f}x encoder)")
+        print(f"  Decoder LR: {decoder_lr:.2e}")
 
     optimizer = optim_extra.Lamb(param_groups, weight_decay=0.01)
 
@@ -335,15 +374,15 @@ def main():
     scheduler = SequentialLR(optimizer, [warmup, cosine], milestones=[10])
 
     # Loss functions
-    matryoshka_dims = encoder_config.matryoshka_dims
-    matryoshka_weights = encoder_config.matryoshka_weights
-    recon_loss_fn = MatryoshkaReconstructionLoss(matryoshka_dims, matryoshka_weights)
-    kl_loss_fn = KLDivergenceLoss()
+    recon_loss_fn = ResidualMatryoshkaLoss(
+        core_dim=args.core_dim,
+        detail_dim=args.detail_dim,
+    )
+    kl_loss_fn = ResidualKLLoss(core_weight=1.0, detail_weight=0.5)
     contrastive_loss_fn = InfoNCELoss(temperature=0.05)
 
     scaler = GradScaler("cuda", enabled=True)
 
-    # Checkpoint dir
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     # Resume
@@ -364,16 +403,14 @@ def main():
         if distributed:
             train_loader.sampler.set_epoch(epoch)
 
-        # Train
         train_metrics = train_epoch(
             encoder, decoder, train_loader, optimizer, scaler, device,
             recon_loss_fn, kl_loss_fn, contrastive_loss_fn,
-            args.kl_weight, args.contrastive_weight, matryoshka_dims,
+            args.kl_weight, args.contrastive_weight,
         )
 
         scheduler.step()
 
-        # Validate
         val_metrics = validate(encoder, decoder, val_loader, device)
 
         if is_main(rank):
@@ -382,14 +419,14 @@ def main():
                 f"Epoch {epoch}: loss={train_metrics['loss']:.4f}, "
                 f"recon={train_metrics['recon']:.4f}, "
                 f"kl={train_metrics['kl']:.4f}, "
-                f"contr={train_metrics['contrastive']:.4f}, "
-                f"val_cos={val_metrics['val_cosine']:.4f}, "
+                f"val_cos_full={val_metrics['val_cos_full']:.4f}, "
+                f"val_cos_core={val_metrics['val_cos_core']:.4f}, "
                 f"lr={current_lr:.2e}"
             )
 
-            # Save checkpoint
-            if val_metrics["val_cosine"] > best_cosine:
-                best_cosine = val_metrics["val_cosine"]
+            # Save best
+            if val_metrics["val_cos_full"] > best_cosine:
+                best_cosine = val_metrics["val_cos_full"]
                 enc_state = encoder.module.state_dict() if distributed else encoder.state_dict()
                 dec_state = decoder.module.state_dict() if distributed else decoder.state_dict()
                 torch.save({
@@ -400,7 +437,7 @@ def main():
                     "decoder_config": decoder_config,
                     "optimizer": optimizer.state_dict(),
                     "best_cosine": best_cosine,
-                }, os.path.join(args.checkpoint_dir, "best_perceiver.pt"))
+                }, os.path.join(args.checkpoint_dir, "best_residual.pt"))
                 print(f"  ★ New best: cosine={best_cosine:.4f}")
 
             # Periodic save
@@ -415,10 +452,10 @@ def main():
                     "decoder_config": decoder_config,
                     "optimizer": optimizer.state_dict(),
                     "best_cosine": best_cosine,
-                }, os.path.join(args.checkpoint_dir, f"perceiver_epoch{epoch}.pt"))
+                }, os.path.join(args.checkpoint_dir, f"residual_epoch{epoch}.pt"))
 
     if is_main(rank):
-        print(f"\nTraining complete! Best cosine similarity: {best_cosine:.4f}")
+        print(f"\nTraining complete! Best cosine: {best_cosine:.4f}")
 
     cleanup_distributed()
 

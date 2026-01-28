@@ -1,10 +1,12 @@
 """
-Latent Space GP: Gaussian Process surrogate for Bayesian Optimization in 8D latent space.
+Latent Space GP: Gaussian Process surrogate for Bayesian Optimization in latent space.
 
 Key features:
-- Coarse-to-fine optimization: Start with 2D, progressively unlock to 8D
+- Coarse-to-fine optimization: Start with 4D, progressively unlock to 16D
 - ARD kernel: Automatic Relevance Determination for Matryoshka structure
 - BoTorch integration for acquisition optimization
+
+Default schedule: 4D → 8D → 16D (see GPConfig.active_dims_schedule)
 """
 
 import torch
@@ -26,12 +28,13 @@ class LatentSpaceGP:
     """
     GP surrogate f(z) → y for Bayesian Optimization in latent space.
 
-    Supports coarse-to-fine optimization:
-    1. Stage 0: GP on dims [0,1] - 2D is easy with 20 points
-    2. Stage 1: GP on dims [0:4] - 4D with accumulated data
-    3. Stage 2: GP on dims [0:8] - Full 8D for fine-tuning
+    Supports coarse-to-fine optimization (default schedule):
+    1. Stage 0: GP on dims [0:4] - 4D is tractable with ~20 points
+    2. Stage 1: GP on dims [0:8] - 8D with accumulated data
+    3. Stage 2: GP on dims [0:16] - Full 16D for fine-tuning
 
     Uses Matryoshka encoder's property that first dims carry most info.
+    Schedule is configurable via GPConfig.active_dims_schedule.
     """
 
     def __init__(self, config: Optional[GPConfig] = None):

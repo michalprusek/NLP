@@ -148,13 +148,16 @@ class OutputProjector(nn.Module):
 
 class LatentExpander(nn.Module):
     """
-    Expand 16 latent scalars into 16 tokens for cross-attention.
+    Expand latent scalars into tokens for cross-attention.
 
-    Each latent dimension becomes a separate token with learned positional embedding.
-    This allows the transformer to selectively attend to different latent dimensions.
+    For residual latent (48D = 16D z_core + 32D z_detail):
+    - Each of 48 dimensions becomes a separate token
+    - Learned positional embeddings encode dimension importance
+    - Position 0 is most important (Matryoshka principle)
 
     Matryoshka-aware: When z[i] = 0 (masked), the corresponding token is zeroed out
     entirely, ensuring masked dimensions don't contribute to cross-attention.
+    This enables coarse-to-fine decoding where only active dims contribute.
     """
 
     def __init__(self, latent_dim: int = 16, token_dim: int = 256):
@@ -280,13 +283,20 @@ class VelocityNetwork(nn.Module):
 
     Architecture:
     1. Tokenize x_t (768D) into 12 tokens via InputTokenizer
-    2. Expand latent z (16D) into 16 tokens via LatentExpander
+    2. Expand latent z (48D) into 48 tokens via LatentExpander
+       - z_core (16D): Matryoshka-structured, GP-optimized
+       - z_detail (32D): Fixed during BO, enhances reconstruction
     3. Create time embedding with sinusoidal encoding + MLP
     4. Stack DiT blocks: self-attention on x tokens + cross-attention to z tokens
     5. Project back to data dimension (768D) via OutputProjector
 
-    Multi-token representation enables meaningful self-attention.
-    Cross-attention to latent tokens provides conditional control.
+    Residual Latent Structure:
+    z_full = [z_core (16D) | z_detail (32D)] = 48D total
+
+    Matryoshka on z_core enables coarse-to-fine optimization:
+    - GP starts with only dims [0:4] → quick orientation
+    - Progressively unlocks [0:8], then [0:16]
+    - z_detail always included for high-fidelity reconstruction
     """
 
     def __init__(self, config: Optional[DiTVelocityNetConfig] = None):
