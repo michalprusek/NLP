@@ -6,14 +6,24 @@ Large discrepancy indicates the decoder produced something off-manifold
 (a "hallucination") that the encoder can't recognize.
 
 This prevents wasting expensive objective evaluations on invalid candidates.
+
+Residual Latent Support:
+- For residual latent architecture (z_full = [z_core, z_detail])
+- GP operates on z_core only (16D) - tractable optimization
+- Decoder needs z_full (48D) - high-fidelity reconstruction
+- Cycle checker bridges the gap via detail_retriever
+- Cycle error is computed on z_core only (what GP optimizes)
 """
 
 import torch
-from typing import Optional, Tuple, List, Union
+from typing import Optional, Tuple, List, Union, TYPE_CHECKING
 
 from .encoder import MatryoshkaEncoder
 from .cfm_decoder import RectifiedFlowDecoder
 from .config import CycleConfig
+
+if TYPE_CHECKING:
+    from .detail_retriever import SimpleDetailRetriever
 
 
 class CycleConsistencyChecker:
@@ -41,7 +51,21 @@ class CycleConsistencyChecker:
         config: Optional[CycleConfig] = None,
         adaptive: bool = False,
         percentile: float = 0.95,
+        detail_retriever: Optional["SimpleDetailRetriever"] = None,
+        core_dim: int = 16,
     ):
+        """
+        Initialize cycle consistency checker.
+
+        Args:
+            encoder: Matryoshka encoder
+            decoder: Rectified flow decoder
+            config: Cycle configuration
+            adaptive: Whether to use adaptive thresholding
+            percentile: Percentile for adaptive threshold
+            detail_retriever: Optional retriever for z_detail (for residual latent mode)
+            core_dim: Dimension of z_core (default 16) for residual latent mode
+        """
         if config is None:
             config = CycleConfig()
 
@@ -57,12 +81,63 @@ class CycleConsistencyChecker:
         self.observed_errors: List[float] = []
         self.adaptive_threshold: Optional[float] = None
 
+        # Residual latent mode settings
+        self.detail_retriever = detail_retriever
+        self.core_dim = core_dim
+        self.residual_mode = detail_retriever is not None
+
     @property
     def effective_threshold(self) -> float:
         """Get the effective threshold (adaptive or fixed)."""
         if self.adaptive and self.adaptive_threshold is not None:
             return self.adaptive_threshold
         return self.error_threshold
+
+    def set_detail_retriever(
+        self,
+        detail_retriever: "SimpleDetailRetriever",
+        core_dim: int = 16,
+    ):
+        """
+        Set detail retriever for residual latent mode.
+
+        Called after initialization when training data is available.
+
+        Args:
+            detail_retriever: Retriever for z_detail from training set
+            core_dim: Dimension of z_core
+        """
+        self.detail_retriever = detail_retriever
+        self.core_dim = core_dim
+        self.residual_mode = True
+
+    def _prepare_z_for_decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Prepare z for decoding, handling residual latent mode.
+
+        In residual mode with z_core input:
+        - Retrieves z_detail from training set
+        - Returns z_full = [z_core, z_detail]
+
+        In standard mode:
+        - Returns z unchanged
+
+        Args:
+            z: Latent codes [B, latent_dim] (z_core or z_full)
+
+        Returns:
+            z_for_decode: [B, full_dim] ready for decoder
+        """
+        if not self.residual_mode or self.detail_retriever is None:
+            return z
+
+        # Check if input is z_core only (needs detail retrieval)
+        if z.shape[-1] == self.core_dim:
+            # Get z_detail from training set and concatenate
+            return self.detail_retriever.get_full_latent(z)
+        else:
+            # Input is already z_full
+            return z
 
     @torch.no_grad()
     def compute_cycle_error(
@@ -73,40 +148,59 @@ class CycleConsistencyChecker:
         """
         Compute cycle consistency error.
 
+        For residual latent mode:
+        - If z is z_core (16D), retrieves z_detail and creates z_full for decoding
+        - Cycle error is computed on z_core only (what GP optimizes)
+        - Returns z_core (not z_full) in z_reencoded
+
         Args:
-            z: Latent codes [B, latent_dim]
+            z: Latent codes [B, latent_dim] - can be z_core (16D) or z_full (48D)
             active_dims: Which dimensions to compare. Can be:
-                - None: use all dimensions
+                - None: use all dimensions (or all z_core dims in residual mode)
                 - int: use first N dimensions (legacy, for contiguous prefixes)
                 - List[int]: use specific dimension indices (supports non-contiguous)
 
         Returns:
             x_decoded: Decoded embeddings [B, data_dim]
-            z_reencoded: Re-encoded latents [B, latent_dim]
-            error: L2 error ||z - z_reencoded|| [B]
+            z_reencoded: Re-encoded latents [B, core_dim or latent_dim]
+            error: L2 error ||z_core - z_core_reencoded|| [B]
         """
         self.encoder.eval()
         self.decoder.velocity_net.eval()
 
-        # Decode
-        x_decoded = self.decoder.decode_deterministic(z)
+        # In residual mode, we need to track the original z_core for comparison
+        z_core_original = None
+        if self.residual_mode and z.shape[-1] == self.core_dim:
+            z_core_original = z  # Save for comparison
+            z_for_decode = self._prepare_z_for_decode(z)
+        else:
+            z_for_decode = z
 
-        # Re-encode (deterministic)
+        # Decode using z_full (or z if not in residual mode)
+        x_decoded = self.decoder.decode_deterministic(z_for_decode)
+
+        # Re-encode (deterministic) - returns z_core in residual mode
         z_reencoded = self.encoder.encode_deterministic(x_decoded)
+
+        # Determine what to compare based on mode
+        if z_core_original is not None:
+            # Residual mode: compare z_core only
+            z_compare = z_core_original
+            z_re_compare = z_reencoded
+        else:
+            z_compare = z
+            z_re_compare = z_reencoded
 
         # Compute error on active dimensions only
         if active_dims is not None:
             if isinstance(active_dims, int):
                 # Legacy: int means "first N dimensions"
-                z_compare = z[:, :active_dims]
-                z_re_compare = z_reencoded[:, :active_dims]
+                z_compare = z_compare[:, :active_dims]
+                z_re_compare = z_re_compare[:, :active_dims]
             else:
                 # List of indices: use advanced indexing
-                z_compare = z[:, active_dims]
-                z_re_compare = z_reencoded[:, active_dims]
-        else:
-            z_compare = z
-            z_re_compare = z_reencoded
+                z_compare = z_compare[:, active_dims]
+                z_re_compare = z_re_compare[:, active_dims]
 
         error = torch.norm(z_compare - z_re_compare, dim=-1)
 
@@ -299,7 +393,9 @@ class CycleConsistencyChecker:
         best_idx = errors.argmin()
 
         z_best = z_tried[best_idx]
-        x_decoded = self.decoder.decode_deterministic(z_best.unsqueeze(0)).squeeze(0)
+        # Prepare z for decode (handles residual latent mode)
+        z_for_decode = self._prepare_z_for_decode(z_best.unsqueeze(0))
+        x_decoded = self.decoder.decode_deterministic(z_for_decode).squeeze(0)
         error = errors[best_idx].item()
 
         return z_best, x_decoded, error, self.max_retries

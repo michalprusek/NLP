@@ -2,11 +2,17 @@
 EcoFlowBO: Main optimizer class for Bayesian Optimization in latent space.
 
 Combines all components:
-- MatryoshkaEncoder: 768D → 8D hierarchical latent
-- RectifiedFlowDecoder: 1-step deterministic decoding
-- CoarseToFineGP: Progressive dimension unlocking
+- MatryoshkaEncoder: 768D → z_core (16D) + z_detail (32D) residual latent
+- RectifiedFlowDecoder: 1-step deterministic decoding from 48D latent
+- CoarseToFineGP: Progressive dimension unlocking on z_core only (16D)
 - DensityAwareAcquisition: Manifold-respecting exploration
-- CycleConsistencyChecker: Hallucination detection
+- CycleConsistencyChecker: Hallucination detection on z_core
+- DetailRetriever: Get z_detail from training set via nearest neighbor
+
+Key Innovation: Residual Latent Decomposition
+- GP operates on z_core (16D) - tractable optimization
+- z_detail (32D) is retrieved from training set - high-fidelity decoding
+- Total 48D capacity for decoder without GP curse of dimensionality
 """
 
 import torch
@@ -20,11 +26,18 @@ from .cfm_decoder import RectifiedFlowDecoder
 from .latent_gp import CoarseToFineGP
 from .density_acquisition import DensityAwareAcquisition
 from .cycle_consistency import CycleConsistencyChecker
+from .detail_retriever import create_detail_retriever, SimpleDetailRetriever
 
 
 class EcoFlowBO:
     """
     Embedding-Conditioned Flow for Bayesian Optimization.
+
+    Key Innovation: Residual Latent Architecture
+    - z_full = [z_core (16D), z_detail (32D)] = 48D
+    - GP optimizes only z_core (tractable 16D)
+    - z_detail retrieved from training set (nearest neighbor)
+    - Decoder uses full 48D for high-fidelity reconstruction
 
     Usage:
         # Load trained models
@@ -36,7 +49,7 @@ class EcoFlowBO:
             return evaluate_prompt_quality(text)
 
         # Run optimization
-        best_z, best_embedding, best_score = optimizer.optimize(
+        best_z_core, best_embedding, best_score = optimizer.optimize(
             initial_embeddings=initial_prompts,
             initial_scores=initial_scores,
             objective=objective,
@@ -57,6 +70,11 @@ class EcoFlowBO:
         self.encoder = encoder
         self.decoder = decoder
 
+        # Residual latent dimensions
+        self.core_dim = config.encoder.latent_dim  # 16D
+        self.detail_dim = config.encoder.detail_dim  # 32D
+        self.full_dim = self.core_dim + self.detail_dim  # 48D
+
         # Initialize components
         self.gp = CoarseToFineGP(config.gp)
         self.acquisition = DensityAwareAcquisition(config.acquisition)
@@ -64,14 +82,31 @@ class EcoFlowBO:
             encoder, decoder, config.cycle, adaptive=True
         )
 
+        # Detail retriever (initialized in initialize() with training data)
+        self.detail_retriever: Optional[SimpleDetailRetriever] = None
+        self.detail_mode = config.residual_latent.detail_mode
+
         self.device = config.device
-        self.best_z = None
+        self.best_z_core = None
+        self.best_z_detail = None
         self.best_embedding = None
         self.best_score = float("-inf")
         self._initialized = False
 
         # History for analysis
         self.history: List[Dict[str, Any]] = []
+
+    @property
+    def best_z(self) -> Optional[torch.Tensor]:
+        """Backwards compatibility: returns best_z_core."""
+        return self.best_z_core
+
+    @property
+    def best_z_full(self) -> Optional[torch.Tensor]:
+        """Get best full latent [z_core, z_detail] (48D)."""
+        if self.best_z_core is None or self.best_z_detail is None:
+            return None
+        return torch.cat([self.best_z_core, self.best_z_detail], dim=-1)
 
     def to(self, device: str) -> "EcoFlowBO":
         """Move models to device."""
@@ -136,38 +171,71 @@ class EcoFlowBO:
         self,
         initial_embeddings: torch.Tensor,
         initial_scores: torch.Tensor,
+        training_embeddings: Optional[torch.Tensor] = None,
     ):
         """
-        Initialize GP with initial observations.
+        Initialize GP with initial observations and set up detail retriever.
 
         Args:
             initial_embeddings: Known embeddings [N, 768]
             initial_scores: Corresponding objective values [N]
+            training_embeddings: Full training set for detail retriever [M, 768]
+                                If None, uses initial_embeddings
         """
         initial_embeddings = initial_embeddings.to(self.device)
         initial_scores = initial_scores.to(self.device)
 
-        # Encode to latent space
+        # Encode to residual latent space
         with torch.no_grad():
-            z = self.encoder.encode_deterministic(initial_embeddings)
+            z_core, z_detail = self.encoder.encode_deterministic_full(initial_embeddings)
 
-        # Initialize GP
-        self.gp.fit(z, initial_scores)
+        # Set up detail retriever from training data
+        if training_embeddings is not None:
+            training_embeddings = training_embeddings.to(self.device)
+            with torch.no_grad():
+                train_z_core, train_z_detail = self.encoder.encode_deterministic_full(
+                    training_embeddings
+                )
+        else:
+            # Use initial embeddings as training set
+            train_z_core, train_z_detail = z_core, z_detail
+
+        self.detail_retriever = create_detail_retriever(
+            z_cores=train_z_core,
+            z_details=train_z_detail,
+            mode=self.detail_mode,
+            device=self.device,
+            use_faiss=len(train_z_core) > 50000,
+        )
+
+        # Enable residual latent mode on cycle checker
+        self.cycle_checker.set_detail_retriever(
+            self.detail_retriever,
+            core_dim=self.core_dim,
+        )
+
+        print(f"[DetailRetriever] Mode={self.detail_mode}, "
+              f"training set size={len(train_z_core)}")
+
+        # Initialize GP with z_core only (GP operates on 16D)
+        self.gp.fit(z_core, initial_scores)
 
         # Track best
         best_idx = initial_scores.argmax()
-        self.best_z = z[best_idx]
+        self.best_z_core = z_core[best_idx]
+        self.best_z_detail = z_detail[best_idx]
         self.best_embedding = initial_embeddings[best_idx]
         self.best_score = initial_scores[best_idx].item()
 
-        # Calibrate cycle checker on valid samples
-        self.cycle_checker.calibrate(z)
+        # Calibrate cycle checker on z_core (checking core consistency)
+        self.cycle_checker.calibrate(z_core)
 
         self._initialized = True
 
         print(f"Initialized with {len(initial_scores)} points")
         print(f"  Best initial score: {self.best_score:.4f}")
         print(f"  GP stage: {self.gp.current_stage} ({self.gp.n_active_dims}D)")
+        print(f"  Latent: z_core={self.core_dim}D, z_detail={self.detail_dim}D")
 
     def step(
         self,
@@ -176,6 +244,12 @@ class EcoFlowBO:
     ) -> Dict[str, Any]:
         """
         Perform one optimization step.
+
+        Residual Latent Workflow:
+        1. GP generates z_core candidates (16D)
+        2. Cycle checker retrieves z_detail and validates decode
+        3. GP is updated with z_core only
+        4. Best tracking maintains z_core, z_detail, and embedding
 
         Args:
             objective: Function that takes embedding [768] and returns score
@@ -193,9 +267,9 @@ class EcoFlowBO:
                 "Call initialize(initial_embeddings, initial_scores) first."
             )
 
-        # Generate and score candidates
+        # Generate z_core candidates (GP operates on 16D z_core)
         candidates = self.acquisition.generate_candidates(
-            self.gp, self.best_z
+            self.gp, self.best_z_core
         )
         _, acq_values = self.acquisition.select_best_candidates(
             self.gp, candidates, n_select=len(candidates)
@@ -207,7 +281,8 @@ class EcoFlowBO:
         acq_sorted = acq_values[sorted_indices]
 
         # Select valid candidate using cycle consistency
-        z_selected, x_decoded, cycle_error, n_tried = (
+        # Cycle checker handles z_detail retrieval internally for residual mode
+        z_core_selected, x_decoded, cycle_error, n_tried = (
             self.cycle_checker.select_valid_from_ranked(
                 candidates_sorted,
                 acq_sorted,
@@ -219,15 +294,20 @@ class EcoFlowBO:
         with torch.no_grad():
             score = objective(x_decoded)
 
-        # Update GP
+        # Update GP with z_core only (GP operates on 16D)
         self.gp.update(
-            z_selected.unsqueeze(0),
+            z_core_selected.unsqueeze(0),
             torch.tensor([score], device=self.device),
         )
 
         # Update best if improved
         if score > self.best_score:
-            self.best_z = z_selected
+            self.best_z_core = z_core_selected
+            # Get corresponding z_detail for best tracking
+            if self.detail_retriever is not None:
+                self.best_z_detail = self.detail_retriever.get_detail(
+                    z_core_selected.unsqueeze(0)
+                ).squeeze(0)
             self.best_embedding = x_decoded
             self.best_score = score
             improved = True
@@ -260,15 +340,20 @@ class EcoFlowBO:
         """
         Run full optimization loop.
 
+        Residual Latent Architecture:
+        - GP optimizes over z_core (16D) only
+        - z_detail (32D) is retrieved from training set via nearest neighbor
+        - Returns z_core for continued optimization; use best_z_full for full latent
+
         Args:
             initial_embeddings: Starting embeddings [N, 768]
             initial_scores: Initial objective values [N]
-            objective: Objective function
+            objective: Objective function taking embedding [768] → score
             n_iterations: Number of BO iterations
             verbose: Print progress
 
         Returns:
-            best_z: Best latent [latent_dim]
+            best_z_core: Best z_core latent [core_dim] (16D)
             best_embedding: Best embedding [768]
             best_score: Best objective value
         """
@@ -294,14 +379,14 @@ class EcoFlowBO:
             print(f"  Total evaluations: {self.gp.n_points}")
             print(f"  Final GP stage: {self.gp.current_stage}")
 
-        return self.best_z, self.best_embedding, self.best_score
+        return self.best_z_core, self.best_embedding, self.best_score
 
     def get_top_k(self, k: int = 5) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get top-k observations from GP.
 
         Returns:
-            z: Top-k latents [k, latent_dim]
+            z_core: Top-k z_core latents [k, core_dim] (16D)
             scores: Top-k scores [k]
         """
         scores = self.gp.train_y
@@ -309,12 +394,17 @@ class EcoFlowBO:
 
         return self.gp.train_z[top_indices], scores[top_indices]
 
-    def decode_latent(self, z: torch.Tensor) -> torch.Tensor:
+    def decode_latent(self, z: torch.Tensor, is_z_core: bool = True) -> torch.Tensor:
         """
         Decode latent to embedding (deterministic).
 
+        For residual latent mode:
+        - If is_z_core=True (default), retrieves z_detail and decodes z_full
+        - If is_z_core=False or z is already 48D, decodes directly
+
         Args:
-            z: Latent codes [B, latent_dim]
+            z: Latent codes [B, latent_dim] - z_core (16D) or z_full (48D)
+            is_z_core: Whether z is z_core only (requires detail retrieval)
 
         Returns:
             embeddings: [B, 768]
@@ -322,7 +412,13 @@ class EcoFlowBO:
         with torch.no_grad():
             if z.dim() == 1:
                 z = z.unsqueeze(0)
-            return self.decoder.decode_deterministic(z)
+
+            # Handle residual latent mode
+            if is_z_core and self.detail_retriever is not None and z.shape[-1] == self.core_dim:
+                z_full = self.detail_retriever.get_full_latent(z)
+                return self.decoder.decode_deterministic(z_full)
+            else:
+                return self.decoder.decode_deterministic(z)
 
     def get_optimization_summary(self) -> Dict[str, Any]:
         """Get summary statistics of the optimization run."""
@@ -371,17 +467,21 @@ class EcoFlowBOWithVec2Text(EcoFlowBO):
             self._inverter = Inverter.from_pretrained(self.vec2text_model)
         return self._inverter
 
-    def decode_to_text(self, z: torch.Tensor) -> List[str]:
+    def decode_to_text(self, z: torch.Tensor, is_z_core: bool = True) -> List[str]:
         """
         Decode latent to text via embedding → vec2text.
 
+        For residual latent mode:
+        - If is_z_core=True (default), retrieves z_detail automatically
+
         Args:
-            z: Latent codes [B, latent_dim]
+            z: Latent codes [B, latent_dim] - z_core (16D) or z_full (48D)
+            is_z_core: Whether z is z_core only
 
         Returns:
             texts: List of decoded texts
         """
-        embeddings = self.decode_latent(z)
+        embeddings = self.decode_latent(z, is_z_core=is_z_core)
         texts = self.inverter.invert(embeddings.cpu().numpy())
         return texts
 
