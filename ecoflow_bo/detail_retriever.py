@@ -182,6 +182,9 @@ class DetailRetriever:
             z_full: Full latent [B, core_dim + detail_dim]
         """
         z_detail = self.get_detail(z_core)
+        # Ensure dtype matches z_core to avoid mixed precision issues
+        if z_detail.dtype != z_core.dtype:
+            z_detail = z_detail.to(dtype=z_core.dtype)
         return torch.cat([z_core, z_detail], dim=-1)
 
 
@@ -246,29 +249,35 @@ class SimpleDetailRetriever:
     def get_detail(self, z_core: torch.Tensor) -> torch.Tensor:
         """Get z_detail for given z_core candidates."""
         B = z_core.shape[0]
+        query_dtype = z_core.dtype
 
         if self.mode == "zero":
-            return torch.zeros(B, self.detail_dim, device=self.device, dtype=z_core.dtype)
+            return torch.zeros(B, self.detail_dim, device=self.device, dtype=query_dtype)
 
         elif self.mode == "mean":
-            return self.z_detail_mean.unsqueeze(0).expand(B, -1).clone()
+            result = self.z_detail_mean.unsqueeze(0).expand(B, -1).clone()
+            return result.to(dtype=query_dtype) if result.dtype != query_dtype else result
 
         elif self.mode in ["nearest", "k_nearest"]:
-            # Normalize query
-            z_core_norm = F.normalize(z_core.to(self.device), dim=-1)
+            # Normalize query - use float32 for similarity computation then cast back
+            z_core_f32 = z_core.to(device=self.device, dtype=torch.float32)
+            z_core_norm = F.normalize(z_core_f32, dim=-1)
 
-            # Compute cosine similarity: [B, N]
-            sim = torch.mm(z_core_norm, self.z_cores.t())
+            # Compute cosine similarity in float32: [B, N]
+            z_cores_f32 = self.z_cores.to(dtype=torch.float32) if self.z_cores.dtype != torch.float32 else self.z_cores
+            sim = torch.mm(z_core_norm, z_cores_f32.t())
 
             if self.mode == "nearest":
                 # Get single nearest neighbor
                 indices = sim.argmax(dim=-1)  # [B]
-                return self.z_details[indices]
+                result = self.z_details[indices]
             else:
                 # Get k nearest neighbors and average
                 _, indices = sim.topk(self.k, dim=-1)  # [B, k]
                 z_details_k = self.z_details[indices]  # [B, k, detail_dim]
-                return z_details_k.mean(dim=1)
+                result = z_details_k.mean(dim=1)
+
+            return result.to(dtype=query_dtype) if result.dtype != query_dtype else result
 
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
@@ -276,6 +285,9 @@ class SimpleDetailRetriever:
     def get_full_latent(self, z_core: torch.Tensor) -> torch.Tensor:
         """Get full latent z_full = [z_core, z_detail]."""
         z_detail = self.get_detail(z_core)
+        # Ensure dtype matches z_core to avoid mixed precision issues
+        if z_detail.dtype != z_core.dtype:
+            z_detail = z_detail.to(dtype=z_core.dtype)
         return torch.cat([z_core, z_detail], dim=-1)
 
 

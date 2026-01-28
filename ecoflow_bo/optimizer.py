@@ -181,7 +181,33 @@ class EcoFlowBO:
             initial_scores: Corresponding objective values [N]
             training_embeddings: Full training set for detail retriever [M, 768]
                                 If None, uses initial_embeddings
+
+        Raises:
+            ValueError: If input shapes are invalid or mismatched
         """
+        # Validate inputs
+        if initial_embeddings.dim() != 2:
+            raise ValueError(
+                f"initial_embeddings must be 2D [N, 768], got shape {initial_embeddings.shape}"
+            )
+        if initial_scores.dim() != 1:
+            raise ValueError(
+                f"initial_scores must be 1D [N], got shape {initial_scores.shape}"
+            )
+        if initial_embeddings.shape[0] != initial_scores.shape[0]:
+            raise ValueError(
+                f"initial_embeddings ({initial_embeddings.shape[0]}) and "
+                f"initial_scores ({initial_scores.shape[0]}) must have same batch size"
+            )
+        if initial_embeddings.shape[0] < 2:
+            raise ValueError(
+                f"Need at least 2 initial embeddings for GP fitting, got {initial_embeddings.shape[0]}"
+            )
+        if training_embeddings is not None and training_embeddings.dim() != 2:
+            raise ValueError(
+                f"training_embeddings must be 2D [M, 768], got shape {training_embeddings.shape}"
+            )
+
         initial_embeddings = initial_embeddings.to(self.device)
         initial_scores = initial_scores.to(self.device)
 
@@ -204,6 +230,7 @@ class EcoFlowBO:
             z_cores=train_z_core,
             z_details=train_z_detail,
             mode=self.detail_mode,
+            k=self.config.residual_latent.n_neighbors,
             device=self.device,
             use_faiss=len(train_z_core) > 50000,
         )
@@ -291,8 +318,18 @@ class EcoFlowBO:
         )
 
         # Evaluate objective
+        import logging
+        logger = logging.getLogger(__name__)
         with torch.no_grad():
-            score = objective(x_decoded)
+            try:
+                score = objective(x_decoded)
+            except Exception as e:
+                logger.error(
+                    f"Objective function raised exception: {e}. "
+                    f"Input shape: {x_decoded.shape}, dtype: {x_decoded.dtype}. "
+                    f"Returning -inf score for this candidate."
+                )
+                score = float("-inf")
 
         # Update GP with z_core only (GP operates on 16D)
         self.gp.update(

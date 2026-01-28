@@ -87,13 +87,26 @@ class ResidualLatentConfig:
     # During BO, z_detail can be:
     # - "zero": all zeros (simplest, may hurt reconstruction)
     # - "mean": mean of training set z_details
-    # - "sample": fresh sample from N(0,I) each iteration
     # - "nearest": copy z_detail from nearest neighbor by z_core (recommended!)
     #              Uses training set to find sample with most similar z_core
+    # - "k_nearest": average z_detail from k nearest neighbors
     detail_mode: str = "nearest"
 
-    # For "nearest" mode: number of neighbors to average (1 = single nearest)
+    # For "nearest"/"k_nearest" mode: number of neighbors to average (1 = single nearest)
     n_neighbors: int = 1
+
+    # Valid detail_mode values
+    VALID_DETAIL_MODES = ("zero", "mean", "nearest", "k_nearest")
+
+    def __post_init__(self):
+        """Validate configuration."""
+        if self.detail_mode not in self.VALID_DETAIL_MODES:
+            raise ValueError(
+                f"detail_mode must be one of {self.VALID_DETAIL_MODES}, "
+                f"got '{self.detail_mode}'"
+            )
+        if self.n_neighbors < 1:
+            raise ValueError(f"n_neighbors must be >= 1, got {self.n_neighbors}")
 
     @property
     def full_dim(self) -> int:

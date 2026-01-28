@@ -388,15 +388,25 @@ class CycleConsistencyChecker:
                 return z_i, x_decoded, error, i + 1
 
         # No valid found - return best (lowest error) from tried
+        import logging
+        logger = logging.getLogger(__name__)
+
         z_tried = z_candidates[: self.max_retries]
         _, _, errors = self.compute_cycle_error(z_tried, active_dims)
         best_idx = errors.argmin()
+        error = errors[best_idx].item()
+
+        logger.warning(
+            f"[Cycle] No valid candidate found after {self.max_retries} tries. "
+            f"Returning best invalid candidate with error={error:.4f} "
+            f"(threshold={self.effective_threshold:.4f}). "
+            f"Error stats: min={errors.min():.4f}, max={errors.max():.4f}."
+        )
 
         z_best = z_tried[best_idx]
         # Prepare z for decode (handles residual latent mode)
         z_for_decode = self._prepare_z_for_decode(z_best.unsqueeze(0))
         x_decoded = self.decoder.decode_deterministic(z_for_decode).squeeze(0)
-        error = errors[best_idx].item()
 
         return z_best, x_decoded, error, self.max_retries
 
