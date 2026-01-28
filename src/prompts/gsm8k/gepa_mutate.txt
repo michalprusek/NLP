@@ -1,0 +1,33 @@
+You are an expert prompt engineer. Your task is to improve a math problem-solving prompt based on analysis of its failures.
+
+## Current Prompt
+{current_prompt}
+
+## Analysis of Failures
+{reflection}
+
+## High-Performing Reference Prompts (Pareto Front)
+{pareto_prompts}
+
+## Your Task
+
+Generate {num_mutations} improved versions of the prompt that address the identified weaknesses.
+
+Requirements:
+- Each prompt should be self-contained and complete
+- Focus on fixing the specific weaknesses identified
+- You may incorporate successful patterns from the reference prompts
+- Keep prompts concise but comprehensive (100-300 words)
+- Each prompt should take a slightly different approach
+
+Output exactly {num_mutations} prompts in this format:
+
+<prompt_1>
+[Your improved prompt here]
+</prompt_1>
+
+<prompt_2>
+[Your improved prompt here]
+</prompt_2>
+
+{mutation_tags}

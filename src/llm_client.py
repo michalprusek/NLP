@@ -19,6 +19,29 @@ class LLMClient(ABC):
         pass
 
 
+def _patch_vllm_platform():
+    """Patch vLLM platform detection when NVML is broken but CUDA works."""
+    import torch
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        # Force CUDA platform by monkey-patching before vLLM initializes
+        import vllm.platforms
+        from vllm.platforms.cuda import CudaPlatform
+
+        # Replace the current_platform with CudaPlatform
+        cuda_platform = CudaPlatform()
+        vllm.platforms.current_platform = cuda_platform
+        vllm.platforms._current_platform = cuda_platform
+    except (ImportError, AttributeError) as e:
+        print(
+            f"  Warning: Could not patch vLLM platform ({type(e).__name__}): {e}. "
+            "This may cause device detection issues. If you see CUDA errors, "
+            "try: pip install --upgrade vllm"
+        )
+
+
 class VLLMClient(LLMClient):
     """LLM client using vLLM for fast local inference"""
 
@@ -28,6 +51,13 @@ class VLLMClient(LLMClient):
         tensor_parallel_size: int = 1,
         gpu_memory_utilization: float = 0.90,
     ):
+        os.environ["VLLM_USE_V1"] = "0"
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        os.environ["VLLM_TARGET_DEVICE"] = "cuda"
+
+        # Patch vLLM platform before importing LLM
+        _patch_vllm_platform()
+
         from vllm import LLM
         from transformers import AutoTokenizer
 
@@ -36,9 +66,6 @@ class VLLMClient(LLMClient):
         print(f"Loading model with vLLM: {model_name}")
         print(f"  Tensor parallel size: {tensor_parallel_size}")
         print(f"  GPU memory utilization: {gpu_memory_utilization:.0%}")
-
-        os.environ["VLLM_USE_V1"] = "0"
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
         self.llm = LLM(
             model=model_name,
@@ -80,8 +107,11 @@ class VLLMClient(LLMClient):
                             executor.shutdown()
             except KeyboardInterrupt:
                 raise  # Never swallow keyboard interrupt
+            except RuntimeError as e:
+                print(f"  Warning: CUDA runtime error during cleanup (GPU memory may still be allocated): {e}")
             except Exception as e:
-                print(f"  Warning during engine shutdown: {e}")
+                print(f"  Warning: Unexpected error during engine shutdown ({type(e).__name__}): {e}")
+                print("  GPU resources may not be fully released - consider restarting if memory issues occur")
 
             # Delete the LLM object
             del self.llm
@@ -170,12 +200,21 @@ class OpenAIClient(LLMClient):
                     temperature=temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                results.append(response.choices[0].message.content)
+                if not response.choices:
+                    print(f"[ERROR] OpenAI returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
+                    results.append(None)
+                else:
+                    results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
                 raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"[WARNING] OpenAI error on prompt {i+1}/{len(prompts)}: {e}")
-                results.append("")  # Empty string signals failure to caller
+                error_type = type(e).__name__
+                print(f"[ERROR] OpenAI {error_type} on prompt {i+1}/{len(prompts)}: {e}")
+                # Re-raise authentication errors - these are not recoverable
+                if "auth" in error_type.lower() or "401" in str(e):
+                    raise
+                # For other errors, append None to signal failure (distinguishable from empty response)
+                results.append(None)
         return results
 
 
@@ -212,12 +251,21 @@ class DeepInfraClient(LLMClient):
                     temperature=temperature,
                     messages=[{"role": "user", "content": prompt}]
                 )
-                results.append(response.choices[0].message.content)
+                if not response.choices:
+                    print(f"[ERROR] DeepInfra returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
+                    results.append(None)
+                else:
+                    results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
                 raise  # Never swallow keyboard interrupt
             except Exception as e:
-                print(f"[WARNING] DeepInfra error on prompt {i+1}/{len(prompts)}: {e}")
-                results.append("")  # Empty string signals failure to caller
+                error_type = type(e).__name__
+                print(f"[ERROR] DeepInfra {error_type} on prompt {i+1}/{len(prompts)}: {e}")
+                # Re-raise authentication errors - these are not recoverable
+                if "auth" in error_type.lower() or "401" in str(e):
+                    raise
+                # For other errors, append None to signal failure (distinguishable from empty response)
+                results.append(None)
         return results
 
 
@@ -236,6 +284,8 @@ def create_llm_client(model_name: str, backend: str = "auto", **kwargs) -> LLMCl
     ALIASES = {
         "gpt-3.5": "gpt-3.5-turbo",
         "gemma-3-4b": "google/gemma-3-4b-it",
+        "qwen": "Qwen/Qwen2.5-7B-Instruct",
+        "llama": "meta-llama/Llama-3.1-8B-Instruct",
     }
 
     if model_name.lower() in ALIASES:
