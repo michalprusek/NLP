@@ -151,7 +151,6 @@ def train_epoch(
     contrastive_loss_fn: InfoNCELoss,
     kl_weight: float,
     contrastive_weight: float,
-    core_dim: int,
 ) -> dict:
     """Train for one epoch with residual latent."""
     encoder.train()
@@ -407,7 +406,7 @@ def main():
         train_metrics = train_epoch(
             encoder, decoder, train_loader, optimizer, scaler, device,
             recon_loss_fn, kl_loss_fn, contrastive_loss_fn,
-            args.kl_weight, args.contrastive_weight, args.core_dim,
+            args.kl_weight, args.contrastive_weight,
         )
 
         scheduler.step()

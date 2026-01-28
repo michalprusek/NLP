@@ -65,6 +65,7 @@ class DetailRetriever:
 
         Raises:
             ImportError: If FAISS is not installed
+            ValueError: If inputs have invalid shapes or mismatched dimensions
         """
         if not FAISS_AVAILABLE:
             raise ImportError(
@@ -72,6 +73,24 @@ class DetailRetriever:
                 "Install with: pip install faiss-cpu or pip install faiss-gpu. "
                 "For smaller datasets (<50K), use SimpleDetailRetriever instead."
             )
+
+        # Validate inputs
+        if z_cores.dim() != 2:
+            raise ValueError(f"z_cores must be 2D [N, core_dim], got shape {z_cores.shape}")
+        if z_details.dim() != 2:
+            raise ValueError(f"z_details must be 2D [N, detail_dim], got shape {z_details.shape}")
+        if z_cores.shape[0] != z_details.shape[0]:
+            raise ValueError(
+                f"z_cores and z_details must have same batch size: "
+                f"z_cores has {z_cores.shape[0]}, z_details has {z_details.shape[0]}"
+            )
+        if z_cores.shape[0] == 0:
+            raise ValueError("Cannot create DetailRetriever with empty training set")
+        if mode == "k_nearest" and k > z_cores.shape[0]:
+            raise ValueError(
+                f"k={k} exceeds training set size {z_cores.shape[0]} for k_nearest mode"
+            )
+
         self.mode = mode
         self.k = k
         self.device = device
@@ -181,6 +200,36 @@ class SimpleDetailRetriever:
         k: int = 1,
         device: str = "cuda",
     ):
+        """
+        Initialize simple detail retriever with training set latents.
+
+        Args:
+            z_cores: Training z_core values [N, core_dim]
+            z_details: Training z_detail values [N, detail_dim]
+            mode: Retrieval strategy
+            k: Number of neighbors for k_nearest mode
+            device: Device for computations
+
+        Raises:
+            ValueError: If inputs have invalid shapes or mismatched dimensions
+        """
+        # Validate inputs
+        if z_cores.dim() != 2:
+            raise ValueError(f"z_cores must be 2D [N, core_dim], got shape {z_cores.shape}")
+        if z_details.dim() != 2:
+            raise ValueError(f"z_details must be 2D [N, detail_dim], got shape {z_details.shape}")
+        if z_cores.shape[0] != z_details.shape[0]:
+            raise ValueError(
+                f"z_cores and z_details must have same batch size: "
+                f"z_cores has {z_cores.shape[0]}, z_details has {z_details.shape[0]}"
+            )
+        if z_cores.shape[0] == 0:
+            raise ValueError("Cannot create SimpleDetailRetriever with empty training set")
+        if mode == "k_nearest" and k > z_cores.shape[0]:
+            raise ValueError(
+                f"k={k} exceeds training set size {z_cores.shape[0]} for k_nearest mode"
+            )
+
         self.mode = mode
         self.k = k
         self.device = device
@@ -244,13 +293,22 @@ def create_detail_retriever(
     Uses FAISS for large datasets (>50K), simple brute-force for small ones.
     Falls back to SimpleDetailRetriever if FAISS is not installed.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     N = z_cores.shape[0]
 
     # Use FAISS for large datasets if available
     if use_faiss and FAISS_AVAILABLE and N > 50000:
         try:
             return DetailRetriever(z_cores, z_details, mode, k, device)
-        except Exception as e:
-            print(f"[Warning] FAISS failed ({e}), falling back to simple retriever")
+        except (RuntimeError, MemoryError) as e:
+            # Only catch FAISS-specific runtime errors, not programming bugs
+            logger.warning(
+                f"FAISS index construction failed: {e}. "
+                f"Falling back to SimpleDetailRetriever (brute-force). "
+                f"This may be slower for {N} samples."
+            )
+        # Let other exceptions (ValueError, TypeError, etc.) propagate
 
     return SimpleDetailRetriever(z_cores, z_details, mode, k, device)
