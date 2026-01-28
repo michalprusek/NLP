@@ -1,7 +1,74 @@
 """Configuration dataclasses for EcoFlow-BO."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
+
+import torch
+
+
+# ============================================================================
+# Utility functions
+# ============================================================================
+
+
+def ensure_active_dims_list(
+    active_dims: Union[int, List[int], None],
+    latent_dim: int = 16
+) -> Optional[List[int]]:
+    """
+    Convert active_dims to List[int] format for consistent handling.
+
+    Args:
+        active_dims: Which dimensions are active. Can be:
+            - None: returns None (use all dimensions)
+            - int: returns list(range(active_dims)) - first N dimensions
+            - List[int]: returns as-is
+        latent_dim: Maximum latent dimension (for validation)
+
+    Returns:
+        List of active dimension indices, or None if all dimensions active
+
+    Example:
+        >>> ensure_active_dims_list(4)
+        [0, 1, 2, 3]
+        >>> ensure_active_dims_list([0, 1, 2, 3])
+        [0, 1, 2, 3]
+        >>> ensure_active_dims_list(None)
+        None
+    """
+    if active_dims is None:
+        return None
+    if isinstance(active_dims, int):
+        if active_dims > latent_dim:
+            raise ValueError(
+                f"active_dims={active_dims} exceeds latent_dim={latent_dim}"
+            )
+        return list(range(active_dims))
+    return active_dims
+
+
+def clamp_to_search_bounds(
+    z: torch.Tensor,
+    lower: torch.Tensor,
+    upper: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Clamp tensor values to search bounds.
+
+    Args:
+        z: Tensor to clamp [B, D] or [D]
+        lower: Lower bounds [D]
+        upper: Upper bounds [D]
+
+    Returns:
+        Clamped tensor with same shape as z
+    """
+    return torch.clamp(z, lower, upper)
+
+
+# ============================================================================
+# Configuration dataclasses
+# ============================================================================
 
 
 @dataclass

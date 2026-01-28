@@ -28,6 +28,10 @@ class CycleConsistencyChecker:
     If error is large, the decoder likely "hallucinated" - produced an embedding
     that doesn't correspond to the input z. This happens when z is far from the
     training distribution.
+
+    Supports two modes:
+    - Fixed threshold (adaptive=False): Use config.error_threshold directly
+    - Adaptive threshold (adaptive=True): Calibrate threshold from observed errors
     """
 
     def __init__(
@@ -35,6 +39,8 @@ class CycleConsistencyChecker:
         encoder: MatryoshkaEncoder,
         decoder: RectifiedFlowDecoder,
         config: Optional[CycleConfig] = None,
+        adaptive: bool = False,
+        percentile: float = 0.95,
     ):
         if config is None:
             config = CycleConfig()
@@ -44,6 +50,19 @@ class CycleConsistencyChecker:
         self.config = config
         self.error_threshold = config.error_threshold
         self.max_retries = config.max_retries
+
+        # Adaptive mode settings
+        self.adaptive = adaptive
+        self.percentile = percentile
+        self.observed_errors: List[float] = []
+        self.adaptive_threshold: Optional[float] = None
+
+    @property
+    def effective_threshold(self) -> float:
+        """Get the effective threshold (adaptive or fixed)."""
+        if self.adaptive and self.adaptive_threshold is not None:
+            return self.adaptive_threshold
+        return self.error_threshold
 
     @torch.no_grad()
     def compute_cycle_error(
@@ -93,6 +112,61 @@ class CycleConsistencyChecker:
 
         return x_decoded, z_reencoded, error
 
+    def calibrate(
+        self,
+        z_samples: torch.Tensor,
+        active_dims: Optional[Union[int, List[int]]] = None,
+    ):
+        """
+        Calibrate threshold based on error distribution on known-good samples.
+
+        Only has effect when adaptive=True. In fixed mode, this is a no-op.
+
+        Args:
+            z_samples: Samples from encoder (should be valid) [N, latent_dim]
+            active_dims: Which dims to use (int for prefix, List[int] for indices)
+        """
+        if not self.adaptive:
+            return  # No-op for fixed mode
+
+        _, _, errors = self.compute_cycle_error(z_samples, active_dims)
+
+        # Set threshold at percentile of observed errors
+        sorted_errors = errors.sort().values
+        idx = int(self.percentile * len(sorted_errors))
+        self.adaptive_threshold = sorted_errors[idx].item()
+
+        # Add buffer
+        self.adaptive_threshold *= 1.2
+
+        print(f"[Cycle] Calibrated threshold: {self.adaptive_threshold:.4f} "
+              f"(median={errors.median():.4f}, 95th={sorted_errors[idx]:.4f})")
+
+    def update_stats(self, error: float):
+        """
+        Track error for online threshold adjustment.
+
+        Only has effect when adaptive=True. In fixed mode, this is a no-op.
+        """
+        if not self.adaptive:
+            return  # No-op for fixed mode
+
+        self.observed_errors.append(error)
+
+        # Periodically update threshold
+        if len(self.observed_errors) % 50 == 0:
+            sorted_errors = sorted(self.observed_errors)
+            idx = int(self.percentile * len(sorted_errors))
+            new_threshold = sorted_errors[idx] * 1.2
+
+            if self.adaptive_threshold is None:
+                self.adaptive_threshold = new_threshold
+            else:
+                # Exponential moving average
+                self.adaptive_threshold = (
+                    0.9 * self.adaptive_threshold + 0.1 * new_threshold
+                )
+
     def is_valid(
         self,
         z: torch.Tensor,
@@ -110,7 +184,7 @@ class CycleConsistencyChecker:
             errors: Cycle errors [B]
         """
         _, _, errors = self.compute_cycle_error(z, active_dims)
-        valid_mask = errors < self.error_threshold
+        valid_mask = errors < self.effective_threshold
         return valid_mask, errors
 
     def filter_valid(
@@ -131,7 +205,8 @@ class CycleConsistencyChecker:
             errors: Errors for valid [M]
         """
         x_decoded, _, errors = self.compute_cycle_error(z_candidates, active_dims)
-        valid_mask = errors < self.error_threshold
+        threshold = self.effective_threshold
+        valid_mask = errors < threshold
 
         if not valid_mask.any():
             # No valid candidates - critical error condition
@@ -141,7 +216,7 @@ class CycleConsistencyChecker:
             error_stats = f"min={errors.min():.3f}, median={errors.median():.3f}, max={errors.max():.3f}"
             logger.error(
                 f"CRITICAL: All {len(z_candidates)} candidates failed cycle consistency! "
-                f"Threshold={self.error_threshold:.3f}, error stats: {error_stats}. "
+                f"Threshold={threshold:.3f}, error stats: {error_stats}. "
                 f"This indicates decoder hallucinations or encoder-decoder misalignment. "
                 f"Returning best invalid candidate with error={errors[best_idx].item():.3f}."
             )
@@ -179,7 +254,7 @@ class CycleConsistencyChecker:
 
         x_decoded, _, error = self.compute_cycle_error(z, active_dims)
         error_val = error.item()
-        valid = error_val < self.error_threshold
+        valid = error_val < self.effective_threshold
 
         if valid:
             return x_decoded.squeeze(0), error_val, True
@@ -209,6 +284,8 @@ class CycleConsistencyChecker:
             error: Cycle error
             n_tried: Number of candidates tried
         """
+        threshold = self.effective_threshold
+
         for i in range(min(self.max_retries, len(z_candidates))):
             z_i = z_candidates[i]
             x_decoded, error, valid = self.check_and_decode(z_i, active_dims)
@@ -228,83 +305,5 @@ class CycleConsistencyChecker:
         return z_best, x_decoded, error, self.max_retries
 
 
-class AdaptiveCycleChecker(CycleConsistencyChecker):
-    """
-    Adaptive cycle consistency checker that adjusts threshold based on
-    observed error distribution.
-
-    Useful when the optimal threshold depends on the specific encoder/decoder
-    quality achieved during training.
-    """
-
-    def __init__(
-        self,
-        encoder: MatryoshkaEncoder,
-        decoder: RectifiedFlowDecoder,
-        config: Optional[CycleConfig] = None,
-        percentile: float = 0.95,
-    ):
-        super().__init__(encoder, decoder, config)
-        self.percentile = percentile
-        self.observed_errors: List[float] = []
-        self.adaptive_threshold: Optional[float] = None
-
-    def calibrate(
-        self,
-        z_samples: torch.Tensor,
-        active_dims: Optional[Union[int, List[int]]] = None,
-    ):
-        """
-        Calibrate threshold based on error distribution on known-good samples.
-
-        Args:
-            z_samples: Samples from encoder (should be valid) [N, latent_dim]
-            active_dims: Which dims to use (int for prefix, List[int] for indices)
-        """
-        _, _, errors = self.compute_cycle_error(z_samples, active_dims)
-
-        # Set threshold at percentile of observed errors
-        sorted_errors = errors.sort().values
-        idx = int(self.percentile * len(sorted_errors))
-        self.adaptive_threshold = sorted_errors[idx].item()
-
-        # Add buffer
-        self.adaptive_threshold *= 1.2
-
-        print(f"[Cycle] Calibrated threshold: {self.adaptive_threshold:.4f} "
-              f"(median={errors.median():.4f}, 95th={sorted_errors[idx]:.4f})")
-
-    def is_valid(
-        self,
-        z: torch.Tensor,
-        active_dims: Optional[Union[int, List[int]]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Check validity using adaptive or fixed threshold."""
-        _, _, errors = self.compute_cycle_error(z, active_dims)
-
-        threshold = (
-            self.adaptive_threshold
-            if self.adaptive_threshold is not None
-            else self.error_threshold
-        )
-
-        valid_mask = errors < threshold
-        return valid_mask, errors
-
-    def update_stats(self, error: float):
-        """Track error for online threshold adjustment."""
-        self.observed_errors.append(error)
-
-        # Periodically update threshold
-        if len(self.observed_errors) % 50 == 0:
-            sorted_errors = sorted(self.observed_errors)
-            idx = int(self.percentile * len(sorted_errors))
-            new_threshold = sorted_errors[idx] * 1.2
-
-            if self.adaptive_threshold is None:
-                self.adaptive_threshold = new_threshold
-            else:
-                # Exponential moving average
-                self.adaptive_threshold = (
-                    0.9 * self.adaptive_threshold + 0.1 * new_threshold
-                )
+# Backwards compatibility alias (deprecated)
+AdaptiveCycleChecker = CycleConsistencyChecker

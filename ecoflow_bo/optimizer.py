@@ -19,7 +19,7 @@ from .velocity_network import VelocityNetwork
 from .cfm_decoder import RectifiedFlowDecoder
 from .latent_gp import CoarseToFineGP
 from .density_acquisition import DensityAwareAcquisition
-from .cycle_consistency import AdaptiveCycleChecker
+from .cycle_consistency import CycleConsistencyChecker
 
 
 class EcoFlowBO:
@@ -60,8 +60,8 @@ class EcoFlowBO:
         # Initialize components
         self.gp = CoarseToFineGP(config.gp)
         self.acquisition = DensityAwareAcquisition(config.acquisition)
-        self.cycle_checker = AdaptiveCycleChecker(
-            encoder, decoder, config.cycle
+        self.cycle_checker = CycleConsistencyChecker(
+            encoder, decoder, config.cycle, adaptive=True
         )
 
         self.device = config.device
