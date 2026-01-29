@@ -8,20 +8,15 @@ This module implements:
 """
 
 from src.ecoflow.velocity_network import VelocityNetwork
+from src.ecoflow.flow_model import FlowMatchingModel
+from src.ecoflow.data import SonarEmbeddingDataset, get_sonar_dataloader
+from src.ecoflow.train_flow import EMAModel, train_flow
 
 __all__ = [
     "VelocityNetwork",
+    "FlowMatchingModel",
+    "SonarEmbeddingDataset",
+    "get_sonar_dataloader",
+    "EMAModel",
+    "train_flow",
 ]
-
-# Lazy imports for modules that may not exist yet
-def __getattr__(name):
-    if name == "FlowMatchingModel":
-        from src.ecoflow.flow_model import FlowMatchingModel
-        return FlowMatchingModel
-    elif name == "SonarEmbeddingDataset":
-        from src.ecoflow.data import SonarEmbeddingDataset
-        return SonarEmbeddingDataset
-    elif name == "get_sonar_dataloader":
-        from src.ecoflow.data import get_sonar_dataloader
-        return get_sonar_dataloader
-    raise AttributeError(f"module 'src.ecoflow' has no attribute {name!r}")
