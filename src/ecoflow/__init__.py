@@ -7,6 +7,7 @@ This module implements:
 - Training infrastructure for OT-CFM objective
 - SonarDecoder: SONAR embedding-to-text decoder
 - Validation utilities for generation quality assessment
+- SonarGPSurrogate: GP surrogate for 1024D SONAR Bayesian optimization
 """
 
 from src.ecoflow.velocity_network import VelocityNetwork
@@ -21,6 +22,7 @@ from src.ecoflow.validate import (
     validate_generation,
     load_model_from_checkpoint,
 )
+from src.ecoflow.gp_surrogate import SonarGPSurrogate
 
 __all__ = [
     "VelocityNetwork",
@@ -35,4 +37,5 @@ __all__ = [
     "compute_text_metrics",
     "validate_generation",
     "load_model_from_checkpoint",
+    "SonarGPSurrogate",
 ]
