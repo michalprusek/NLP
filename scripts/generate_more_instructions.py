@@ -47,10 +47,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Load environment variables from .env
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
