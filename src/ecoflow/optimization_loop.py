@@ -12,6 +12,11 @@ Key classes:
 - OptimizationState: Checkpoint-able state for resumable optimization
 - MetricsTracker: Sample efficiency metrics tracking
 
+Features:
+- Round-trip fidelity (L2-r) filtering to reject off-manifold samples
+- UCB-based candidate selection for sample efficiency
+- Checkpoint/resume support for long-running optimization
+
 Usage:
     >>> loop = BOOptimizationLoop(flow_model, gp, sampler, decoder, evaluator, llm_client)
     >>> loop.initialize()  # Generate initial samples, fit GP
@@ -25,7 +30,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -265,6 +270,9 @@ class BOOptimizationLoop:
         batch_size: int = 4,
         eval_subset_size: int = 150,
         device: str = "cuda",
+        encoder: Optional[Any] = None,
+        l2r_threshold: float = 0.5,
+        l2r_filter_enabled: bool = True,
     ):
         """
         Initialize the optimization loop.
@@ -280,6 +288,9 @@ class BOOptimizationLoop:
             batch_size: Samples per iteration (default 4)
             eval_subset_size: GSM8K subset size for evaluation (default 150)
             device: Computation device (default "cuda")
+            encoder: Optional SONAR encoder for round-trip fidelity computation
+            l2r_threshold: L2-r threshold for on-manifold filtering (default 0.5)
+            l2r_filter_enabled: Whether to enable L2-r filtering (default True)
         """
         self.flow_model = flow_model
         self.gp = gp
@@ -292,6 +303,11 @@ class BOOptimizationLoop:
         self.batch_size = batch_size
         self.eval_subset_size = eval_subset_size
         self.device = device
+
+        # L2-r filtering parameters
+        self.encoder = encoder
+        self.l2r_threshold = l2r_threshold
+        self.l2r_filter_enabled = l2r_filter_enabled
 
         # State variables (initialized by initialize() or load_checkpoint())
         self.train_X: Optional[torch.Tensor] = None  # [N, 1024]
@@ -343,6 +359,53 @@ class BOOptimizationLoop:
                 return False
 
         return True
+
+    def _compute_round_trip_fidelity(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        Compute round-trip fidelity (L2-r) for embeddings.
+
+        L2-r = ||emb - encode(decode(emb))||_2
+
+        Low L2-r indicates embedding is on valid SONAR manifold.
+        High L2-r indicates off-manifold (will decode poorly).
+
+        From Phase 7 diagnosis:
+        - Flow samples: L2-r avg 0.3365 (off-manifold)
+        - Instruction embeddings: L2-r avg 0.0548 (on-manifold)
+        - Threshold of 0.5 should reject most off-manifold samples
+
+        Args:
+            embeddings: SONAR embeddings [B, 1024]
+
+        Returns:
+            L2-r distances [B]
+        """
+        if self.encoder is None:
+            logger.debug("No encoder provided, skipping L2-r computation")
+            return torch.zeros(embeddings.shape[0], device=embeddings.device)
+
+        # Decode to text
+        texts = self._decode_safe(embeddings)
+
+        # Re-encode
+        try:
+            re_embeddings = self.encoder.predict(
+                texts,
+                source_lang="eng_Latn",
+                batch_size=len(texts),
+            )
+            # Convert to tensor if needed
+            if not isinstance(re_embeddings, torch.Tensor):
+                re_embeddings = torch.tensor(re_embeddings, device=embeddings.device)
+            re_embeddings = re_embeddings.to(embeddings.device)
+        except Exception as e:
+            logger.warning(f"Re-encoding failed: {e}")
+            return torch.zeros(embeddings.shape[0], device=embeddings.device)
+
+        # Compute L2 distance (round-trip fidelity)
+        l2_r = (embeddings - re_embeddings).norm(dim=-1)
+
+        return l2_r
 
     def _decode_safe(self, embeddings: torch.Tensor) -> List[str]:
         """
@@ -428,12 +491,88 @@ class BOOptimizationLoop:
 
         return scores
 
+    def warm_start(self, embeddings_path: str, top_k: int = 100) -> dict:
+        """
+        Initialize GP with pre-evaluated embeddings (warm start).
+
+        Loads embeddings and scores from file, skipping expensive LLM evaluation.
+        Much more efficient than random initialization.
+
+        Args:
+            embeddings_path: Path to .pt file with 'embeddings' and 'accuracies'
+            top_k: Use top K embeddings by accuracy (default: all)
+
+        Returns:
+            Dict with initialization results
+        """
+        logger.info(f"Warm-starting from {embeddings_path}...")
+
+        # Load pre-evaluated data
+        data = torch.load(embeddings_path, map_location=self.device, weights_only=False)
+        embeddings = data["embeddings"].to(self.device)
+        scores = data["accuracies"].to(self.device).float()
+        instructions = data.get("instructions", [])
+
+        # Select top K by accuracy
+        if top_k < len(scores):
+            top_indices = scores.argsort(descending=True)[:top_k]
+            embeddings = embeddings[top_indices]
+            scores = scores[top_indices]
+            if instructions:
+                instructions = [instructions[i] for i in top_indices.cpu().tolist()]
+            logger.info(f"Selected top {top_k} embeddings (acc range: {scores.min():.4f} - {scores.max():.4f})")
+        else:
+            logger.info(f"Using all {len(scores)} embeddings")
+
+        # Store training data
+        self.train_X = embeddings
+        self.train_Y = scores
+
+        # Track best
+        best_idx = scores.argmax().item()
+        self.best_score = scores[best_idx].item()
+        self.best_prompt = instructions[best_idx] if instructions else f"[embedding {best_idx}]"
+        self.best_so_far_list = [self.best_score]
+
+        # Store prompts
+        for i, instr in enumerate(instructions):
+            self._prompts[i] = instr
+
+        # Fit GP
+        logger.info(f"Fitting GP on {len(scores)} pre-evaluated observations...")
+        self.gp.fit(self.train_X, self.train_Y)
+
+        # Update sampler's GP reference
+        self.sampler.update_gp(self.gp)
+
+        # Log metrics
+        self.metrics.log_iteration(
+            iteration=0,
+            batch_scores=scores.cpu().tolist(),
+            best_so_far=self.best_score,
+            n_observations=len(scores),
+        )
+
+        torch.cuda.empty_cache()
+
+        logger.info(f"Warm-start complete: {len(scores)} observations, best={self.best_score:.4f}")
+        logger.info(f"Best prompt:\n{self.best_prompt}")
+
+        return {
+            "n_samples": len(scores),
+            "best_score": self.best_score,
+            "best_prompt": self.best_prompt,
+            "score_range": (scores.min().item(), scores.max().item()),
+        }
+
     def initialize(self) -> dict:
         """
         Generate initial random samples and fit GP.
 
         Generates n_initial samples from the flow model (no guidance),
         decodes them to text, evaluates on GSM8K, and fits the GP.
+
+        NOTE: Consider using warm_start() with pre-evaluated embeddings instead.
 
         Returns:
             Dict with:
@@ -449,7 +588,7 @@ class BOOptimizationLoop:
             embeddings = self.flow_model.sample(
                 n_samples=self.n_initial,
                 device=self.device,
-                method="euler",
+                method="heun",
                 num_steps=50,
                 denormalize=True,
             )
@@ -502,100 +641,142 @@ class BOOptimizationLoop:
             "best_prompt": self.best_prompt,
         }
 
-    def step(self) -> dict:
+    def step(self, n_candidates: int = 64, ucb_alpha: float = 1.96) -> dict:
         """
-        Execute one BO iteration.
+        Execute one BO iteration with UCB-based candidate selection.
 
-        Steps:
-        1. Generate guided samples via sampler.sample()
-        2. Decode to text via decoder.decode()
-        3. Evaluate prompts on GSM8K subset
-        4. Update GP with new observations
-        5. Update sampler's GP reference
-        6. Clear GPU cache
+        Efficient approach:
+        1. Generate many candidates via guided sampling
+        2. Select best candidate by UCB acquisition (no LLM needed)
+        3. Decode and evaluate only the selected candidate
+        4. Update GP with the single new observation
+
+        Args:
+            n_candidates: Number of candidates to generate (default: 64)
+            ucb_alpha: UCB exploration weight (default: 1.96 for 95% CI)
 
         Returns:
-            Dict with:
-            - iteration: Current iteration number
-            - batch_scores: Scores for this batch
-            - best_so_far: Running maximum score
-            - best_prompt: Current best prompt
-            - n_observations: Total observations so far
+            Dict with iteration results
         """
         self.iteration += 1
         logger.info(f"\n=== Iteration {self.iteration} ===")
 
-        # 1. Generate guided samples
-        logger.info(f"Generating {self.batch_size} guided samples...")
+        # 1. Generate many guided candidates
+        logger.info(f"Generating {n_candidates} guided candidates...")
         embeddings = self.sampler.sample(
-            n_samples=self.batch_size,
+            n_samples=n_candidates,
             device=self.device,
             num_steps=50,
-            method="euler",
+            method="heun",
         )
 
-        # 2. Decode to text
-        logger.info("Decoding embeddings to text...")
-        prompts = self._decode_safe(embeddings)
+        # 1.5. L2-r filtering (if enabled and encoder available)
+        l2r_stats = {}
+        if self.l2r_filter_enabled and self.encoder is not None:
+            l2_r = self._compute_round_trip_fidelity(embeddings)
+            l2r_stats = {
+                "l2r_mean": l2_r.mean().item(),
+                "l2r_max": l2_r.max().item(),
+                "l2r_min": l2_r.min().item(),
+            }
+            logger.info(f"  L2-r stats: mean={l2_r.mean():.4f}, max={l2_r.max():.4f}, min={l2_r.min():.4f}")
 
-        # 3. Evaluate prompts
-        logger.info(f"Evaluating {len(prompts)} prompts on {len(self.eval_indices)} questions...")
-        scores = self._evaluate_prompts(prompts)
+            on_manifold_mask = l2_r <= self.l2r_threshold
+            n_on_manifold = on_manifold_mask.sum().item()
+            l2r_stats["n_on_manifold"] = n_on_manifold
+            l2r_stats["n_candidates"] = len(embeddings)
+            logger.info(f"  On-manifold: {n_on_manifold}/{len(embeddings)} (threshold={self.l2r_threshold})")
 
-        # 4. Update GP with new observations
-        new_X = embeddings.to(self.device)
-        new_Y = torch.tensor(scores, device=self.device, dtype=torch.float32)
+            if n_on_manifold >= 1:
+                # Filter to on-manifold candidates for UCB selection
+                embeddings = embeddings[on_manifold_mask]
+                logger.info(f"  Filtered to {len(embeddings)} on-manifold candidates")
+            else:
+                logger.warning(
+                    f"No candidates on-manifold (L2-r <= {self.l2r_threshold}). "
+                    "Using all candidates but quality may be poor."
+                )
 
-        logger.info(f"Updating GP with {len(scores)} new observations...")
+        # 2. Select best candidate by UCB (μ + α·σ for maximization)
+        logger.info("Selecting best candidate by UCB...")
+        with torch.no_grad():
+            mean, std = self.gp.predict(embeddings)
+            ucb = mean + ucb_alpha * std
+            best_idx = ucb.argmax().item()
+
+        ucb_value = ucb[best_idx].item()
+        gp_mean = mean[best_idx].item()
+        gp_std = std[best_idx].item()
+        logger.info(f"  Best UCB: {ucb_value:.4f} (μ={gp_mean:.4f}, σ={gp_std:.4f})")
+
+        # 3. Decode only the selected candidate
+        selected_embedding = embeddings[best_idx:best_idx+1]
+        logger.info("Decoding selected embedding...")
+        prompts = self._decode_safe(selected_embedding)
+        prompt = prompts[0]
+
+        # 4. Evaluate only the selected prompt
+        if self._is_valid_prompt(prompt):
+            logger.info(f"Evaluating on {len(self.eval_indices)} questions...")
+            scores = self._evaluate_prompts([prompt])
+            score = scores[0]
+        else:
+            logger.info("  Selected prompt INVALID, assigning score=0")
+            score = 0.0
+
+        logger.info(f"  Prompt (acc={score:.3f}):\n{prompt[:200]}...")
+
+        # 5. Update GP with the single new observation
+        new_X = selected_embedding.to(self.device)
+        new_Y = torch.tensor([score], device=self.device, dtype=torch.float32)
+
         self.gp.update(new_X, new_Y)
 
         # Update training data
         self.train_X = torch.cat([self.train_X, new_X], dim=0)
         self.train_Y = torch.cat([self.train_Y, new_Y], dim=0)
 
-        # 5. Update sampler's GP reference
+        # 6. Update sampler's GP reference
         self.sampler.update_gp(self.gp)
 
         # Track best
-        batch_best_idx = max(range(len(scores)), key=lambda i: scores[i])
-        batch_best_score = scores[batch_best_idx]
-
-        if batch_best_score > self.best_score:
-            self.best_score = batch_best_score
-            self.best_prompt = prompts[batch_best_idx]
+        if score > self.best_score:
+            self.best_score = score
+            self.best_prompt = prompt
             logger.info(f"NEW BEST: {self.best_score:.4f}")
-            logger.info(f"Best prompt:\n{self.best_prompt}")
 
         self.best_so_far_list.append(self.best_score)
 
-        # Store prompts
-        base_idx = len(self._prompts)
-        for i, prompt in enumerate(prompts):
-            self._prompts[base_idx + i] = prompt
+        # Store prompt
+        self._prompts[len(self._prompts)] = prompt
 
         # Log metrics
         self.metrics.log_iteration(
             iteration=self.iteration,
-            batch_scores=scores,
+            batch_scores=[score],
             best_so_far=self.best_score,
             n_observations=self.train_X.shape[0],
         )
 
-        # 6. Clear GPU cache
+        # Clear GPU cache
         torch.cuda.empty_cache()
 
         result = {
             "iteration": self.iteration,
-            "batch_scores": scores,
+            "score": score,
+            "ucb_value": ucb_value,
+            "gp_mean": gp_mean,
+            "gp_std": gp_std,
             "best_so_far": self.best_score,
             "best_prompt": self.best_prompt,
             "n_observations": self.train_X.shape[0],
+            "prompt": prompt,
+            **l2r_stats,  # Include L2-r filtering stats if computed
         }
 
         logger.info(
             f"Iteration {self.iteration} complete: "
-            f"batch_mean={sum(scores)/len(scores):.3f}, "
-            f"batch_max={max(scores):.3f}, "
+            f"score={score:.3f}, UCB={ucb_value:.3f}, "
             f"best_so_far={self.best_score:.3f}"
         )
 

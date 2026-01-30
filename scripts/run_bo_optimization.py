@@ -80,7 +80,13 @@ Examples:
         "--batch-size",
         type=int,
         default=4,
-        help="Number of candidate prompts per BO iteration (default: 4)",
+        help="DEPRECATED: Use --n-candidates instead",
+    )
+    parser.add_argument(
+        "--n-candidates",
+        type=int,
+        default=64,
+        help="Number of candidates to generate, best selected by UCB (default: 64)",
     )
     parser.add_argument(
         "--eval-subset-size",
@@ -108,6 +114,18 @@ Examples:
         default=None,
         help="Path to checkpoint to resume from (optional)",
     )
+    parser.add_argument(
+        "--warm-start",
+        type=str,
+        default=None,
+        help="Path to pre-evaluated embeddings .pt file for warm-start initialization",
+    )
+    parser.add_argument(
+        "--warm-start-top-k",
+        type=int,
+        default=100,
+        help="Use top K embeddings from warm-start file (default: 100 = all)",
+    )
 
     # Model settings
     parser.add_argument(
@@ -119,7 +137,7 @@ Examples:
     parser.add_argument(
         "--flow-checkpoint",
         type=str,
-        default="results/flow_gtr_20260130_043104/checkpoint_epoch_0020.pt",
+        default="results/flow_ot_20260130_003427/checkpoint_final.pt",
         help="Path to trained flow model checkpoint",
     )
     parser.add_argument(
@@ -133,8 +151,8 @@ Examples:
     parser.add_argument(
         "--guidance-strength",
         type=float,
-        default=0.3,
-        help="LCB guidance strength lambda (default: 0.3)",
+        default=1.0,
+        help="LCB guidance strength lambda (default: 1.0, optimal range 1.0-2.0)",
     )
     parser.add_argument(
         "--alpha",
@@ -158,6 +176,19 @@ Examples:
         help="Tensor parallel size for vLLM (default: 1)",
     )
 
+    # L2-r filtering parameters
+    parser.add_argument(
+        "--disable-l2r-filter",
+        action="store_true",
+        help="Disable round-trip fidelity (L2-r) filtering",
+    )
+    parser.add_argument(
+        "--l2r-threshold",
+        type=float,
+        default=0.5,
+        help="L2-r threshold for on-manifold filtering (default: 0.5)",
+    )
+
     return parser.parse_args()
 
 
@@ -170,7 +201,7 @@ def main():
     # Lazy imports to avoid loading heavy modules during --help
     import torch
     from src.ecoflow.decoder import SonarDecoder
-    from src.ecoflow.gp_surrogate import SonarGPSurrogate
+    from src.ecoflow.gp_surrogate import create_surrogate
     from src.ecoflow.guided_flow import GuidedFlowSampler
     from src.ecoflow.optimization_loop import BOOptimizationLoop
     from src.ecoflow.validate import load_model_from_checkpoint
@@ -184,7 +215,7 @@ def main():
     logger.info(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Iterations: {args.iterations}")
     logger.info(f"Initial samples: {args.n_initial}")
-    logger.info(f"Batch size: {args.batch_size}")
+    logger.info(f"Candidates per iteration: {args.n_candidates}")
     logger.info(f"Eval subset size: {args.eval_subset_size}")
     logger.info(f"Checkpoint dir: {args.checkpoint_dir}")
     logger.info(f"Checkpoint freq: {args.checkpoint_freq}")
@@ -194,6 +225,8 @@ def main():
     logger.info(f"Device: {args.device}")
     logger.info(f"Guidance strength: {args.guidance_strength}")
     logger.info(f"LCB alpha: {args.alpha}")
+    logger.info(f"L2-r filter enabled: {not args.disable_l2r_filter}")
+    logger.info(f"L2-r threshold: {args.l2r_threshold}")
     logger.info("=" * 60)
 
     # Create checkpoint directory
@@ -209,10 +242,26 @@ def main():
     )
     logger.info("Flow model loaded successfully")
 
-    # 2. Initialize SONAR decoder
+    # 2. Initialize SONAR decoder and encoder
     logger.info("Initializing SONAR decoder...")
     decoder = SonarDecoder(device=args.device)
     logger.info("SONAR decoder initialized")
+
+    # Initialize encoder for L2-r filtering (if enabled)
+    encoder = None
+    if not args.disable_l2r_filter:
+        logger.info("Initializing SONAR encoder for L2-r filtering...")
+        try:
+            from sonar.inference_pipelines.text import TextToEmbeddingModelPipeline
+            encoder = TextToEmbeddingModelPipeline(
+                encoder="text_sonar_basic_encoder",
+                tokenizer="text_sonar_basic_encoder",
+                device=torch.device(args.device),
+            )
+            logger.info("SONAR encoder initialized")
+        except Exception as e:
+            logger.warning(f"Failed to load SONAR encoder: {e}. L2-r filtering disabled.")
+            encoder = None
 
     # 3. Create LLM client (vLLM)
     logger.info(f"Creating LLM client: {args.model}")
@@ -228,10 +277,10 @@ def main():
     evaluator = GSM8KEvaluator(dataset_path="datasets/gsm8k", split="test")
     logger.info(f"GSM8K evaluator created with {len(evaluator)} test examples")
 
-    # 5. Create GP surrogate
-    logger.info("Creating GP surrogate...")
-    gp = SonarGPSurrogate(D=1024, device=args.device)
-    logger.info("GP surrogate created")
+    # 5. Create GP surrogate (BAxUS with 128D subspace - best gradient quality)
+    logger.info("Creating BAxUS GP surrogate (128D subspace)...")
+    gp = create_surrogate(method="baxus", D=1024, device=args.device, target_dim=128)
+    logger.info("BAxUS GP surrogate created")
 
     # 6. Create guided flow sampler
     logger.info("Creating guided flow sampler...")
@@ -257,15 +306,29 @@ def main():
         batch_size=args.batch_size,
         eval_subset_size=args.eval_subset_size,
         device=args.device,
+        encoder=encoder,
+        l2r_threshold=args.l2r_threshold,
+        l2r_filter_enabled=not args.disable_l2r_filter,
     )
     logger.info("BO optimization loop created")
 
-    # 8. Resume or initialize
+    # 8. Resume, warm-start, or random initialize
     if args.resume:
         logger.info(f"Resuming from checkpoint: {args.resume}")
         optimizer.load_checkpoint(args.resume)
         start_iteration = optimizer.iteration + 1
         logger.info(f"Resumed at iteration {start_iteration}")
+    elif args.warm_start:
+        logger.info(f"Warm-starting from: {args.warm_start}")
+        init_result = optimizer.warm_start(
+            args.warm_start,
+            top_k=args.warm_start_top_k
+        )
+        logger.info(f"Warm-start complete:")
+        logger.info(f"  - Pre-evaluated samples: {init_result['n_samples']}")
+        logger.info(f"  - Score range: {init_result['score_range'][0]:.4f} - {init_result['score_range'][1]:.4f}")
+        logger.info(f"  - Best score: {init_result['best_score']:.4f}")
+        start_iteration = 1
     else:
         logger.info("Initializing with random samples...")
         init_result = optimizer.initialize()
@@ -278,18 +341,17 @@ def main():
     # 9. Main optimization loop
     logger.info("=" * 60)
     logger.info("STARTING OPTIMIZATION LOOP")
+    logger.info(f"Generating {args.n_candidates} candidates per iteration, selecting best by UCB")
     logger.info("=" * 60)
 
     for iteration in range(start_iteration, args.iterations + 1):
-        # Run one BO step
-        result = optimizer.step()
+        # Run one BO step with UCB-based candidate selection
+        result = optimizer.step(n_candidates=args.n_candidates)
 
         # Log progress
-        batch_mean = sum(result["batch_scores"]) / len(result["batch_scores"])
-        batch_max = max(result["batch_scores"])
         logger.info(
             f"Iteration {iteration}/{args.iterations}: "
-            f"batch_mean={batch_mean:.4f}, batch_max={batch_max:.4f}, "
+            f"score={result['score']:.4f}, UCB={result['ucb_value']:.4f}, "
             f"best_so_far={result['best_so_far']:.4f}, "
             f"n_obs={result['n_observations']}"
         )
