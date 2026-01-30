@@ -9,6 +9,7 @@ This module implements:
 - Validation utilities for generation quality assessment
 - SonarGPSurrogate: GP surrogate for 1024D SONAR Bayesian optimization
 - GuidedFlowSampler: LCB-guided ODE sampling with CFG-Zero* schedule
+- BOOptimizationLoop: Full BO pipeline orchestrator with checkpointing
 """
 
 from src.ecoflow.velocity_network import VelocityNetwork
@@ -25,6 +26,11 @@ from src.ecoflow.validate import (
 )
 from src.ecoflow.gp_surrogate import SonarGPSurrogate
 from src.ecoflow.guided_flow import GuidedFlowSampler, cfg_zero_star_schedule
+from src.ecoflow.optimization_loop import (
+    BOOptimizationLoop,
+    OptimizationState,
+    MetricsTracker,
+)
 
 __all__ = [
     "VelocityNetwork",
@@ -42,4 +48,7 @@ __all__ = [
     "SonarGPSurrogate",
     "GuidedFlowSampler",
     "cfg_zero_star_schedule",
+    "BOOptimizationLoop",
+    "OptimizationState",
+    "MetricsTracker",
 ]
