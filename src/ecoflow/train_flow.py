@@ -19,8 +19,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
+import torch_optimizer as optim_extra
 
-from torchcfm.conditional_flow_matching import ExactOptimalTransportConditionalFlowMatcher
+from torchcfm.conditional_flow_matching import (
+    ConditionalFlowMatcher,
+    ExactOptimalTransportConditionalFlowMatcher,
+)
 
 from src.ecoflow.velocity_network import VelocityNetwork
 from src.ecoflow.data import get_sonar_dataloader
@@ -140,21 +144,25 @@ def train_flow(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # Load data
+    # Load data with normalization for stable training
     logger.info(f"Loading data from: {args.data_path}")
-    train_loader = get_sonar_dataloader(
+    logger.info("Normalizing embeddings to unit variance for stable flow training")
+    train_loader, norm_stats = get_sonar_dataloader(
         path=args.data_path,
         batch_size=args.batch_size,
         num_workers=8,
         pin_memory=True,
+        normalize=True,  # Critical: normalize for stable training
     )
     logger.info(f"Dataset size: {len(train_loader.dataset)}")
+    if norm_stats:
+        logger.info(f"Normalization stats: mean norm={norm_stats['mean'].norm():.4f}, std norm={norm_stats['std'].norm():.4f}")
     logger.info(f"Batch size: {args.batch_size}")
     logger.info(f"Batches per epoch: {len(train_loader)}")
 
     # Create model
     model = VelocityNetwork(
-        input_dim=1024,  # SONAR embedding dimension
+        input_dim=args.input_dim,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         num_heads=args.num_heads,
@@ -163,17 +171,31 @@ def train_flow(args: argparse.Namespace) -> None:
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Model parameters: {num_params:,}")
 
-    # Create optimizer
-    optimizer = AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=0.01,
-        betas=(0.9, 0.999),
-    )
+    # Create optimizer - LAMB for large batch, AdamW otherwise
+    if args.optimizer == "lamb":
+        optimizer = optim_extra.Lamb(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=0.01,
+            betas=(0.9, 0.999),
+        )
+        logger.info(f"Using LAMB optimizer (large batch friendly)")
+    else:
+        optimizer = AdamW(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=0.01,
+            betas=(0.9, 0.999),
+        )
+        logger.info(f"Using AdamW optimizer")
 
-    # Create flow matcher
-    FM = ExactOptimalTransportConditionalFlowMatcher(sigma=0.0)
-    logger.info("Using ExactOptimalTransportConditionalFlowMatcher (sigma=0.0)")
+    # Create flow matcher - OT-CFM is O(n^3), use standard CFM for large batches
+    if args.use_ot:
+        FM = ExactOptimalTransportConditionalFlowMatcher(sigma=0.0)
+        logger.info("Using ExactOptimalTransportConditionalFlowMatcher (OT-CFM, O(n^3))")
+    else:
+        FM = ConditionalFlowMatcher(sigma=0.0)
+        logger.info("Using ConditionalFlowMatcher (fast, no OT)")
 
     # Create EMA
     ema = EMAModel(model, decay=args.ema_decay)
@@ -279,6 +301,7 @@ def train_flow(args: argparse.Namespace) -> None:
                 "scheduler_state_dict": scheduler.state_dict(),
                 "best_loss": best_loss,
                 "args": vars(args),
+                "norm_stats": norm_stats,  # Save normalization stats for denormalization
             }
             torch.save(checkpoint, checkpoint_path)
             logger.info(f"Saved checkpoint: {checkpoint_path}")
@@ -294,6 +317,7 @@ def train_flow(args: argparse.Namespace) -> None:
         "scheduler_state_dict": scheduler.state_dict(),
         "best_loss": best_loss,
         "args": vars(args),
+        "norm_stats": norm_stats,  # Save normalization stats for denormalization
     }
     torch.save(checkpoint, final_path)
     logger.info(f"Saved final checkpoint: {final_path}")
@@ -346,6 +370,19 @@ def main():
         help="Gradient clipping max norm",
     )
     parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adamw",
+        choices=["adamw", "lamb"],
+        help="Optimizer: adamw (default) or lamb (for large batch)",
+    )
+    parser.add_argument(
+        "--use-ot",
+        action="store_true",
+        default=False,
+        help="Use OT-CFM (O(n^3), slow for large batches). Default: fast CFM",
+    )
+    parser.add_argument(
         "--warmup-steps",
         type=int,
         default=1000,
@@ -353,6 +390,12 @@ def main():
     )
 
     # Model arguments
+    parser.add_argument(
+        "--input-dim",
+        type=int,
+        default=1024,
+        help="Input dimension (1024 for SONAR, 768 for GTR)",
+    )
     parser.add_argument(
         "--hidden-dim",
         type=int,

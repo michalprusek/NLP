@@ -1,19 +1,27 @@
-"""LCB-guided flow sampling with CFG-Zero* schedule.
+"""UCB-guided flow sampling with CFG-Zero* schedule.
 
 This module implements guided ODE sampling that combines a trained flow model
 with a GP surrogate for Bayesian optimization. The guidance steers samples
 toward high-scoring regions of SONAR embedding space while maintaining
-diversity through the LCB (Lower Confidence Bound) exploration bonus.
+diversity through the UCB (Upper Confidence Bound) exploration bonus.
 
 Key features:
 - CFG-Zero* schedule: Zero guidance for first 4% of steps to prevent
   early trajectory corruption
-- LCB gradient guidance: Follows gradient of (mean - alpha * std)
-  for principled exploration-exploitation
+- UCB gradient guidance: Follows gradient of (mean + alpha * std)
+  for principled exploration-exploitation in MAXIMIZATION problems
 - Gradient normalization: Prevents gradient explosion
 - Denormalization: Handles flow model trained on normalized data
 
-Guided ODE equation: dz/dt = v(z, t) + lambda(t) * grad_LCB(z)
+Guided ODE equation: dz/dt = v(z, t) + lambda(t) * grad_UCB(z)
+
+For MAXIMIZATION (e.g., accuracy): UCB = μ + α·σ
+For MINIMIZATION (e.g., error): LCB = μ - α·σ
+
+Optimal guidance schedule (from analysis):
+- Schedule shape: Constant guidance outperforms time-varying schedules
+- CFG-Zero* fraction: 4% (zero guidance for first 2 steps at 50 total)
+- Optimal λ: 1.0-2.0 (λ=1.0 for balanced, λ=2.0 for aggressive)
 """
 
 from typing import Optional
@@ -92,7 +100,7 @@ class GuidedFlowSampler:
         flow_model: FlowMatchingModel,
         gp_surrogate: SonarGPSurrogate,
         alpha: float = 1.0,
-        guidance_strength: float = 0.3,
+        guidance_strength: float = 1.0,
         zero_init_fraction: float = 0.04,
         norm_stats: Optional[dict] = None,
     ):
@@ -103,8 +111,12 @@ class GuidedFlowSampler:
             flow_model: Trained FlowMatchingModel for velocity computation
             gp_surrogate: SonarGPSurrogate for LCB gradient computation
             alpha: LCB exploration weight (default 1.0, use 1.96 for 95% CI)
-            guidance_strength: Maximum guidance strength lambda (default 0.3)
+            guidance_strength: Maximum guidance strength lambda (default 1.0)
+                               Analysis shows optimal range is 1.0-2.0:
+                               - λ=1.0: LCB=0.824, good balance
+                               - λ=2.0: LCB=0.835, more aggressive
             zero_init_fraction: Fraction of steps with zero guidance (default 0.04 = 4%)
+                                CFG-Zero* schedule prevents early trajectory corruption
             norm_stats: Normalization statistics {'mean': [1024], 'std': [1024]}
                         for denormalizing flow space to SONAR space
         """
@@ -147,26 +159,26 @@ class GuidedFlowSampler:
         std = self.norm_stats["std"].to(z.device)
         return z * std + mean
 
-    def _compute_lcb_gradient(
+    def _compute_ucb_gradient(
         self, z_sonar: torch.Tensor, scale_to_flow_space: bool = True
     ) -> torch.Tensor:
         """
-        Compute gradient of LCB acquisition function, scaled for flow space.
+        Compute gradient of UCB acquisition function, scaled for flow space.
 
-        LCB(z) = mu(z) - alpha * sigma(z)
+        UCB(z) = mu(z) + alpha * sigma(z)  (for MAXIMIZATION)
 
-        For maximization, we follow the positive gradient to find
-        points with high predicted value and high uncertainty (exploration).
+        We follow the gradient to find points with high predicted value
+        AND high uncertainty (exploration bonus).
 
-        The gradient is computed in SONAR space and converted to flow space
-        so that it has appropriate magnitude relative to the velocity field.
+        Uses the GP surrogate's ucb_gradient method which handles both
+        SonarGPSurrogate and BAxUSGPSurrogate (with subspace projection).
 
         Args:
             z_sonar: Points in SONAR space [B, 1024]
             scale_to_flow_space: If True, convert gradient to flow space using
                                  chain rule. The flow model uses normalized coords
                                  where z_sonar = z_flow * std + mean, so
-                                 d(LCB)/d(z_flow) = d(LCB)/d(z_sonar) / std
+                                 d(UCB)/d(z_flow) = d(UCB)/d(z_sonar) / std
 
         Returns:
             Gradient [B, 1024] scaled for flow space
@@ -174,47 +186,30 @@ class GuidedFlowSampler:
         if self.gp.model is None:
             raise RuntimeError("GP must be fitted before computing guidance")
 
-        # Compute gradient with autograd
-        with torch.enable_grad():
-            z_var = z_sonar.clone().requires_grad_(True)
-            posterior = self.gp.model.posterior(z_var)
-
-            mean = posterior.mean.squeeze(-1)  # [B]
-            variance = posterior.variance.squeeze(-1)  # [B]
-            std = torch.sqrt(variance + 1e-6)  # Numerical stability
-
-            # LCB = mean - alpha * std
-            lcb = mean - self.alpha * std
-
-            # Gradient of LCB w.r.t. input
-            grad_lcb = torch.autograd.grad(
-                lcb.sum(),
-                z_var,
-                create_graph=False,
-                retain_graph=False,
-            )[0]
+        # Use GP surrogate's ucb_gradient method (handles BAxUS embedding internally)
+        grad_ucb = self.gp.ucb_gradient(z_sonar, alpha=self.alpha)
 
         # Convert gradient from SONAR space to flow space using chain rule
         # z_sonar = z_flow * std + mean
-        # => d(LCB)/d(z_flow) = d(LCB)/d(z_sonar) / std
+        # => d(UCB)/d(z_flow) = d(UCB)/d(z_sonar) / std
         # This makes the gradient magnitude appropriate for the flow's normalized space
         if scale_to_flow_space and self.norm_stats is not None:
             norm_std = self.norm_stats["std"].to(z_sonar.device)
-            grad_lcb = grad_lcb / (norm_std + 1e-8)
+            grad_ucb = grad_ucb / (norm_std + 1e-8)
 
         # Clip gradient norm to prevent explosion while preserving direction and scale
         # Max norm of 10.0 is reasonable for flow space (velocities are ~O(1))
         max_grad_norm = 10.0
-        grad_norm = grad_lcb.norm(dim=-1, keepdim=True)
+        grad_norm = grad_ucb.norm(dim=-1, keepdim=True)
         clip_mask = grad_norm > max_grad_norm
         if clip_mask.any():
-            grad_lcb = torch.where(
+            grad_ucb = torch.where(
                 clip_mask,
-                grad_lcb * max_grad_norm / grad_norm,
-                grad_lcb
+                grad_ucb * max_grad_norm / grad_norm,
+                grad_ucb
             )
 
-        return grad_lcb
+        return grad_ucb
 
     @torch.no_grad()
     def sample(
@@ -222,7 +217,7 @@ class GuidedFlowSampler:
         n_samples: int,
         device: str | torch.device = "cuda",
         num_steps: int = 50,
-        method: str = "euler",
+        method: str = "heun",
         return_trajectory: bool = False,
     ) -> torch.Tensor:
         """
@@ -235,7 +230,7 @@ class GuidedFlowSampler:
             n_samples: Number of samples to generate
             device: Device for computation
             num_steps: Number of ODE integration steps
-            method: Integration method ("euler" or "heun")
+            method: Integration method ("heun" or "euler", default: heun)
             return_trajectory: If True, return full trajectory [steps+1, B, 1024]
 
         Returns:
@@ -268,10 +263,10 @@ class GuidedFlowSampler:
                     z_sonar = self._denormalize(z)
 
                     # Compute normalized LCB gradient
-                    grad_lcb = self._compute_lcb_gradient(z_sonar)
+                    grad_ucb = self._compute_ucb_gradient(z_sonar)
 
                     # For MAXIMIZATION: follow positive gradient toward higher LCB
-                    v = v + lambda_t * grad_lcb
+                    v = v + lambda_t * grad_ucb
 
                 # Euler step
                 z = z + v * dt
@@ -291,8 +286,8 @@ class GuidedFlowSampler:
                 lambda_t = self._get_guidance_lambda(i, num_steps)
                 if lambda_t > 0 and self.gp.model is not None:
                     z_sonar = self._denormalize(z)
-                    grad_lcb = self._compute_lcb_gradient(z_sonar)
-                    v1 = v1 + lambda_t * grad_lcb
+                    grad_ucb = self._compute_ucb_gradient(z_sonar)
+                    v1 = v1 + lambda_t * grad_ucb
 
                 z_pred = z + v1 * dt
 
@@ -303,8 +298,8 @@ class GuidedFlowSampler:
                 lambda_t_next = self._get_guidance_lambda(i + 1, num_steps)
                 if lambda_t_next > 0 and self.gp.model is not None:
                     z_pred_sonar = self._denormalize(z_pred)
-                    grad_lcb_pred = self._compute_lcb_gradient(z_pred_sonar)
-                    v2 = v2 + lambda_t_next * grad_lcb_pred
+                    grad_ucb_pred = self._compute_ucb_gradient(z_pred_sonar)
+                    v2 = v2 + lambda_t_next * grad_ucb_pred
 
                 # Heun step: average of predictor and corrector velocities
                 z = z + 0.5 * (v1 + v2) * dt

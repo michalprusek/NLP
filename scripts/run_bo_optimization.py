@@ -417,11 +417,12 @@ def main():
             )
 
             # Log batch results
-            batch_scores = result.get("batch_scores", [])
+            batch_scores = result.get("scores", [])
             batch_mean = sum(batch_scores) / len(batch_scores) if batch_scores else 0
+            batch_max = max(batch_scores) if batch_scores else 0
             logger.info(
                 f"Iteration {iteration}/{args.iterations}: "
-                f"batch_mean={batch_mean:.4f}, batch_max={max(batch_scores):.4f}, "
+                f"batch_mean={batch_mean:.4f}, batch_max={batch_max:.4f}, "
                 f"best_so_far={result['best_so_far']:.4f}, "
                 f"n_obs={result['n_observations']}"
             )

@@ -25,9 +25,11 @@ References:
 """
 
 import math
+import warnings
 from typing import Optional
 
 import torch
+from botorch.exceptions.warnings import InputDataWarning
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
@@ -107,13 +109,16 @@ class SonarGPSurrogate:
             )
         )
 
-        model = SingleTaskGP(
-            train_X=train_X,
-            train_Y=train_Y,
-            covar_module=covar_module,
-            input_transform=Normalize(d=self.D),
-            outcome_transform=Standardize(m=1),
-        )
+        # Suppress float32 warning - we use float32 intentionally for memory efficiency
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=InputDataWarning)
+            model = SingleTaskGP(
+                train_X=train_X,
+                train_Y=train_Y,
+                covar_module=covar_module,
+                input_transform=Normalize(d=self.D),
+                outcome_transform=Standardize(m=1),
+            )
 
         # Critical: Initialize lengthscales to sqrt(D)/10 = 3.2
         # This prevents vanishing gradients during MLE fitting
@@ -439,13 +444,16 @@ class BAxUSGPSurrogate:
             )
         )
 
-        model = SingleTaskGP(
-            train_X=train_X_embedded,
-            train_Y=train_Y,
-            covar_module=covar_module,
-            input_transform=Normalize(d=self.target_dim),
-            outcome_transform=Standardize(m=1),
-        )
+        # Suppress float32 warning - we use float32 intentionally for memory efficiency
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=InputDataWarning)
+            model = SingleTaskGP(
+                train_X=train_X_embedded,
+                train_Y=train_Y,
+                covar_module=covar_module,
+                input_transform=Normalize(d=self.target_dim),
+                outcome_transform=Standardize(m=1),
+            )
 
         # Initialize lengthscales (MSR method for subspace dimension)
         with torch.no_grad():
@@ -754,14 +762,17 @@ class HeteroscedasticSonarGP:
         )
 
         # SingleTaskGP with train_Yvar for heteroscedastic fixed noise
-        model = SingleTaskGP(
-            train_X=train_X,
-            train_Y=train_Y,
-            train_Yvar=train_Yvar,  # Fixed heteroscedastic noise
-            covar_module=covar_module,
-            input_transform=Normalize(d=self.D),
-            outcome_transform=Standardize(m=1),
-        )
+        # Suppress float32 warning - we use float32 intentionally for memory efficiency
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=InputDataWarning)
+            model = SingleTaskGP(
+                train_X=train_X,
+                train_Y=train_Y,
+                train_Yvar=train_Yvar,  # Fixed heteroscedastic noise
+                covar_module=covar_module,
+                input_transform=Normalize(d=self.D),
+                outcome_transform=Standardize(m=1),
+            )
 
         # Initialize lengthscales to sqrt(D)/10 = 3.2
         with torch.no_grad():

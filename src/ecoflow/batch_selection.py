@@ -22,7 +22,9 @@ Reference:
     https://arxiv.org/abs/1505.08052
 """
 
-from typing import Optional, Tuple, Union
+import logging
+import math
+from typing import Optional, Tuple
 
 import torch
 from torch.distributions import Normal
@@ -79,6 +81,12 @@ def estimate_lipschitz_constant(
     # Maximum gradient norm
     grad_norms = grads.norm(dim=-1)  # [n_samples]
     L = grad_norms.max().item()
+
+    # Handle NaN/Inf from ill-conditioned GP
+    if not math.isfinite(L):
+        logger = logging.getLogger(__name__)
+        logger.warning("Lipschitz estimate is non-finite, using default 1.0")
+        L = 1.0
 
     # Floor for numerical stability
     return max(L, 1e-7)

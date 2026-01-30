@@ -173,7 +173,7 @@ def validate_generation(
     decoder: Optional[Any] = None,
     n_samples: int = 100,
     num_steps: int = 50,
-    method: str = "euler",
+    method: str = "heun",
 ) -> Dict[str, Any]:
     """
     Comprehensive validation of flow model generation quality.
@@ -199,12 +199,9 @@ def validate_generation(
 
     logger.info(f"Generating {n_samples} samples with {num_steps} {method} steps...")
 
-    # Generate samples
+    # Generate samples using unified sample() method
     with torch.no_grad():
-        if method == "heun":
-            samples = model.sample_heun(n_samples, device=device, num_steps=num_steps)
-        else:
-            samples = model.sample(n_samples, device=device, method=method, num_steps=num_steps)
+        samples = model.sample(n_samples, device=device, method=method, num_steps=num_steps)
 
     logger.info(f"Generated samples shape: {samples.shape}")
 
@@ -328,10 +325,19 @@ def load_model_from_checkpoint(
     velocity_net = velocity_net.to(device)
     velocity_net.eval()
 
-    # Wrap in FlowMatchingModel
-    model = FlowMatchingModel(velocity_net)
+    # Load normalization stats if available
+    norm_stats = checkpoint.get("norm_stats", None)
+    if norm_stats:
+        logger.info("Loaded normalization stats for denormalization")
+    else:
+        logger.warning("No normalization stats in checkpoint - samples may need manual denormalization")
 
-    logger.info(f"Model loaded successfully. Epoch: {checkpoint.get('epoch', 'N/A')}, Best loss: {checkpoint.get('best_loss', 'N/A'):.6f}")
+    # Wrap in FlowMatchingModel with norm_stats
+    model = FlowMatchingModel(velocity_net, norm_stats=norm_stats)
+
+    best_loss = checkpoint.get('best_loss') or checkpoint.get('best_val_loss')
+    loss_str = f"{best_loss:.6f}" if best_loss is not None else "N/A"
+    logger.info(f"Model loaded successfully. Epoch: {checkpoint.get('epoch', 'N/A')}, Best loss: {loss_str}")
 
     return model
 
@@ -369,9 +375,9 @@ def main():
     parser.add_argument(
         "--method",
         type=str,
-        default="euler",
+        default="heun",
         choices=["euler", "heun"],
-        help="Integration method (default: euler)",
+        help="Integration method (default: heun)",
     )
     parser.add_argument(
         "--device",

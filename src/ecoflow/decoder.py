@@ -3,10 +3,13 @@ SONAR decoder wrapper for converting embeddings back to text.
 
 Uses the SONAR text decoder pipeline to decode 1024D embeddings
 into English text.
+
+Includes n-gram repeat blocking to prevent degenerate repetitive outputs
+that commonly occur when decoding from flow-generated embeddings.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import torch
 from torch import Tensor
@@ -20,17 +23,26 @@ class SonarDecoder:
 
     Decodes 1024D SONAR embeddings back to English text using
     the text_sonar_basic_decoder model.
+
+    Includes n-gram repeat blocking to prevent degenerate repetitive outputs
+    like "mindfulness-based mindfulness-based mindfulness-based...".
     """
 
-    def __init__(self, device: str = "cuda:0"):
+    def __init__(self, device: str = "cuda:0", ngram_block_size: int = 3):
         """
         Initialize the SONAR decoder.
 
         Args:
             device: Device to run decoder on (default: cuda:0)
+            ngram_block_size: Block repeating n-grams of this size (default: 3).
+                              Set to 0 to disable n-gram blocking.
+                              Recommended: 3 blocks trigram repetition.
         """
-        self.device = device
-        logger.info(f"Initializing SonarDecoder on device: {device}")
+        self.device = torch.device(device) if isinstance(device, str) else device
+        self.ngram_block_size = ngram_block_size
+        logger.info(f"Initializing SonarDecoder on device: {self.device}")
+        if ngram_block_size > 0:
+            logger.info(f"N-gram repeat blocking enabled: blocking {ngram_block_size}-grams")
 
         # Import and create the decoder pipeline
         from sonar.inference_pipelines.text import EmbeddingToTextModelPipeline
@@ -69,12 +81,23 @@ class SonarDecoder:
 
         logger.info(f"Decoding {embeddings.shape[0]} embeddings...")
 
+        # Build generator kwargs with optional n-gram blocking
+        generator_kwargs = {
+            "max_seq_len": max_seq_len,
+            "beam_size": beam_size,
+        }
+
+        # Add n-gram repeat blocking to prevent degenerate repetitive outputs
+        if self.ngram_block_size > 0:
+            from fairseq2.generation.step_processor import NGramRepeatBlockProcessor
+            step_processors: Sequence = [NGramRepeatBlockProcessor(self.ngram_block_size)]
+            generator_kwargs["step_processors"] = step_processors
+
         # Decode using SONAR pipeline
         decoded_texts = self.decoder.predict(
             embeddings,
             target_lang="eng_Latn",
-            max_seq_len=max_seq_len,
-            beam_size=beam_size,
+            **generator_kwargs,
         )
 
         # Convert to list if necessary
