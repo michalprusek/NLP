@@ -8,6 +8,7 @@ This module implements:
 - SonarDecoder: SONAR embedding-to-text decoder
 - Validation utilities for generation quality assessment
 - SonarGPSurrogate: GP surrogate for 1024D SONAR Bayesian optimization
+- GuidedFlowSampler: LCB-guided ODE sampling with CFG-Zero* schedule
 """
 
 from src.ecoflow.velocity_network import VelocityNetwork
@@ -23,6 +24,7 @@ from src.ecoflow.validate import (
     load_model_from_checkpoint,
 )
 from src.ecoflow.gp_surrogate import SonarGPSurrogate
+from src.ecoflow.guided_flow import GuidedFlowSampler, cfg_zero_star_schedule
 
 __all__ = [
     "VelocityNetwork",
@@ -38,4 +40,6 @@ __all__ = [
     "validate_generation",
     "load_model_from_checkpoint",
     "SonarGPSurrogate",
+    "GuidedFlowSampler",
+    "cfg_zero_star_schedule",
 ]

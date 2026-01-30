@@ -147,20 +147,29 @@ class GuidedFlowSampler:
         std = self.norm_stats["std"].to(z.device)
         return z * std + mean
 
-    def _compute_lcb_gradient(self, z_sonar: torch.Tensor) -> torch.Tensor:
+    def _compute_lcb_gradient(
+        self, z_sonar: torch.Tensor, scale_to_flow_space: bool = True
+    ) -> torch.Tensor:
         """
-        Compute normalized gradient of LCB acquisition function.
+        Compute gradient of LCB acquisition function, scaled for flow space.
 
         LCB(z) = mu(z) - alpha * sigma(z)
 
         For maximization, we follow the positive gradient to find
         points with high predicted value and high uncertainty (exploration).
 
+        The gradient is computed in SONAR space and converted to flow space
+        so that it has appropriate magnitude relative to the velocity field.
+
         Args:
             z_sonar: Points in SONAR space [B, 1024]
+            scale_to_flow_space: If True, convert gradient to flow space using
+                                 chain rule. The flow model uses normalized coords
+                                 where z_sonar = z_flow * std + mean, so
+                                 d(LCB)/d(z_flow) = d(LCB)/d(z_sonar) / std
 
         Returns:
-            Normalized gradient [B, 1024]
+            Gradient [B, 1024] scaled for flow space
         """
         if self.gp.model is None:
             raise RuntimeError("GP must be fitted before computing guidance")
@@ -185,12 +194,27 @@ class GuidedFlowSampler:
                 retain_graph=False,
             )[0]
 
-        # Normalize gradient to prevent explosion
-        # This ensures consistent magnitude regardless of GP uncertainty
-        grad_norm = grad_lcb.norm(dim=-1, keepdim=True) + 1e-8
-        grad_lcb_normalized = grad_lcb / grad_norm
+        # Convert gradient from SONAR space to flow space using chain rule
+        # z_sonar = z_flow * std + mean
+        # => d(LCB)/d(z_flow) = d(LCB)/d(z_sonar) / std
+        # This makes the gradient magnitude appropriate for the flow's normalized space
+        if scale_to_flow_space and self.norm_stats is not None:
+            norm_std = self.norm_stats["std"].to(z_sonar.device)
+            grad_lcb = grad_lcb / (norm_std + 1e-8)
 
-        return grad_lcb_normalized
+        # Clip gradient norm to prevent explosion while preserving direction and scale
+        # Max norm of 10.0 is reasonable for flow space (velocities are ~O(1))
+        max_grad_norm = 10.0
+        grad_norm = grad_lcb.norm(dim=-1, keepdim=True)
+        clip_mask = grad_norm > max_grad_norm
+        if clip_mask.any():
+            grad_lcb = torch.where(
+                clip_mask,
+                grad_lcb * max_grad_norm / grad_norm,
+                grad_lcb
+            )
+
+        return grad_lcb
 
     @torch.no_grad()
     def sample(
