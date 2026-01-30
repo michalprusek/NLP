@@ -5,14 +5,18 @@ This architecture is optimized for text embeddings where dimensions have no
 spatial relationship (unlike image pixels). Key advantages:
 
 1. No patching bias: Each of 768 output dimensions has its own learned query
-2. Compute efficiency: Deep processing happens in cheap 16-token latent space
+2. Compute efficiency: Deep processing happens in cheap 48-token latent space
 3. Semantic precision: Output queries learn "what does each GTR dimension mean"
 4. Matryoshka-ready: Works naturally with masked z dimensions
+5. Residual Latent: Supports z_full = [z_core (16D) | z_detail (32D)] = 48D
 
 Architecture:
-1. LatentExpander: z (16D) → 16 rich tokens
-2. LatentProcessor: Deep self-attention on 16 tokens (cheap!)
-3. CrossAttentionReadout: 768 learned queries attend to 16 tokens → 768D output
+1. LatentExpander: z (48D) → 48 rich tokens (with learned position embeddings!)
+2. LatentProcessor: Deep self-attention on 48 tokens (still cheap!)
+3. CrossAttentionReadout: 768 learned queries attend to 48 tokens → 768D output
+
+Position embeddings are CRITICAL: They encode dimension importance.
+For Matryoshka, position 0 > position 1 > ... > position 15 (z_core ordering).
 """
 
 import torch
@@ -24,10 +28,13 @@ from dataclasses import dataclass
 
 @dataclass
 class PerceiverDecoderConfig:
-    """Configuration for Latent-Query Transformer decoder."""
-    latent_dim: int = 16  # Input z dimension
+    """Configuration for Latent-Query Transformer decoder.
+
+    Supports residual latent: z_full = [z_core (16D) | z_detail (32D)] = 48D
+    """
+    latent_dim: int = 48  # Input z dimension (z_core + z_detail)
     output_dim: int = 768  # Output embedding dimension (GTR)
-    hidden_size: int = 1024  # Token dimension (can be large - only 16 tokens!)
+    hidden_size: int = 1024  # Token dimension (can be large - only 48 tokens!)
     depth: int = 12  # Number of self-attention layers in processor
     num_heads: int = 16  # Attention heads
     mlp_ratio: float = 4.0  # MLP hidden = hidden_size * mlp_ratio
@@ -58,10 +65,17 @@ class PerceiverDecoderConfig:
 
 class LatentExpander(nn.Module):
     """
-    Expand 16 latent scalars into 16 rich token vectors.
+    Expand latent scalars into rich token vectors (48D → 48×1024 tokens).
 
-    Each z dimension gets its own learned expansion + positional embedding.
-    Matryoshka-aware: tokens for z[i]=0 are zeroed out.
+    Each z dimension gets its own learned expansion + LEARNED POSITIONAL EMBEDDING.
+
+    Position embeddings are CRITICAL:
+    - They encode the "importance" of each dimension
+    - For Matryoshka: pos_embed[0] encodes "most important", pos_embed[15] encodes "fine detail"
+    - This allows the decoder to learn dimension-specific semantics
+
+    Matryoshka-aware: tokens for z[i]=0 are zeroed out, ensuring masked
+    dimensions don't contribute to cross-attention.
     """
 
     def __init__(self, latent_dim: int = 16, hidden_size: int = 1024):
