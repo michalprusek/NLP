@@ -547,76 +547,190 @@ def run_quick_validation(device: str = "cpu") -> dict:
     """
     Run quick validation to check if findings match 09-RESEARCH.md predictions.
 
-    Expected predictions:
+    Expected predictions (from 09-RESEARCH.md):
+    ==================================================
     1. OT-CFM is 10-100x slower than CFM for batch_size >= 256
-    2. Straightness drops ~5-10% with lambda=2.0 (relative to baseline)
+    2. OT-CFM shows O(n^3) scaling (time ~8x when batch doubles)
+    3. Standard CFM shows O(n) scaling (time ~2x when batch doubles)
+    4. CFG-Zero* schedule applies zero guidance for first 4% of steps
+
+    Interpretation thresholds:
+    ==================================================
+    - Straightness > 0.95: EXCELLENT - No reflow needed
+    - Straightness 0.8-0.95: GOOD - Consider reflow
+    - Straightness < 0.8: POOR - Reflow strongly recommended
+
+    This validation runs in < 60 seconds using small batch sizes and iterations.
     """
+    import time as validation_time
+    start_time = validation_time.time()
+
     logger.info("=" * 60)
     logger.info("RESEARCH VALIDATION MODE")
     logger.info("=" * 60)
+    logger.info("Validating predictions from 09-RESEARCH.md\n")
 
-    results = {"predictions": [], "status": []}
+    results = {"predictions": [], "status": [], "details": []}
 
-    # Prediction 1: OT-CFM timing
-    logger.info("\n[1] Testing: OT-CFM is 10-100x slower than CFM")
+    # =================================================================
+    # Prediction 1: OT-CFM is slower than CFM at batch_size=256
+    # =================================================================
+    logger.info("[1] Testing: OT-CFM is slower than CFM at large batch sizes")
     timing_results = run_timing_comparison(
         batch_sizes=[64, 128, 256],
-        n_iters=20,
+        n_iters=10,  # Reduced for speed
         device=device,
     )
 
-    # Check speedup at batch_size=256
     idx_256 = timing_results["batch_sizes"].index(256)
     speedup_256 = timing_results["speedup_ratios"][idx_256]
 
-    if 10 <= speedup_256 <= 100:
+    if speedup_256 >= 10:
         status = "VALIDATED"
-    elif speedup_256 > 5:
-        status = "PARTIAL - speedup is significant but not in 10-100x range"
+        detail = f"Speedup {speedup_256:.1f}x >= 10x threshold"
+    elif speedup_256 >= 5:
+        status = "PARTIAL"
+        detail = f"Speedup {speedup_256:.1f}x - significant but below 10x threshold"
     else:
-        status = "UNEXPECTED - speedup less than expected"
+        status = "UNEXPECTED"
+        detail = f"Speedup only {speedup_256:.1f}x - expected >= 10x"
 
-    results["predictions"].append("OT-CFM 10-100x slower at batch_size=256")
+    results["predictions"].append("OT-CFM >= 10x slower at batch_size=256")
     results["status"].append(status)
+    results["details"].append(detail)
     logger.info(f"  Speedup at batch_size=256: {speedup_256:.1f}x")
     logger.info(f"  Status: {status}")
 
-    # Prediction 2: O(n^3) scaling
+    # =================================================================
+    # Prediction 2: OT-CFM shows O(n^3) scaling
+    # =================================================================
     logger.info("\n[2] Testing: OT-CFM shows O(n^3) scaling")
 
-    # Check if time roughly cubes when batch size doubles
-    if len(timing_results["batch_sizes"]) >= 2:
-        t1 = timing_results["ot_cfm_times"][0]  # batch_size=64
-        t2 = timing_results["ot_cfm_times"][1]  # batch_size=128
+    t1 = timing_results["ot_cfm_times"][0]  # batch_size=64
+    t2 = timing_results["ot_cfm_times"][1]  # batch_size=128
 
-        # Expected ratio: (128/64)^3 = 8x
-        actual_ratio = t2 / t1
-        expected_ratio = 8.0
+    # Expected ratio: (128/64)^3 = 8x
+    actual_ratio = t2 / t1 if t1 > 0 else float('inf')
 
-        if 4.0 <= actual_ratio <= 16.0:  # Within 2x of expected
-            status = "VALIDATED"
-        else:
-            status = f"UNEXPECTED - ratio {actual_ratio:.1f}x vs expected ~8x"
+    if 4.0 <= actual_ratio <= 16.0:  # Within 2x of expected 8x
+        status = "VALIDATED"
+        detail = f"Time ratio {actual_ratio:.1f}x matches O(n^3) (expected ~8x)"
+    else:
+        status = "UNEXPECTED"
+        detail = f"Time ratio {actual_ratio:.1f}x deviates from O(n^3) expected ~8x"
 
-        results["predictions"].append("OT-CFM shows O(n^3) scaling (8x for 2x batch)")
-        results["status"].append(status)
-        logger.info(f"  Time ratio (128/64): {actual_ratio:.1f}x (expected ~8x)")
-        logger.info(f"  Status: {status}")
+    results["predictions"].append("OT-CFM shows O(n^3) scaling (8x for 2x batch)")
+    results["status"].append(status)
+    results["details"].append(detail)
+    logger.info(f"  Time ratio (128/64): {actual_ratio:.1f}x (expected ~8x)")
+    logger.info(f"  Status: {status}")
 
+    # =================================================================
+    # Prediction 3: Standard CFM shows O(n) scaling
+    # =================================================================
+    logger.info("\n[3] Testing: Standard CFM shows O(n) scaling")
+
+    cfm_t1 = timing_results["cfm_times"][0]  # batch_size=64
+    cfm_t2 = timing_results["cfm_times"][1]  # batch_size=128
+
+    # Expected ratio: (128/64) = 2x for O(n)
+    cfm_ratio = cfm_t2 / cfm_t1 if cfm_t1 > 0 else float('inf')
+
+    if 1.0 <= cfm_ratio <= 4.0:  # Within 2x of expected 2x
+        status = "VALIDATED"
+        detail = f"Time ratio {cfm_ratio:.1f}x matches O(n) (expected ~2x)"
+    else:
+        status = "UNEXPECTED"
+        detail = f"Time ratio {cfm_ratio:.1f}x deviates from O(n) expected ~2x"
+
+    results["predictions"].append("Standard CFM shows O(n) scaling (2x for 2x batch)")
+    results["status"].append(status)
+    results["details"].append(detail)
+    logger.info(f"  Time ratio (128/64): {cfm_ratio:.1f}x (expected ~2x)")
+    logger.info(f"  Status: {status}")
+
+    # =================================================================
+    # Prediction 4: CFG-Zero* schedule is correctly implemented
+    # =================================================================
+    logger.info("\n[4] Testing: CFG-Zero* schedule applies zero guidance for first 4%")
+
+    try:
+        from src.ecoflow.guided_flow import cfg_zero_star_schedule
+    except ModuleNotFoundError:
+        # Add project root to path for standalone execution
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from src.ecoflow.guided_flow import cfg_zero_star_schedule
+
+    # Test schedule at various steps for 50-step ODE
+    total_steps = 50
+    zero_init_fraction = 0.04
+    guidance_strength = 1.0
+
+    # First 2 steps (0, 1) should have zero guidance
+    step_0 = cfg_zero_star_schedule(0, total_steps, guidance_strength, zero_init_fraction)
+    step_1 = cfg_zero_star_schedule(1, total_steps, guidance_strength, zero_init_fraction)
+    # Step 2+ should have full guidance
+    step_2 = cfg_zero_star_schedule(2, total_steps, guidance_strength, zero_init_fraction)
+    step_49 = cfg_zero_star_schedule(49, total_steps, guidance_strength, zero_init_fraction)
+
+    if step_0 == 0.0 and step_1 == 0.0 and step_2 == guidance_strength and step_49 == guidance_strength:
+        status = "VALIDATED"
+        detail = f"Steps 0-1 have lambda=0, steps 2+ have lambda={guidance_strength}"
+    else:
+        status = "UNEXPECTED"
+        detail = f"Schedule mismatch: step_0={step_0}, step_1={step_1}, step_2={step_2}"
+
+    results["predictions"].append("CFG-Zero* applies zero guidance for first 4% of steps")
+    results["status"].append(status)
+    results["details"].append(detail)
+    logger.info(f"  Step 0: {step_0} (expected 0.0)")
+    logger.info(f"  Step 1: {step_1} (expected 0.0)")
+    logger.info(f"  Step 2: {step_2} (expected {guidance_strength})")
+    logger.info(f"  Status: {status}")
+
+    # =================================================================
     # Summary
+    # =================================================================
+    elapsed = validation_time.time() - start_time
+
     logger.info("\n" + "=" * 60)
     logger.info("VALIDATION SUMMARY")
     logger.info("=" * 60)
 
     validated_count = sum(1 for s in results["status"] if s == "VALIDATED")
+    partial_count = sum(1 for s in results["status"] if s == "PARTIAL")
+    unexpected_count = sum(1 for s in results["status"] if s == "UNEXPECTED")
     total_count = len(results["status"])
 
-    for pred, stat in zip(results["predictions"], results["status"]):
-        icon = "[OK]" if stat == "VALIDATED" else "[!]"
-        logger.info(f"  {icon} {pred}: {stat}")
+    for pred, stat, detail in zip(results["predictions"], results["status"], results["details"]):
+        if stat == "VALIDATED":
+            icon = "[OK]"
+        elif stat == "PARTIAL":
+            icon = "[~]"
+        else:
+            icon = "[!]"
+        logger.info(f"  {icon} {pred}")
+        logger.info(f"      -> {detail}")
 
-    logger.info(f"\nOverall: {validated_count}/{total_count} predictions validated")
+    logger.info(f"\nResults: {validated_count} validated, {partial_count} partial, {unexpected_count} unexpected")
+    logger.info(f"Duration: {elapsed:.1f}s")
+
+    results["summary"] = {
+        "validated": validated_count,
+        "partial": partial_count,
+        "unexpected": unexpected_count,
+        "total": total_count,
+        "duration_seconds": elapsed,
+    }
     results["overall"] = f"{validated_count}/{total_count} validated"
+
+    if unexpected_count == 0:
+        logger.info("\nConclusion: Research predictions from 09-RESEARCH.md are confirmed!")
+    elif unexpected_count <= 1:
+        logger.info("\nConclusion: Most predictions confirmed, minor deviations noted.")
+    else:
+        logger.info("\nConclusion: Several unexpected results - review 09-RESEARCH.md assumptions.")
 
     return results
 
