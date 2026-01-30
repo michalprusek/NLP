@@ -42,6 +42,7 @@ from sklearn.model_selection import KFold
 import numpy as np
 
 # GP imports
+import gpytorch
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP, SaasFullyBayesianSingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
@@ -634,8 +635,29 @@ class FeatureExtractor(nn.Module):
         return self.net(x)
 
 
+class DKLGPModel(gpytorch.models.ExactGP):
+    """GPyTorch ExactGP for DKL - no default priors."""
+
+    def __init__(self, train_x, train_y, likelihood, feature_dim):
+        super().__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.covar_module = ScaleKernel(
+            MaternKernel(nu=2.5, ard_num_dims=feature_dim)
+        )
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
 class DKLSurrogate:
-    """Deep Kernel Learning surrogate."""
+    """
+    Deep Kernel Learning surrogate.
+
+    Uses GPyTorch ExactGP directly (not BoTorch SingleTaskGP) to avoid
+    prior constraint issues during joint training.
+    """
 
     def __init__(
         self,
@@ -653,59 +675,81 @@ class DKLSurrogate:
             output_dim=config.feature_dim,
         ).to(self.device)
 
-        self.gp_model: Optional[SingleTaskGP] = None
+        self.gp_model: Optional[DKLGPModel] = None
+        self.likelihood: Optional[gpytorch.likelihoods.GaussianLikelihood] = None
         self._train_X: Optional[Tensor] = None
         self._train_Y: Optional[Tensor] = None
+        self._y_mean: float = 0.0
+        self._y_std: float = 1.0
 
     def fit(self, X: Tensor, y: Tensor) -> None:
         self._train_X = X.to(self.device)
         self._train_Y = y.to(self.device)
 
-        if self._train_Y.dim() == 1:
-            self._train_Y = self._train_Y.unsqueeze(-1)
+        if self._train_Y.dim() > 1:
+            self._train_Y = self._train_Y.squeeze(-1)
 
-        # Train feature extractor + GP jointly
+        # Standardize y manually (instead of using outcome_transform)
+        self._y_mean = float(self._train_Y.mean())
+        self._y_std = float(self._train_Y.std() + 1e-6)
+        train_y_standardized = (self._train_Y - self._y_mean) / self._y_std
+
+        # Initialize feature extractor
         self.feature_extractor.train()
 
-        # Extract features
+        # Extract initial features
         with torch.no_grad():
             features = self.feature_extractor(self._train_X)
 
-        # Create GP on features
-        covar_module = ScaleKernel(
-            MaternKernel(nu=2.5, ard_num_dims=self.config.feature_dim)
-        )
-
-        self.gp_model = SingleTaskGP(
-            train_X=features,
-            train_Y=self._train_Y,
-            covar_module=covar_module,
-            input_transform=Normalize(d=self.config.feature_dim),
-            outcome_transform=Standardize(m=1),
+        # Create likelihood and GP model
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood().to(self.device)
+        self.gp_model = DKLGPModel(
+            features, train_y_standardized,
+            self.likelihood, self.config.feature_dim
         ).to(self.device)
 
+        # Initialize lengthscale based on feature dimension
+        with torch.no_grad():
+            init_lengthscale = math.sqrt(self.config.feature_dim) / 5.0
+            self.gp_model.covar_module.base_kernel.lengthscale = torch.full(
+                (1, self.config.feature_dim), init_lengthscale, device=self.device
+            )
+
         # Joint optimization
-        all_params = list(self.feature_extractor.parameters()) + list(self.gp_model.parameters())
-        optimizer = torch.optim.Adam(all_params, lr=1e-3)
-        mll = ExactMarginalLogLikelihood(self.gp_model.likelihood, self.gp_model)
+        fe_params = list(self.feature_extractor.parameters())
+        gp_params = list(self.gp_model.parameters()) + list(self.likelihood.parameters())
+
+        optimizer = torch.optim.Adam([
+            {'params': fe_params, 'lr': 1e-3},
+            {'params': gp_params, 'lr': 0.1}
+        ])
+        mll = ExactMarginalLogLikelihood(self.likelihood, self.gp_model)
 
         self.feature_extractor.train()
         self.gp_model.train()
+        self.likelihood.train()
 
-        for _ in range(100):  # Joint training iterations
+        for i in range(100):
             optimizer.zero_grad()
             features = self.feature_extractor(self._train_X)
 
             # Update GP training data
-            self.gp_model.set_train_data(features, self._train_Y, strict=False)
+            self.gp_model.set_train_data(features, train_y_standardized, strict=False)
 
             output = self.gp_model(features)
-            loss = -mll(output, self._train_Y.squeeze(-1))
+            loss = -mll(output, train_y_standardized)
+
+            # Skip if loss is invalid
+            if torch.isnan(loss) or torch.isinf(loss):
+                continue
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(fe_params + gp_params, max_norm=1.0)
             optimizer.step()
 
         self.feature_extractor.eval()
         self.gp_model.eval()
+        self.likelihood.eval()
 
     def predict(self, X: Tensor) -> tuple[Tensor, Tensor]:
         if self.gp_model is None:
@@ -713,12 +757,13 @@ class DKLSurrogate:
 
         self.feature_extractor.eval()
         self.gp_model.eval()
+        self.likelihood.eval()
 
-        with torch.no_grad():
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
             features = self.feature_extractor(X.to(self.device))
-            posterior = self.gp_model.posterior(features)
-            mean = posterior.mean.squeeze(-1)
-            std = torch.sqrt(posterior.variance.squeeze(-1) + 1e-6)
+            pred = self.likelihood(self.gp_model(features))
+            mean = pred.mean * self._y_std + self._y_mean
+            std = torch.sqrt(pred.variance + 1e-6) * self._y_std
 
         return mean, std
 
@@ -728,13 +773,14 @@ class DKLSurrogate:
 
         self.feature_extractor.eval()
         self.gp_model.eval()
+        self.likelihood.eval()
 
-        with torch.enable_grad():
+        with torch.enable_grad(), gpytorch.settings.fast_pred_var():
             X_var = X.clone().to(self.device).requires_grad_(True)
             features = self.feature_extractor(X_var)
-            posterior = self.gp_model.posterior(features)
-            mean = posterior.mean.squeeze(-1)
-            std = torch.sqrt(posterior.variance.squeeze(-1) + 1e-6)
+            pred = self.likelihood(self.gp_model(features))
+            mean = pred.mean * self._y_std + self._y_mean
+            std = torch.sqrt(pred.variance + 1e-6) * self._y_std
             lcb = mean - alpha * std
 
             grad = torch.autograd.grad(lcb.sum(), X_var)[0]
@@ -929,19 +975,23 @@ def compute_metrics(
     if UNCERTAINTY_TOOLBOX_AVAILABLE:
         try:
             # Get all metrics from uncertainty-toolbox
+            # API: y_pred, y_std, y_true
             uct_metrics = uct.metrics.get_all_metrics(
-                predictions=mean.numpy(),
-                predictions_std=std.numpy(),
-                y=test_y.numpy(),
+                y_pred=mean.numpy(),
+                y_std=std.numpy(),
+                y_true=test_y.numpy(),
                 verbose=False,
             )
 
-            # Extract key metrics
+            # Extract key metrics (using actual key names from uncertainty-toolbox)
+            # scoring_rule: nll, crps, check, interval
+            # sharpness: sharp
+            # avg_calibration: rms_cal (RMSCE), ma_cal (MACE), miscal_area
             metrics.crps = float(uct_metrics['scoring_rule']['crps'])
-            metrics.sharpness = float(uct_metrics['sharpness']['sharpness'])
-            metrics.mace = float(uct_metrics['calibration']['mace'])
-            metrics.rmsce = float(uct_metrics['calibration']['rmsce'])
-            metrics.miscal_area = float(uct_metrics['calibration']['miscal_area'])
+            metrics.sharpness = float(uct_metrics['sharpness']['sharp'])
+            metrics.mace = float(uct_metrics['avg_calibration']['ma_cal'])
+            metrics.rmsce = float(uct_metrics['avg_calibration']['rms_cal'])
+            metrics.miscal_area = float(uct_metrics['avg_calibration']['miscal_area'])
         except Exception as e:
             logger.warning(f"uncertainty-toolbox metrics failed: {e}")
 
@@ -1111,7 +1161,8 @@ def run_benchmark(
 
         # === High-Dimensional BO Methods ===
         # 1. SAASBO - Sparse Axis-Aligned Subspace BO (Eriksson & Jankowiak 2021)
-        SurrogateConfig(name="SAASBO", kernel="matern52"),
+        # NOTE: SAASBO disabled - HMC inference takes 5+ min per fold in 1024D
+        # SurrogateConfig(name="SAASBO", kernel="matern52"),
 
         # 2. TuRBO-style Local GP (Eriksson et al. 2019)
         SurrogateConfig(name="TuRBO_LocalGP", kernel="matern52"),
