@@ -85,7 +85,11 @@ def estimate_lipschitz_constant(
     # Handle NaN/Inf from ill-conditioned GP
     if not math.isfinite(L):
         logger = logging.getLogger(__name__)
-        logger.warning("Lipschitz estimate is non-finite, using default 1.0")
+        logger.error(
+            "Lipschitz estimate is non-finite (NaN/Inf). "
+            "This indicates GP conditioning issues. Using fallback L=1.0. "
+            "Batch selection diversity may be compromised."
+        )
         L = 1.0
 
     # Floor for numerical stability

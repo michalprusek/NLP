@@ -106,7 +106,9 @@ def evaluate_instruction_on_gsm8k(
             if evaluator.check_answer(predicted, expected):
                 correct += 1
         except Exception as e:
-            logger.warning(f"Error evaluating: {e}")
+            logger.error(f"Error evaluating question {idx}: {e}")
+            # Count as failed evaluation, not wrong answer
+            total -= 1  # Don't count failed evaluations in accuracy
 
     accuracy = correct / total if total > 0 else 0
 
@@ -144,6 +146,7 @@ Generate ONE new unique instruction (just the instruction, no explanation):"""
 
     instructions = []
     seen = set()
+    consecutive_failures = 0
 
     while len(instructions) < n_instructions:
         try:
@@ -169,8 +172,14 @@ Generate ONE new unique instruction (just the instruction, no explanation):"""
                 logger.info(f"Generated {len(instructions)}/{n_instructions} instructions")
 
         except Exception as e:
-            logger.warning(f"Generation error: {e}")
+            consecutive_failures += 1
+            logger.error(f"Generation error (attempt {consecutive_failures}): {e}")
+            if consecutive_failures >= 10:
+                logger.error("Too many consecutive failures, aborting generation")
+                break
             continue
+        else:
+            consecutive_failures = 0  # Reset on success
 
     return instructions
 

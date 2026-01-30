@@ -300,7 +300,12 @@ def main():
             )
             logger.info("SONAR encoder initialized")
         except Exception as e:
-            logger.warning(f"Failed to load SONAR encoder: {e}. L2-r filtering disabled.")
+            logger.error(f"Failed to load SONAR encoder: {e}")
+            if not args.disable_l2r_filter:
+                logger.error("L2-r filtering was enabled but SONAR encoder failed to load.")
+                logger.error("Either fix the SONAR installation or use --disable-l2r-filter explicitly.")
+                raise RuntimeError(f"SONAR encoder required for L2-r filtering: {e}")
+            logger.warning("Continuing without L2-r filtering (--disable-l2r-filter was set)")
             encoder = None
 
     # 3. Create LLM client (vLLM)

@@ -218,6 +218,9 @@ def parse_vs_response(response: str) -> List[Tuple[str, float]]:
     pattern = r'<response>.*?<text>(.*?)</text>.*?<probability>([\d.]+)</probability>.*?</response>'
     matches = re.findall(pattern, response, re.DOTALL)
 
+    if not matches:
+        logger.warning(f"Failed to parse VS response, no matches found. Response preview: {response[:200]}")
+
     results = []
     for text, prob in matches:
         text = text.strip()
@@ -267,6 +270,7 @@ def generate_instructions_vs(
 
     all_instructions = []
     seen_instructions = set()  # For deduplication
+    consecutive_failures = 0
 
     # Calculate number of LLM calls needed
     n_calls = (target_count // instructions_per_call) + 1
@@ -311,8 +315,14 @@ def generate_instructions_vs(
             pbar.set_postfix({"total": len(all_instructions)})
 
         except Exception as e:
-            logger.warning(f"VS generation failed: {e}")
+            consecutive_failures += 1
+            logger.error(f"VS generation failed (attempt {consecutive_failures}): {e}")
+            if consecutive_failures >= 10:
+                logger.error("Too many consecutive VS failures, aborting")
+                break
             continue
+        else:
+            consecutive_failures = 0  # Reset on success
 
         # Early exit if we have enough
         if len(all_instructions) >= target_count:
@@ -406,7 +416,7 @@ def evolve_instruction(
                 evolved.append(evolved_inst)
 
         except Exception as e:
-            logger.debug(f"Evolution failed for mutation '{mutation[:30]}...': {e}")
+            logger.warning(f"Evolution failed for mutation '{mutation[:30]}...': {e}")
             continue
 
     return evolved

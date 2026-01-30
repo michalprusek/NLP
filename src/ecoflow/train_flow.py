@@ -303,8 +303,15 @@ def train_flow(args: argparse.Namespace) -> None:
                 "args": vars(args),
                 "norm_stats": norm_stats,  # Save normalization stats for denormalization
             }
-            torch.save(checkpoint, checkpoint_path)
-            logger.info(f"Saved checkpoint: {checkpoint_path}")
+            try:
+                torch.save(checkpoint, checkpoint_path)
+                # Verify file was written successfully
+                if not os.path.exists(checkpoint_path) or os.path.getsize(checkpoint_path) == 0:
+                    raise IOError(f"Checkpoint file is missing or empty: {checkpoint_path}")
+                logger.info(f"Saved checkpoint: {checkpoint_path}")
+            except Exception as e:
+                logger.error(f"Failed to save checkpoint at epoch {epoch}: {e}")
+                logger.error("Training will continue but checkpoint may be lost.")
 
     # Save final checkpoint
     final_path = os.path.join(args.output_dir, "checkpoint_final.pt")
@@ -319,8 +326,15 @@ def train_flow(args: argparse.Namespace) -> None:
         "args": vars(args),
         "norm_stats": norm_stats,  # Save normalization stats for denormalization
     }
-    torch.save(checkpoint, final_path)
-    logger.info(f"Saved final checkpoint: {final_path}")
+    try:
+        torch.save(checkpoint, final_path)
+        if not os.path.exists(final_path) or os.path.getsize(final_path) == 0:
+            raise IOError(f"Final checkpoint file is missing or empty: {final_path}")
+        logger.info(f"Saved final checkpoint: {final_path}")
+    except Exception as e:
+        logger.error(f"CRITICAL: Failed to save final checkpoint: {e}")
+        logger.error("Training completed but final checkpoint was NOT saved!")
+        raise  # Re-raise since this is critical
     logger.info(f"Training complete. Best loss: {best_loss:.6f}")
 
 

@@ -151,7 +151,7 @@ def extract_from_flan(n_samples: int = 10000) -> List[str]:
             if 20 < len(inst) < 500:
                 instructions.append(inst)
     except Exception as e:
-        logger.warning(f"FLAN niv2 failed: {e}")
+        logger.error(f"FLAN niv2 failed: {e}. Dataset may be incomplete.")
 
     try:
         # Chain of thought
@@ -161,7 +161,7 @@ def extract_from_flan(n_samples: int = 10000) -> List[str]:
             if 20 < len(inst) < 500:
                 instructions.append(inst)
     except Exception as e:
-        logger.warning(f"FLAN cot failed: {e}")
+        logger.error(f"FLAN cot failed: {e}. Dataset may be incomplete.")
 
     logger.info(f"Extracted {len(instructions)} instructions from FLAN")
     return instructions[:n_samples]
@@ -182,7 +182,7 @@ def extract_from_wizardlm(n_samples: int = 5000) -> List[str]:
         logger.info(f"Extracted {len(instructions)} instructions from WizardLM")
         return instructions
     except Exception as e:
-        logger.warning(f"WizardLM failed: {e}")
+        logger.error(f"WizardLM dataset failed: {e}. This source will be skipped.")
         return []
 
 
@@ -208,7 +208,7 @@ def extract_from_sharegpt(n_samples: int = 5000) -> List[str]:
         logger.info(f"Extracted {len(instructions)} instructions from ShareGPT")
         return instructions[:n_samples]
     except Exception as e:
-        logger.warning(f"ShareGPT failed: {e}")
+        logger.error(f"ShareGPT dataset failed: {e}. This source will be skipped.")
         return []
 
 
@@ -227,7 +227,7 @@ def extract_from_code_alpaca(n_samples: int = 5000) -> List[str]:
         logger.info(f"Extracted {len(instructions)} instructions from Code Alpaca")
         return instructions
     except Exception as e:
-        logger.warning(f"Code Alpaca failed: {e}")
+        logger.error(f"Code Alpaca dataset failed: {e}. This source will be skipped.")
         return []
 
 
@@ -477,8 +477,11 @@ def main():
             sources["ape"] = len(ape_instructions)
             logger.info(f"Added {len(ape_instructions)} APE-generated instructions")
         except Exception as e:
-            logger.warning(f"APE generation failed: {e}. Continuing without APE variations.")
+            logger.error(f"APE generation failed: {e}")
+            logger.error("LLM client initialization or API call failed. Check API keys and network.")
             sources["ape"] = 0
+            # Continue but warn user about degraded dataset quality
+            logger.warning("Continuing without APE variations - dataset quality may be reduced.")
 
     # 6. Deduplicate
     logger.info("\n" + "="*60)

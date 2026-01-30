@@ -71,21 +71,22 @@ def cfg_zero_star_schedule(
 
 class GuidedFlowSampler:
     """
-    Samples from flow model with LCB guidance from GP surrogate.
+    Samples from flow model with UCB guidance from GP surrogate.
 
-    Implements the guided ODE: dz/dt = v(z, t) + lambda(t) * grad_LCB(z)
+    Implements the guided ODE: dz/dt = v(z, t) + lambda(t) * grad_UCB(z)
     where:
     - v(z, t) is the learned velocity field from the flow model
     - lambda(t) follows CFG-Zero* schedule (zero for first 4% of steps)
-    - grad_LCB(z) is the gradient of mean - alpha * std from the GP
+    - grad_UCB(z) is the gradient of mean + alpha * std from the GP
 
     The guidance steers samples toward high-scoring regions while
     maintaining diversity through the exploration bonus (alpha * std).
+    Uses UCB (Upper Confidence Bound) for MAXIMIZATION of accuracy.
 
     Attributes:
         flow_model: Trained FlowMatchingModel
         gp: SonarGPSurrogate for acquisition function
-        alpha: LCB exploration weight (higher = more exploration)
+        alpha: UCB exploration weight (higher = more exploration)
         guidance_strength: Maximum guidance strength lambda
         zero_init_fraction: Fraction of steps with zero guidance
         norm_stats: Normalization statistics for denormalization
@@ -109,12 +110,12 @@ class GuidedFlowSampler:
 
         Args:
             flow_model: Trained FlowMatchingModel for velocity computation
-            gp_surrogate: SonarGPSurrogate for LCB gradient computation
-            alpha: LCB exploration weight (default 1.0, use 1.96 for 95% CI)
+            gp_surrogate: SonarGPSurrogate for UCB gradient computation
+            alpha: UCB exploration weight (default 1.0, use 1.96 for 95% CI)
             guidance_strength: Maximum guidance strength lambda (default 1.0)
                                Analysis shows optimal range is 1.0-2.0:
-                               - λ=1.0: LCB=0.824, good balance
-                               - λ=2.0: LCB=0.835, more aggressive
+                               - λ=1.0: UCB=0.824, good balance
+                               - λ=2.0: UCB=0.835, more aggressive
             zero_init_fraction: Fraction of steps with zero guidance (default 0.04 = 4%)
                                 CFG-Zero* schedule prevents early trajectory corruption
             norm_stats: Normalization statistics {'mean': [1024], 'std': [1024]}
@@ -224,7 +225,7 @@ class GuidedFlowSampler:
         Generate guided samples using ODE integration.
 
         Integrates the guided ODE from noise (t=0) to data (t=1):
-        dz/dt = v(z, t) + lambda(t) * grad_LCB(z)
+        dz/dt = v(z, t) + lambda(t) * grad_UCB(z)
 
         Args:
             n_samples: Number of samples to generate
@@ -262,10 +263,10 @@ class GuidedFlowSampler:
                     # Denormalize z for GP (GP expects SONAR space)
                     z_sonar = self._denormalize(z)
 
-                    # Compute normalized LCB gradient
+                    # Compute normalized UCB gradient
                     grad_ucb = self._compute_ucb_gradient(z_sonar)
 
-                    # For MAXIMIZATION: follow positive gradient toward higher LCB
+                    # For MAXIMIZATION: follow positive gradient toward higher UCB
                     v = v + lambda_t * grad_ucb
 
                 # Euler step
@@ -329,7 +330,7 @@ class GuidedFlowSampler:
         self.guidance_strength = guidance_strength
 
     def set_alpha(self, alpha: float) -> None:
-        """Update LCB exploration weight."""
+        """Update UCB exploration weight."""
         self.alpha = alpha
 
     def update_gp(self, gp_surrogate: SonarGPSurrogate) -> None:

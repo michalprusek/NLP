@@ -185,7 +185,7 @@ def main():
 
     for i, instruction in enumerate(instructions):
         print(f"\n[{i+1}/{len(instructions)}] Evaluating instruction:")
-        print(f"  '{instruction[:80]}...'")
+        print(f"  {instruction}")
 
         eval_result = evaluate_instruction(
             instruction=instruction,
