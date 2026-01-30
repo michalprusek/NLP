@@ -16,6 +16,82 @@ Always optimize for this hardware:
 
 CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
 
+This repository contains two prompt optimization approaches:
+
+1. **OPRO/ProTeGi** - Meta-optimization algorithms for discrete prompt engineering on GSM8K
+2. **EcoFlow** - Guided flow matching for continuous optimization in SONAR/vec2text embedding space
+
+---
+
+## EcoFlow: Guided Flow for Embedding-Space Optimization
+
+EcoFlow trains a flow matching model on text embeddings (SONAR 1024D or vec2text) and uses LCB-guided sampling for Bayesian optimization of prompts in the continuous embedding space.
+
+### Architecture
+
+```
+Noise (t=0) ──► Flow ODE + LCB Guidance ──► SONAR Embedding ──► SONAR Decoder ──► Text Prompt
+                    │                              │
+                    ▼                              ▼
+              v(z,t) + λ(t)·∇LCB(z)          Evaluate on GSM8K
+                    │                              │
+                    └──────── GP Update ◄──────────┘
+```
+
+**Core Components (`src/ecoflow/`):**
+- `VelocityNetwork`: DiT-style velocity network with AdaLN time conditioning
+- `FlowMatchingModel`: ODE-based sampling (Euler/Heun integration)
+- `GuidedFlowSampler`: LCB-guided ODE with CFG-Zero* schedule (zero guidance for first 4%)
+- `SonarGPSurrogate`: GP surrogate for 1024D SONAR Bayesian optimization
+- `SonarDecoder`: SONAR embedding → text decoder
+- `BOOptimizationLoop`: Full BO pipeline orchestrator with checkpointing
+
+**Key Innovation:** CFG-Zero* schedule prevents early trajectory corruption by applying zero guidance for the first 4% of ODE steps.
+
+### Commands
+
+```bash
+# Train flow model on SONAR embeddings
+uv run python -m src.ecoflow.train_flow \
+  --data datasets/sonar_embeddings.pt \
+  --epochs 50 --batch-size 1024 --normalize
+
+# Run BO optimization
+uv run python scripts/run_bo_optimization.py \
+  --flow-checkpoint results/flow_checkpoints/best_flow.pt \
+  --iterations 100 --batch-size 8
+
+# Validate flow model (generate samples + decode to text)
+uv run python -m src.ecoflow.validate \
+  --checkpoint results/flow_checkpoints/best_flow.pt \
+  --n-samples 100 --decode
+```
+
+### Datasets for EcoFlow
+
+- `datasets/sonar_embeddings.pt`: 1.5M SONAR embeddings (1024D) from text corpus
+- `datasets/gtr_embeddings_full.pt`: GTR-T5-Large embeddings (768D) - alternative
+
+### Key Parameters (EcoFlow)
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--method` | ODE solver ("heun" or "euler") | heun |
+| `--guidance-strength` | LCB guidance λ (optimal: 1.0-2.0) | 1.0 |
+| `--alpha` | LCB exploration weight (σ multiplier) | 1.0 |
+| `--num-steps` | ODE integration steps | 50 |
+| `--zero-init-fraction` | CFG-Zero* fraction | 0.04 |
+
+**Optimal Guidance Schedule (from analysis):**
+- **Schedule shape**: Constant λ(t) = λ outperforms time-varying schedules
+- **CFG-Zero***: Zero guidance for first 4% prevents early trajectory corruption
+- **λ = 1.0**: Conservative, LCB=0.824, L2=0.343 (on-manifold)
+- **λ = 2.0**: Aggressive, LCB=0.835, L2=0.359 (slightly off-manifold)
+
+---
+
+## OPRO/ProTeGi: Discrete Prompt Optimization
+
 Prompt optimization framework implementing **OPRO** (Optimization by PROmpting) and **ProTeGi** (Prompt Optimization with Textual Gradients) algorithms for automatic prompt engineering on GSM8K (math reasoning) dataset.
 
 ## Commands
@@ -151,6 +227,7 @@ This ensures:
 
 | Algorithm | Type | Strengths | Limitations |
 |-----------|------|-----------|-------------|
+| **EcoFlow** | Flow + BO in embedding space | Continuous optimization, GP-guided exploration, sample efficient | Requires pretrained flow model, SONAR decoder overhead |
 | **OPRO** | Meta-optimization | Simple, interpretable, good for discrete prompt space | Requires many LLM calls, local optima |
 | **ProTeGi** | Gradient-based | Directed search via textual gradients, beam search diversity | Gradient quality depends on critique LLM |
 
@@ -183,10 +260,20 @@ tmux new-session -d -s opro_qwen "uv run python run_opro.py --model qwen --itera
 tmux new-session -d -s opro_llama "uv run python run_opro.py --model llama --iterations 100 2>&1 | tee results/opro_llama_$(date +%Y%m%d_%H%M%S).log"
 ```
 
+## Autonomous Work Mode
+
+**Work autonomously without asking for confirmation.** When checkpoints require human verification:
+- Run the verification tests yourself
+- Approve if tests pass, fix issues if they don't
+- Continue to the next step without waiting for user input
+
+This applies to all GSD checkpoints and verification steps.
+
 ## Development Guidelines
 
 - **Read before modifying**: Always use `Read` tool on files before suggesting changes
 - **Test changes**: Run small-scale experiments (5-10 iterations) before production runs
+- **Run tests**: `uv run pytest tests/ -x -q` - tests exist for GP surrogate and batch selection
 - **Version control**: Commit working configurations before major refactors
 - **Documentation**: Update this file when adding new parameters, models, or workflows
 - **Error handling**: Always validate LLM outputs and handle API errors gracefully

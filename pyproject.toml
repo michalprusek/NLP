@@ -39,7 +39,9 @@ dependencies = [
     "tensorboard>=2.20.0",
     "torch-optimizer>=0.3.0",
     # EcoFlow-BO dependencies
-    "torchcfm>=1.0.4",  # Conditional Flow Matching
+    "torchcfm>=1.0.4", # Conditional Flow Matching
+    "uncertainty-toolbox>=0.1.1",
+    "seaborn>=0.13.2",
 ]
 
 [dependency-groups]
