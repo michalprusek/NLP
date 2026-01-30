@@ -189,6 +189,46 @@ Examples:
         help="L2-r threshold for on-manifold filtering (default: 0.5)",
     )
 
+    # Batch BO parameters (Phase 8)
+    parser.add_argument(
+        "--use-batch-mode",
+        action="store_true",
+        help="Enable batch evaluation mode (evaluates batch-size candidates per iteration)",
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=8,
+        help="Number of candidates to evaluate per iteration in batch mode (default: 8)",
+    )
+    parser.add_argument(
+        "--use-local-penalization",
+        action="store_true",
+        default=True,
+        help="Use Local Penalization for diverse batch selection (default: True)",
+    )
+    parser.add_argument(
+        "--no-local-penalization",
+        action="store_true",
+        help="Disable Local Penalization (use greedy top-K instead)",
+    )
+    parser.add_argument(
+        "--use-density-filter",
+        action="store_true",
+        help="Enable flow density filtering before batch selection",
+    )
+    parser.add_argument(
+        "--density-percentile",
+        type=float,
+        default=25.0,
+        help="Reject bottom X%% by flow density (default: 25.0)",
+    )
+    parser.add_argument(
+        "--use-heteroscedastic-gp",
+        action="store_true",
+        help="Use heteroscedastic GP with binomial noise model",
+    )
+
     return parser.parse_args()
 
 
@@ -277,10 +317,20 @@ def main():
     evaluator = GSM8KEvaluator(dataset_path="datasets/gsm8k", split="test")
     logger.info(f"GSM8K evaluator created with {len(evaluator)} test examples")
 
-    # 5. Create GP surrogate (BAxUS with 128D subspace - best gradient quality)
-    logger.info("Creating BAxUS GP surrogate (128D subspace)...")
-    gp = create_surrogate(method="baxus", D=1024, device=args.device, target_dim=128)
-    logger.info("BAxUS GP surrogate created")
+    # 5. Create GP surrogate
+    if args.use_heteroscedastic_gp:
+        logger.info("Creating Heteroscedastic GP surrogate (binomial noise model)...")
+        gp = create_surrogate(
+            method="heteroscedastic",
+            D=1024,
+            device=args.device,
+            n_eval=args.eval_subset_size,
+        )
+        logger.info("Heteroscedastic GP surrogate created")
+    else:
+        logger.info("Creating BAxUS GP surrogate (128D subspace)...")
+        gp = create_surrogate(method="baxus", D=1024, device=args.device, target_dim=128)
+        logger.info("BAxUS GP surrogate created")
 
     # 6. Create guided flow sampler
     logger.info("Creating guided flow sampler...")
@@ -341,20 +391,51 @@ def main():
     # 9. Main optimization loop
     logger.info("=" * 60)
     logger.info("STARTING OPTIMIZATION LOOP")
-    logger.info(f"Generating {args.n_candidates} candidates per iteration, selecting best by UCB")
+
+    # Determine mode
+    use_batch_mode = args.use_batch_mode
+    use_lp = args.use_local_penalization and not args.no_local_penalization
+
+    if use_batch_mode:
+        logger.info(f"BATCH MODE: {args.eval_batch_size} candidates per iteration")
+        logger.info(f"  Local Penalization: {use_lp}")
+        logger.info(f"  Density filter: {args.use_density_filter}")
+        logger.info(f"  Total evaluations: {args.iterations * args.eval_batch_size}")
+    else:
+        logger.info(f"SEQUENTIAL MODE: 1 candidate per iteration (best of {args.n_candidates} by UCB)")
     logger.info("=" * 60)
 
     for iteration in range(start_iteration, args.iterations + 1):
-        # Run one BO step with UCB-based candidate selection
-        result = optimizer.step(n_candidates=args.n_candidates)
+        if use_batch_mode:
+            # Batch BO step - evaluate multiple candidates per iteration
+            result = optimizer.batch_step(
+                batch_size=args.eval_batch_size,
+                n_candidates=args.n_candidates,
+                use_local_penalization=use_lp,
+                use_density_filter=args.use_density_filter,
+                density_percentile=args.density_percentile,
+            )
 
-        # Log progress
-        logger.info(
-            f"Iteration {iteration}/{args.iterations}: "
-            f"score={result['score']:.4f}, UCB={result['ucb_value']:.4f}, "
-            f"best_so_far={result['best_so_far']:.4f}, "
-            f"n_obs={result['n_observations']}"
-        )
+            # Log batch results
+            batch_scores = result.get("batch_scores", [])
+            batch_mean = sum(batch_scores) / len(batch_scores) if batch_scores else 0
+            logger.info(
+                f"Iteration {iteration}/{args.iterations}: "
+                f"batch_mean={batch_mean:.4f}, batch_max={max(batch_scores):.4f}, "
+                f"best_so_far={result['best_so_far']:.4f}, "
+                f"n_obs={result['n_observations']}"
+            )
+        else:
+            # Sequential BO step - evaluate single best candidate
+            result = optimizer.step(n_candidates=args.n_candidates)
+
+            # Log progress
+            logger.info(
+                f"Iteration {iteration}/{args.iterations}: "
+                f"score={result['score']:.4f}, UCB={result['ucb_value']:.4f}, "
+                f"best_so_far={result['best_so_far']:.4f}, "
+                f"n_obs={result['n_observations']}"
+            )
 
         # Checkpoint
         if iteration % args.checkpoint_freq == 0:
