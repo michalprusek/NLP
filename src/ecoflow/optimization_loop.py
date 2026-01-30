@@ -34,7 +34,9 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+from src.ecoflow.batch_selection import select_batch_candidates
 from src.ecoflow.decoder import SonarDecoder
+from src.ecoflow.flow_density import filter_by_flow_density
 from src.ecoflow.flow_model import FlowMatchingModel
 from src.ecoflow.gp_surrogate import SonarGPSurrogate
 from src.ecoflow.guided_flow import GuidedFlowSampler
@@ -852,6 +854,227 @@ class BOOptimizationLoop:
             f"n_obs={self.train_X.shape[0]}, "
             f"best_score={self.best_score:.4f}"
         )
+
+    def batch_step(
+        self,
+        batch_size: int = 4,
+        n_candidates: int = 64,
+        use_local_penalization: bool = True,
+        use_density_filter: bool = False,
+        density_percentile: float = 25.0,
+        ucb_alpha: float = 1.96,
+    ) -> dict:
+        """
+        Execute one batch BO iteration with parallel evaluation.
+
+        More efficient than sequential step() when LLM supports batch inference.
+        Evaluates multiple candidates per iteration for better throughput.
+
+        Algorithm:
+        1. Generate candidates via guided sampling
+        2. Optional: filter by flow density (keeps high-density samples)
+        3. Optional: filter by L2-r (keeps on-manifold samples)
+        4. Select diverse batch using Local Penalization
+        5. Decode all batch candidates to text
+        6. Evaluate all prompts (parallel LLM batch inference)
+        7. Update GP with all observations
+
+        Args:
+            batch_size: Number of candidates to evaluate per iteration (default 4)
+            n_candidates: Number of initial candidates to generate (default 64)
+            use_local_penalization: Use LP for diverse batch selection (default True)
+            use_density_filter: Filter by flow density before selection (default False)
+            density_percentile: Reject samples below this density percentile (default 25.0)
+            ucb_alpha: UCB exploration weight for batch selection (default 1.96)
+
+        Returns:
+            Dict with batch results including:
+            - iteration: Current iteration number
+            - scores: List of scores for each batch candidate
+            - prompts: List of decoded prompts
+            - best_so_far: Running best score
+            - n_observations: Total observation count
+            - stats: Dict with filtering and selection statistics
+
+        Example:
+            >>> loop = BOOptimizationLoop(...)
+            >>> loop.initialize()
+            >>> for _ in range(25):  # 25 batch iterations = 100 evaluations with batch_size=4
+            ...     result = loop.batch_step(batch_size=4, use_density_filter=True)
+            ...     print(f"Best: {result['best_so_far']:.3f}")
+        """
+        self.iteration += 1
+        logger.info(f"\n=== Batch Iteration {self.iteration} (batch_size={batch_size}) ===")
+
+        stats = {
+            "n_candidates_initial": n_candidates,
+            "batch_size": batch_size,
+        }
+
+        # 1. Generate guided candidates
+        logger.info(f"Generating {n_candidates} guided candidates...")
+        embeddings = self.sampler.sample(
+            n_samples=n_candidates,
+            device=self.device,
+            num_steps=50,
+            method="heun",
+        )
+        n_after_gen = len(embeddings)
+
+        # 2. Optional: Filter by flow density
+        if use_density_filter:
+            logger.info(f"Filtering by flow density (percentile={density_percentile})...")
+            embeddings, log_densities = filter_by_flow_density(
+                self.flow_model,
+                embeddings,
+                percentile=density_percentile,
+                min_samples=batch_size,
+            )
+            stats["density_filter"] = {
+                "n_before": n_after_gen,
+                "n_after": len(embeddings),
+                "log_density_min": log_densities.min().item(),
+                "log_density_max": log_densities.max().item(),
+                "log_density_mean": log_densities.mean().item(),
+            }
+            logger.info(f"  Density filter: {n_after_gen} -> {len(embeddings)}")
+
+        # 3. Optional: L2-r filtering (if enabled and encoder available)
+        if self.l2r_filter_enabled and self.encoder is not None:
+            n_before_l2r = len(embeddings)
+            l2_r = self._compute_round_trip_fidelity(embeddings)
+            stats["l2r_filter"] = {
+                "l2r_mean": l2_r.mean().item(),
+                "l2r_max": l2_r.max().item(),
+                "l2r_min": l2_r.min().item(),
+                "threshold": self.l2r_threshold,
+            }
+            logger.info(
+                f"  L2-r stats: mean={l2_r.mean():.4f}, "
+                f"max={l2_r.max():.4f}, min={l2_r.min():.4f}"
+            )
+
+            on_manifold_mask = l2_r <= self.l2r_threshold
+            n_on_manifold = on_manifold_mask.sum().item()
+            stats["l2r_filter"]["n_on_manifold"] = n_on_manifold
+
+            if n_on_manifold >= batch_size:
+                embeddings = embeddings[on_manifold_mask]
+                logger.info(
+                    f"  L2-r filter: {n_before_l2r} -> {len(embeddings)} "
+                    f"(threshold={self.l2r_threshold})"
+                )
+            else:
+                logger.warning(
+                    f"Only {n_on_manifold} candidates on-manifold (need {batch_size}). "
+                    "Keeping all candidates."
+                )
+
+        # 4. Select diverse batch
+        n_available = len(embeddings)
+        actual_batch_size = min(batch_size, n_available)
+
+        if use_local_penalization and actual_batch_size < n_available:
+            logger.info(f"Selecting {actual_batch_size} candidates via Local Penalization...")
+            selected_embeddings, selected_indices = select_batch_candidates(
+                self.gp,
+                embeddings,
+                batch_size=actual_batch_size,
+                method="local_penalization",
+                alpha=ucb_alpha,
+            )
+            stats["selection_method"] = "local_penalization"
+        else:
+            # Simple greedy selection by UCB
+            logger.info(f"Selecting {actual_batch_size} candidates via greedy UCB...")
+            with torch.no_grad():
+                mean, std = self.gp.predict(embeddings)
+                ucb = mean + ucb_alpha * std
+                _, selected_indices = ucb.topk(actual_batch_size)
+            selected_embeddings = embeddings[selected_indices]
+            stats["selection_method"] = "greedy"
+
+        stats["n_selected"] = len(selected_embeddings)
+
+        # Compute batch diversity (mean pairwise distance)
+        if len(selected_embeddings) > 1:
+            pairwise_dists = torch.cdist(selected_embeddings, selected_embeddings)
+            # Get upper triangle (excluding diagonal)
+            triu_indices = torch.triu_indices(len(selected_embeddings), len(selected_embeddings), offset=1)
+            mean_dist = pairwise_dists[triu_indices[0], triu_indices[1]].mean().item()
+            stats["batch_diversity"] = mean_dist
+            logger.info(f"  Batch diversity (mean pairwise dist): {mean_dist:.4f}")
+
+        # 5. Decode all batch candidates
+        logger.info(f"Decoding {len(selected_embeddings)} selected candidates...")
+        prompts = self._decode_safe(selected_embeddings)
+
+        # 6. Evaluate all prompts
+        logger.info(f"Evaluating {len(prompts)} prompts on {len(self.eval_indices)} questions...")
+        scores = self._evaluate_prompts(prompts)
+
+        # 7. Update GP with all new observations
+        new_X = selected_embeddings.to(self.device)
+        new_Y = torch.tensor(scores, device=self.device, dtype=torch.float32)
+
+        # Update GP with batch
+        self.gp.update(new_X, new_Y)
+
+        # Update training data
+        self.train_X = torch.cat([self.train_X, new_X], dim=0)
+        self.train_Y = torch.cat([self.train_Y, new_Y], dim=0)
+
+        # Update sampler's GP reference
+        self.sampler.update_gp(self.gp)
+
+        # Track best
+        batch_best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        batch_best_score = scores[batch_best_idx]
+        batch_best_prompt = prompts[batch_best_idx]
+
+        if batch_best_score > self.best_score:
+            self.best_score = batch_best_score
+            self.best_prompt = batch_best_prompt
+            logger.info(f"NEW BEST: {self.best_score:.4f}")
+            logger.info(f"Best prompt:\n{self.best_prompt}")
+
+        self.best_so_far_list.append(self.best_score)
+
+        # Store prompts
+        for i, (prompt, score) in enumerate(zip(prompts, scores)):
+            self._prompts[len(self._prompts)] = prompt
+
+        # Log metrics
+        self.metrics.log_iteration(
+            iteration=self.iteration,
+            batch_scores=scores,
+            best_so_far=self.best_score,
+            n_observations=self.train_X.shape[0],
+        )
+
+        # Clear GPU cache
+        torch.cuda.empty_cache()
+
+        result = {
+            "iteration": self.iteration,
+            "scores": scores,
+            "prompts": prompts,
+            "batch_best_score": batch_best_score,
+            "batch_best_prompt": batch_best_prompt,
+            "best_so_far": self.best_score,
+            "best_prompt": self.best_prompt,
+            "n_observations": self.train_X.shape[0],
+            "stats": stats,
+        }
+
+        logger.info(
+            f"Batch iteration {self.iteration} complete: "
+            f"batch_scores={[f'{s:.3f}' for s in scores]}, "
+            f"best_so_far={self.best_score:.3f}, "
+            f"n_obs={self.train_X.shape[0]}"
+        )
+
+        return result
 
     @property
     def n_observations(self) -> int:

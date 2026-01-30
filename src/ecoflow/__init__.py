@@ -31,6 +31,11 @@ from src.ecoflow.optimization_loop import (
     OptimizationState,
     MetricsTracker,
 )
+from src.ecoflow.batch_selection import select_batch_candidates
+from src.ecoflow.flow_density import (
+    compute_flow_log_density,
+    filter_by_flow_density,
+)
 
 __all__ = [
     "VelocityNetwork",
@@ -51,4 +56,7 @@ __all__ = [
     "BOOptimizationLoop",
     "OptimizationState",
     "MetricsTracker",
+    "select_batch_candidates",
+    "compute_flow_log_density",
+    "filter_by_flow_density",
 ]
