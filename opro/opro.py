@@ -31,7 +31,7 @@ class ScoredPrompt:
     score: float
 
     def __repr__(self):
-        return f"Score: {self.score:.1%} | Prompt: {self.prompt[:50]}..."
+        return f"Score: {self.score:.1%} | Prompt: {self.prompt}"
 
 
 class OPROOptimizer:
@@ -373,7 +373,7 @@ class OPROOptimizer:
                     break
 
                 if verbose:
-                    print(f"Evaluating: {candidate[:60]}...")
+                    print(f"Evaluating:\n{candidate}")
 
                 score, _ = self.evaluate_prompt(
                     candidate,

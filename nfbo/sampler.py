@@ -54,7 +54,13 @@ class NFBoSampler:
             return  # Not enough data
             
         dataset = TensorDataset(train_X)
-        dataloader = DataLoader(dataset, batch_size=min(32, len(train_X)), shuffle=True)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=min(32, len(train_X)),
+            shuffle=True,
+            pin_memory=True,
+            num_workers=8
+        )
         
         self.flow.train()
         for epoch in range(self.flow_epochs):

@@ -147,14 +147,14 @@ class GuidedFlowSampler:
                 if with_guidance:
                     v1 = self._guided_velocity(z, t, i, num_steps)
                 else:
-                    v1 = self.flow_model.ode_func(t, z)
+                    v1 = self.flow_model._ode_func(t, z)
                 z_pred = z + v1 * dt
 
                 # Corrector
                 if with_guidance:
                     v2 = self._guided_velocity(z_pred, t_next, i + 1, num_steps)
                 else:
-                    v2 = self.flow_model.ode_func(t_next, z_pred)
+                    v2 = self.flow_model._ode_func(t_next, z_pred)
                 z = z + 0.5 * (v1 + v2) * dt
 
             else:
