@@ -1,274 +1,202 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-01-28
+**Analysis Date:** 2026-01-31
 
 ## Tech Debt
 
-**OPRO/LIPO Prompt Quality Issues:**
-- Issue: LLM-generated prompts often contain Unicode gibberish and malformed instructions
-- Files: `src/opro.py`, `run_opro.py`
-- Impact: Meta-optimizer (temperature=1.0) generates candidates with mixed languages, incomplete truncations, breaking downstream evaluation. Example from TODO.md: "Solve problem步骤：解析数据，应用计算" (Chinese mixed with English)
-- Fix approach:
-  1. Add prompt validation to reject outputs with non-ASCII characters outside expected ranges
-  2. Implement prompt quality filters before evaluation
-  3. Use stricter extraction patterns in `generate_candidates()` - validate bracket extraction results
-  4. Consider lowering meta-optimizer temperature or adding beam search with quality scores
+**Bare Exception Handlers:**
+- Issue: Multiple modules use `except Exception` or bare `except:` clauses without specific error types, making debugging and error handling harder to trace
+- Files: `protegi/protegi.py`, `protegi/run.py`, `ecoflow/optimization_loop.py`, `ecoflow/run.py`, `shared/llm_client.py`, `nfbo/run.py`
+- Impact: Swallows unexpected errors, makes error recovery harder, masks programming mistakes
+- Fix approach: Replace broad exception handlers with specific exception types (e.g., `except (RuntimeError, ValueError)`) and re-raise unhandled errors
 
-**EcoFlow-BO: Fixed Exemplar Selection Bug:**
-- Issue: BOLT optimizer returns identical exemplar sets across all 30 iterations, suggesting z_detail never changes
-- Files: `ecoflow_bo/optimizer.py`, `ecoflow_bo/detail_retriever.py`, `ecoflow_bo/cycle_consistency.py`
-- Impact: GP optimization on z_core produces no meaningful variation in exemplar selection - component is non-functional. From TODO.md: "All 30 iterations vybírá [4046, 3305, 2625, 3826, 4878, 2053, 5164, 1795]"
-- Fix approach:
-  1. Verify detail_retriever is actually being called and retrieving different neighbors for perturbed z_cores
-  2. Check nearest neighbor similarity distribution - if all z_cores map to same nearest neighbor, increase diversity in acquisition
-  3. Add logging to `detail_retriever.get_detail()` to track which neighbors are actually selected
-  4. Test cycle_consistency retrieval pipeline end-to-end
-  5. Consider "k_nearest" mode with averaging instead of "nearest" for smoother transitions
+**vLLM Platform Detection Workaround:**
+- Issue: `shared/llm_client.py` lines 22-42 contain monkey-patch for vLLM NVML detection failures with fallback to print warnings
+- Files: `shared/llm_client.py:22-42`
+- Impact: Fragile dependency on vLLM internals; if vLLM structure changes, platform detection breaks silently
+- Fix approach: Document the vLLM version requirement in CLAUDE.md; consider using environment variables for platform forcing instead of runtime patching
 
-**GP Exploration Failure:**
-- Issue: Gaussian Process in BOLT fails to discover that z_core dimensions matter (behaves as if exemplars are irrelevant)
-- Files: `ecoflow_bo/latent_gp.py`, `ecoflow_bo/config.py`
-- Impact: After 10 iterations, exemplar variance remains zero - GP has not learned to vary z_core values. From TODO.md: "GP ignoruje exemplar dimenze → zamrzlé exempláře"
-- Fix approach:
-  1. Add ARD lengthscale priors favoring small scales on z_core dimensions (GammaPrior(4.0, 4.0) per TODO.md)
-  2. Or enforce explicit constraints: exemplar_constraint = Interval(0.1, 0.5) on exemplar dims
-  3. Verify kernel is ExactGP or SpectralDeltaKernel, not approximations that could ignore dimensions
-  4. Add diagnostic: log learned lengthscales per dimension to detect frozen dims
-
-**GSM8K Answer Extraction Edge Cases:**
-- Issue: Extract logic relies on three cascading regex patterns but some math answers may be extracted incorrectly
-- Files: `src/gsm8k_evaluator.py` lines 36-65
-- Impact: False positives/negatives on edge cases where numbers appear in reasoning but answer uses non-numeric format. Fallback "last number" rule is fragile.
-- Fix approach:
-  1. Add unit tests for edge cases: negative numbers, decimals, very large numbers, comma-separated thousands
-  2. Consider stricter FLEXIBLE_PATTERN that requires number to be standalone word boundary
-  3. Log extraction method used to track pattern effectiveness
-  4. Validate against lm-eval-harness reference implementation for consistency
+**GPU Memory Cleanup Complexity:**
+- Issue: `shared/llm_client.py:89-141` contains complex multi-step cleanup with nested exception handling, comments warn about process group destruction
+- Files: `shared/llm_client.py:89-141`
+- Impact: GPU memory leaks possible if cleanup fails; requires manual restart in edge cases (noted in warning message)
+- Fix approach: Add teardown tests to verify memory is released; consider using context managers for automatic cleanup
 
 ## Known Bugs
 
-**LLM Client None Responses Unhandled:**
-- Symptoms: When OpenAI/DeepInfra API returns empty choices (content filter) or errors, client appends None to results list. Downstream code may crash on None
-- Files: `src/llm_client.py` lines 205, 217, 255-256, 268
-- Trigger: Content filter on OpenAI/DeepInfra; API rate limits; auth failures (auth errors are re-raised, but transient errors return None)
-- Workaround: Callers should check for None in batch results, e.g., `outputs = [o for o in outputs if o is not None]`
-- Fix approach:
-  1. Raise exception instead of returning None for transient errors
-  2. Or add retry logic with exponential backoff in generate_batch()
-  3. Add explicit None checks in OPRO.evaluate_prompt() and OPRO.generate_candidates()
+**OpenAI/DeepInfra Content Filter Handling:**
+- Symptoms: Returns `None` when API returns empty choices, not distinguishable from actual failure
+- Files: `shared/llm_client.py:203-207` (OpenAI), `shared/llm_client.py:254-258` (DeepInfra)
+- Trigger: Content filter triggers on prompt during batch evaluation
+- Workaround: Callers must check for `None` values in results and handle accordingly; no retry logic
 
-**VLLMClient Platform Detection Brittle:**
-- Symptoms: `_patch_vllm_platform()` monkey-patches internal vLLM modules which may change between versions
-- Files: `src/llm_client.py` lines 22-42
-- Trigger: vLLM version upgrade where internal module structure changes
-- Workaround: Explicitly set VLLM_TARGET_DEVICE=cuda env var before import
-- Fix approach:
-  1. Check vLLM version and skip patching if > certain version (vLLM fixed NVML handling)
-  2. Add try-catch around monkey-patching with fallback to environment variables only
-  3. Document minimum vLLM version required
+**GSM8K Answer Extraction Edge Cases:**
+- Symptoms: May fail on formats not matching regex patterns (STRICT_PATTERN, BOXED_PATTERN, FLEXIBLE_PATTERN)
+- Files: `shared/gsm8k_evaluator.py:36-65`
+- Trigger: Model outputs with non-standard formatting (e.g., "The answer is approximately 42.5")
+- Workaround: Falls back to last numeric value found, but this is fragile for multi-number outputs
 
-**Cycle Consistency Checker Residual Mode Coupling:**
-- Symptoms: CycleConsistencyChecker now requires detailed_retriever for residual mode but API allows initialization without it
-- Files: `ecoflow_bo/cycle_consistency.py` lines 114-134, `ecoflow_bo/optimizer.py` lines 284-291
-- Trigger: Calling step() before detail_retriever is set; or using z_full input with wrong dimensions
-- Workaround: Must call set_detail_retriever() after initialization before calling step()
-- Fix approach:
-  1. Make detail_retriever mandatory in __init__ if residual_mode=True (fail early)
-  2. Or add explicit validation in step() that raises RuntimeError with clear message
-  3. Add type hints Union[z_core, z_full] to clarify API expectations
+**Flow Matching ODE Integration Device Handling:**
+- Symptoms: Tensor device mismatches possible if normalization stats not on correct device
+- Files: `ecoflow/flow_model.py:24-38`
+- Trigger: Using flow model on different GPU than where norm_stats were computed
+- Workaround: Explicit `.to(x.device)` calls in normalize/denormalize, but not validated at init
 
 ## Security Considerations
 
-**API Keys in Environment Variables:**
-- Risk: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPINFRA_API_KEY loaded from .env file
-- Files: `src/llm_client.py` line 5 (load_dotenv), line 180, 228
-- Current mitigation: .env in .gitignore; keys not logged
-- Recommendations:
-  1. Add explicit check: if not api_key, raise ValueError with guidance instead of silent None
-  2. Never log full API keys, only first 10 chars with asterisks if needed
-  3. Add warning if running with VLLM_TARGET_DEVICE=cuda without proper auth (suggests unintended local/API mix)
+**API Key Exposure in Error Messages:**
+- Risk: Exception messages in `shared/llm_client.py:211-217` may leak context about API failures, though keys are not directly logged
+- Files: `shared/llm_client.py:211-217`
+- Current mitigation: OpenAI client checks for "auth" in error string before re-raising; not comprehensive
+- Recommendations: Add log redaction for API key patterns; use structured logging with sanitization
 
-**Model Weights Not Validated:**
-- Risk: from_checkpoint() in EcoFlowBO and other places load PyTorch checkpoint with weights_only=False
-- Files: `ecoflow_bo/optimizer.py` line 143 - explicit weights_only=False comment says it's needed for dataclass
-- Current mitigation: Checkpoints are version controlled, known source
-- Recommendations:
-  1. Use weights_only=True with custom unpickler that only allows specific types (config dataclass)
-  2. Add hash validation: save SHA256 of checkpoint, validate before loading
-  3. Document that checkpoints must come from trusted sources
+**Untrusted Prompt Execution:**
+- Risk: SONAR decoder in `ecoflow/decoder.py` receives generated embeddings that may encode adversarial content
+- Files: `ecoflow/decoder.py:36-82`
+- Current mitigation: None; relies on downstream task model to validate semantic safety
+- Recommendations: Add prompt validation filter pre-evaluation; log decoded prompts for audit trails
+
+**Environment Variable Reliance:**
+- Risk: `.env` loading in `shared/llm_client.py:7` may fail silently if .env is missing
+- Files: `shared/llm_client.py:5-7`
+- Current mitigation: Specific checks for API keys on client init, but only for API-based backends
+- Recommendations: Centralize .env loading with validation; warn if critical keys missing at startup
 
 ## Performance Bottlenecks
 
-**Cycle Consistency Re-encoding Expensive:**
-- Problem: Every step() call decodes z → x, then re-encodes x → z' for validation. Two full forward passes per candidate evaluation.
-- Files: `ecoflow_bo/cycle_consistency.py` lines 161-234 compute_cycle_error, select_valid_from_ranked
-- Cause: Necessary for quality checking but adds ~2x latency per optimization step
-- Improvement path:
-  1. Batch multiple candidates before re-encoding (currently one at a time)
-  2. Cache encoder outputs if input z distribution is stable
-  3. Use half-precision (float16) for cycle check only, not objective evaluation
-  4. Consider probabilistic validation: sample only 10% of candidates for cycle check
+**GP Surrogate Fitting in Optimization Loop:**
+- Problem: Each BO iteration refits GP from scratch on all historical data (O(n³) cubic complexity in BO observations)
+- Files: `ecoflow/gp_surrogate.py:258-284` (SonarGPSurrogate.fit/update), `ecoflow/optimization_loop.py:270-320`
+- Cause: `_fit_model()` calls `fit_gpytorch_mll()` which solves Cholesky decomposition on full data
+- Improvement path: Implement incremental GP updates using Sherman-Morrison formula for rank-1 updates; cache Cholesky factorization
 
-**Nearest Neighbor Search Brute Force:**
-- Problem: SimpleDetailRetriever uses dense matrix multiplication [B, 16] @ [N, 16].T for every step(). For N>100k, this becomes O(B*N*D) per iteration.
-- Files: `ecoflow_bo/detail_retriever.py` lines 207-222 (brute force), lines 88-100 (FAISS fallback)
-- Cause: FAISS only used if N>50k AND FAISS_AVAILABLE=True, otherwise falls back to SimpleDetailRetriever
-- Improvement path:
-  1. Always use FAISS for N>10k (not just 50k) - overhead is negligible
-  2. Pre-compute approximate neighbors during initialize(), cache until next stage
-  3. Use GPU-resident FAISS index (faiss.index_gpu_to_cpu) if available
-  4. Profile actual latency: if <1s per step, optimization is fine
+**1024D Embedding Space Without Dimensionality Reduction:**
+- Problem: GP operates in full 1024D SONAR space, leading to slow posterior computations and high kernel memory
+- Files: `ecoflow/gp_surrogate.py:231-256` (SonarGPSurrogate), `ecoflow/guided_flow.py` (guidance generation)
+- Cause: MSR initialization uses full-D lengthscale priors; no automatic dimensionality reduction
+- Improvement path: Use BAxUSGPSurrogate with reduced target_dim by default (currently must be explicitly selected); profile to find optimal subspace dimension
 
-**GSM8K Evaluation Batch Size Bottleneck:**
-- Problem: Fixed eval set of 261 examples evaluated on every prompt (OPRO.num_candidates_per_iter=8 candidates × 261 examples = 2088 LLM calls per iteration)
-- Files: `src/opro.py` lines 46, 73-82, 126-130
-- Cause: minibatch_size=261 gives stable scoring but costs 8x more LLM calls than necessary
-- Improvement path:
-  1. Use adaptive batch sizing: start with 20, grow to 261 only if std_dev is high
-  2. Implement early stopping: evaluate candidates in parallel, stop when top-3 clear
-  3. Cache fixed_eval_set embeddings to avoid re-computing prompts: questions are fixed
-  4. Reduce to 50 examples instead of 261 for initial 5 iterations, grow later
+**ODE Integration with Small Time Steps:**
+- Problem: `ecoflow/flow_model.py:46-89` uses default num_steps=50 for 1024D integration; may be slow for large batches
+- Files: `ecoflow/flow_model.py:46-89`, `ecoflow/optimization_loop.py` (guidance loop)
+- Cause: No adaptive step size control; trades accuracy for speed without auto-tuning
+- Improvement path: Implement tolerance-based adaptive Runge-Kutta; benchmark step count vs accuracy
+
+**Batch Evaluation Without Parallelization:**
+- Problem: `protegi/protegi.py` and other optimizers evaluate candidates sequentially with LLM calls
+- Files: `protegi/protegi.py:200-250`, `ecoflow/optimization_loop.py:240-320`
+- Cause: vLLM batch size is single-example per prompt; no prompt fusion/batching
+- Improvement path: Batch multiple prompts together using vLLM native batch API; reduce I/O overhead
 
 ## Fragile Areas
 
-**OPRO Meta-Prompt Truncation Logic:**
-- Files: `src/opro.py` lines 175-179, 195-197
-- Why fragile: Prompts are truncated to max_prompt_length=300 chars for meta-context, but no validation that result is a complete, grammatical instruction
-- Safe modification:
-  1. Add post-truncation validation: result must match regex ^[A-Z].*[\.!?]$ (starts with capital, ends with punctuation)
-  2. If invalid, discard and try next prompt instead of passing truncated version
-  3. Test with intentionally long prompts to verify no silent breakage
-- Test coverage: No unit tests for truncation edge cases
+**Flow Model Checkpoint Loading:**
+- Files: `ecoflow/run.py:150-170` (checkpoint path resolution)
+- Why fragile: Path must be absolute or relative to cwd; no validation that checkpoint exists or has correct architecture before loading
+- Safe modification: Add explicit checkpoint validation in `FlowMatchingModel.load_checkpoint()`; check expected input_dim
+- Test coverage: Only implicit via integration tests; no unit tests for checkpoint I/O
 
-**Residual Latent Architecture Initialization:**
-- Files: `ecoflow_bo/optimizer.py` lines 170-238 (initialize method)
-- Why fragile: initialize() must be called before step(), and detail_retriever setup happens here. If skipped or called twice, state is inconsistent.
-- Safe modification:
-  1. Add _initialized flag check at start of step() (exists at line 264)
-  2. Prevent double-initialization by raising RuntimeError if _initialized=True
-  3. Document initialization contract in class docstring
-- Test coverage: Integration test exists (test_encode_decode_cycle) but not full initialize→step cycle
+**BAxUS Embedding Matrix Initialization:**
+- Files: `ecoflow/gp_surrogate.py:306-315`
+- Why fragile: Random sparse embedding matrix S generated with `torch.rand()` without seed control in default path; non-reproducible across runs
+- Safe modification: Always accept optional seed parameter and use `torch.manual_seed()` before matrix creation
+- Test coverage: `tests/test_gp_surrogate.py` does not test reproducibility of BAxUSGPSurrogate with fixed seed
 
-**Matryoshka Dimension Validation:**
-- Files: `ecoflow_bo/config.py` lines 264-284 (__post_init__)
-- Why fragile: Validation asserts must have exact matches (e.g., final Matryoshka dim must equal latent_dim), but no helpful error messages
-- Safe modification:
-  1. Replace asserts with explicit ValueError() calls with diagnostic messages
-  2. Add example valid configs in docstring
-  3. Validate stage continuity: each GP stage must have contiguous prefix of dims
-- Test coverage: No unit tests for config validation
+**ProTeGi Beam Search State Management:**
+- Files: `protegi/protegi.py:76-150` (ProTeGiOptimizer class)
+- Why fragile: Beam is updated in-place; no state snapshots between steps; if evaluation fails mid-iteration, beam may be in inconsistent state
+- Safe modification: Use immutable dataclass updates; snapshot beam before each evaluation step; implement rollback on failure
+- Test coverage: No tests for beam consistency under partial failures
+
+**GSM8K Evaluator Index Bounds:**
+- Files: `shared/gsm8k_evaluator.py:141-179` (evaluate_batch)
+- Why fragile: No validation that indices are within dataset bounds; accessing `self.dataset[idx]` can fail silently with KeyError on out-of-bounds
+- Safe modification: Add bounds checking in `evaluate_batch()` before accessing dataset
+- Test coverage: No tests for out-of-bounds indices
 
 ## Scaling Limits
 
-**Latent Space Dimensionality Curse:**
-- Current capacity: GP operates on 16D z_core (BOLT), task evaluation fine on GSM8K ~1300 questions
-- Limit: GP curse of dimensionality becomes severe at >20D. Active dims schedule [4, 8, 16] partially mitigates but exploration is slow.
-- Scaling path:
-  1. For 32D latent: use coarse-to-fine schedule [8, 16, 24, 32] with longer point collection
-  2. Hybrid GP: separate GPs for instruction dims vs exemplar dims, combine acquisitions
-  3. Sparse approximation: VarSparseGP or inducing points (GPyTorch has built-in support)
+**1024D GP Kernel Matrix Memory:**
+- Current capacity: ~1000 observations in-memory (kernel matrix is 1000x1000 with 1024D features)
+- Limit: Exceeding ~2000 observations causes OOM on 48GB GPU; kernel matrix grows as O(n²)
+- Scaling path: Implement inducing point approximation (sparse GP); use subset of Regressors or variational inference
 
-**Training Set Size Bottleneck:**
-- Current capacity: detail_retriever stores full z_core/z_detail tensors in memory. For 100k examples: 100k × 16 × 4 bytes = 6.4 MB (fine). For 10M: 640 MB (manageable).
-- Limit: FAISS index at 1M+ examples becomes slow on CPU. GPU FAISS needed.
-- Scaling path:
-  1. Use quantized FAISS index (IndexIVFFlat) for 10M+ examples (5-10x faster, minimal accuracy loss)
-  2. Shard retriever across GPUs if available
-  3. Online mode: stream training data, don't materialize all z_cores at once
+**vLLM Single GPU Occupancy:**
+- Current capacity: One 7B model on single L40S GPU with batch_size=1-4 for 1024-token prompts
+- Limit: Cannot run parallel evaluations without model unloading; switching models requires full cleanup
+- Scaling path: Implement model pooling/recycling; use multi-GPU tensor parallelism via `tensor_parallel_size=2` (documented in CLAUDE.md)
 
-**Fixed Evaluation Set Fixed:**
-- Current capacity: 261 examples per OPRO iteration, max 200 iterations = max ~50k LLM calls
-- Limit: For large-scale experiments, budget exhaustion at total_budget limit
-- Scaling path:
-  1. Budget tracking already exists in OPRO (total_budget parameter)
-  2. Consider curriculum learning: eval_size grows with iteration (10 → 100 → 261)
-  3. Add checkpoint/resume capability to save OPRO state and continue later
+**Batch Evaluation With Small Eval Subset:**
+- Current capacity: Default eval_subset_size=150 examples for prompt evaluation
+- Limit: Variance in accuracy estimates high for small subsets; BO convergence may be slow
+- Scaling path: Increase eval_subset_size to 500-1000 for production; implement adaptive sampling based on prompt uncertainty
 
 ## Dependencies at Risk
 
-**vLLM Version Sensitivity:**
-- Risk: Code uses internal vLLM modules (_patch_vllm_platform), version pins not enforced
-- Files: `src/llm_client.py` lines 22-42, 61 imports
-- Impact: vLLM 0.5.x changed platform detection; future versions may further refactor internals
-- Migration plan:
-  1. Pin vLLM >=0.5.0,<0.7.0 in pyproject.toml (check latest stable)
-  2. Add vLLM version check: if version > 0.6, skip patching
-  3. Add CI test against multiple vLLM versions
-  4. Consider switching to LM Studio or ollama as vLLM alternative (more stable API)
+**vLLM Version Pinning (0.10.x):**
+- Risk: Pinned to `vllm>=0.10.0,<0.11.0` due to API instability; upgrading may break platform detection and generation API
+- Impact: Stuck on older vLLM; cannot use newer features or bug fixes
+- Migration plan: Document compatibility matrix for vLLM versions; use feature detection instead of version checks
 
-**GPyTorch ExactGP on Large Data:**
-- Risk: CoarseToFineGP uses ExactGP which computes Cholesky decomposition O(N^3)
-- Files: `ecoflow_bo/latent_gp.py` (inferred from config usage)
-- Impact: Slow inference with >1k observations. Current max is ~100 points per stage, manageable.
-- Migration plan:
-  1. Profile actual inference time: if >100ms, switch to VariationalGP
-  2. Use DiagLazyTensor approximation for faster covariance computation
-  3. Document performance: "ExactGP suitable for <500 observations"
+**vec2text Package Deprecation:**
+- Risk: `vec2text>=0.0.13` is archived upstream; decoding via SONAR fallback may not be maintained
+- Impact: Decoder may break on new systems; embedding-to-text research has moved to other repos
+- Migration plan: Consider switching to sentence-transformers multi-vector decoder or maintaining fork of SONAR
 
-**Sentence-Transformers Model Loading:**
-- Risk: Hard-coded model path "sentence-transformers/gtr-t5-base" in EcoFlowBOWithVec2Text
-- Files: `ecoflow_bo/optimizer.py` lines 510-511
-- Impact: Model may be deprecated, slow download on first run, no retry logic
-- Migration plan:
-  1. Make model configurable: add parameter to __init__
-  2. Cache model locally: check ~/.cache/huggingface before downloading
-  3. Add timeout and retry: model_kwargs={"timeout": 30, "local_files_only": False}
-  4. Document: "Requires internet on first run, ~200MB download"
+**Soft Prompt VAE Experimental Features:**
+- Risk: LoRA adapters via `peft>=0.14.0` and soft prompt VAE are research features not widely tested in production
+- Impact: May encounter compatibility issues with newer transformers versions
+- Migration plan: Pin feature to specific transformer versions if used; add integration tests
 
 ## Missing Critical Features
 
-**No Hyperparameter Tuning for OPRO:**
-- Problem: keep_top_k=20, num_candidates_per_iter=8 are fixed, not optimized per task
-- Blocks: Can't easily compare different search widths or memory sizes
-- Fix: Add command-line arguments --keep-top-k and --num-candidates to run_opro.py
+**Error Recovery and Retries:**
+- Problem: No exponential backoff or retry logic for transient API failures (rate limits, network timeouts)
+- Blocks: Long-running optimization cannot gracefully handle temporary API outages
+- Mitigation: Manual checkpoint resumption is documented, but user must restart manually
 
-**No Checkpoint/Resume for Long Runs:**
-- Problem: If run crashes at iteration 150/200, must restart from scratch
-- Blocks: Can't do fault-tolerant optimization on unreliable hardware
-- Fix: Save OPRO state every N iterations, add --resume flag to load and continue
+**Checkpoint Versioning:**
+- Problem: No schema versioning for saved checkpoints; format changes break resume from old checkpoints
+- Blocks: Upgrading model architecture requires restarting optimization from scratch
+- Mitigation: Document checkpoint format in each release
 
-**No Multi-Objective Support:**
-- Problem: OPRO optimizes single accuracy metric; can't optimize accuracy + latency simultaneously
-- Blocks: Can't find Pareto-optimal prompts
-- Fix: Add Pareto tracking in OPRO.optimize(), visualize trade-offs
-
-**Missing Error Bounds/Uncertainty Quantification:**
-- Problem: No confidence intervals on final prompt quality (accuracy is point estimate)
-- Blocks: Can't report statistical significance of improvements
-- Fix: Run optimization multiple times, report mean ± std, do t-tests
+**Hyperparameter Search:**
+- Problem: No automated hyperparameter tuning for GP surrogate (target_dim for BAxUS, kernel priors, optimization learning rates)
+- Blocks: No principled way to tune for new tasks; defaults may be suboptimal
+- Mitigation: Validation script provided in `ecoflow/validate.py` but not integrated into pipeline
 
 ## Test Coverage Gaps
 
-**OPRO Generation Lacks Unit Tests:**
-- What's not tested: generate_candidates() method, meta-prompt formatting, prompt extraction from brackets
-- Files: `src/opro.py` lines 181-279
-- Risk: Bracket extraction regex may fail silently on edge cases ("[[double brackets]]", missing brackets, nested brackets)
-- Priority: High - meta-optimization is core algorithm
+**ProTeGi Gradient Generation:**
+- What's not tested: Edge cases where gradient prompt formatting fails; malformed feedback handling
+- Files: `protegi/protegi.py:200-280` (gradient generation and application)
+- Risk: May silently fail to improve prompts or crash with formatting errors mid-optimization
+- Priority: Medium - crashes would surface quickly, but silent failures on edge cases possible
 
-**GSM8K Evaluator Edge Cases Untested:**
-- What's not tested: answer extraction for negative numbers, decimals, scientific notation, very large numbers
-- Files: `src/gsm8k_evaluator.py` lines 36-65
-- Risk: False positives/negatives on specific answer formats
-- Priority: High - affects all experiments
+**Flow Model ODE Accuracy:**
+- What's not tested: Verification that ODE integration produces samples on SONAR manifold; no distribution matching tests
+- Files: `ecoflow/flow_model.py:46-89`, `ecoflow/flow_model.py:92-120` (sample method)
+- Risk: Flow may produce out-of-distribution embeddings causing decoder failures
+- Priority: High - affects entire EcoFlow method validity
 
-**LLM Client Error Handling Untested:**
-- What's not tested: None response handling, API errors, timeouts, retry logic
-- Files: `src/llm_client.py` lines 190-218
-- Risk: Pipeline crashes on transient errors instead of gracefully degrading
-- Priority: Medium - occurs in production but may be rare
+**Decoder Robustness:**
+- What's not tested: Behavior when decoder fails (OOM, malformed embedding); no fallback handling
+- Files: `ecoflow/decoder.py:36-82`
+- Risk: Single failing embedding halts entire optimization batch
+- Priority: High - blocking issue for long runs
 
-**Cycle Consistency Residual Mode Untested:**
-- What's not tested: Full residual latent workflow (z_core → detail_retriever → z_full → decode → re-encode)
-- Files: `ecoflow_bo/cycle_consistency.py`, `ecoflow_bo/detail_retriever.py`
-- Risk: Integration bug remains undetected (e.g., detail_retriever returns wrong shape)
-- Priority: High - was added recently in refactor
+**GP Update Consistency:**
+- What's not tested: That GP training data remains consistent after incremental updates; no numerical stability checks
+- Files: `ecoflow/gp_surrogate.py:269-284` (BAxUSGPSurrogate.update)
+- Risk: Accumulated numerical errors in iterative updates may degrade model quality
+- Priority: Medium - would manifest as poor exploration decisions after many iterations
 
-**EcoFlow Config Validation Partially Tested:**
-- What's not tested: Invalid Matryoshka dims, mismatched encoder/decoder configs
-- Files: `ecoflow_bo/config.py` __post_init__
-- Risk: Invalid configs raise cryptic AssertionError instead of ValueError
-- Priority: Medium - typically caught during development
+**LLM Client Edge Cases:**
+- What's not tested: Handling of extremely long prompts (>model context), tokenizer edge cases, unicode normalization
+- Files: `shared/llm_client.py:143-171` (VLLMClient.generate_batch), transformers backend
+- Risk: Evaluation crashes on certain prompt types
+- Priority: Low - unusual formats would likely fail deterministically
 
 ---
 
-*Concerns audit: 2026-01-28*
+*Concerns audit: 2026-01-31*

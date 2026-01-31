@@ -1,215 +1,247 @@
 # Architecture
 
-**Analysis Date:** 2026-01-28
+**Analysis Date:** 2026-01-31
 
 ## Pattern Overview
 
-**Overall:** Multi-algorithm prompt optimization framework with three distinct optimization approaches (OPRO, ProTeGi, GEPA) and an emerging embedding-space Bayesian optimization system (EcoFlow-BO).
+**Overall:** Modular optimizer framework with pluggable LLM clients and evaluation pipelines
 
 **Key Characteristics:**
-- Modular LLM client abstraction supporting multiple backends (vLLM, OpenAI, DeepInfra)
-- Algorithm-agnostic evaluator framework for GSM8K mathematics reasoning
-- Separate task and meta-optimizer models (can use different models for optimization)
-- Embedding-space latent optimization (EcoFlow-BO) with flow matching
-- Fixed evaluation sets for reproducible prompt scoring
+- Multi-method research codebase supporting 5 distinct prompt optimization algorithms
+- Common shared infrastructure (LLM client abstraction, evaluation harness)
+- Each method independently implements its optimization strategy
+- Pipeline: evaluate prompts → score → optimize → iterate
 
 ## Layers
 
-**LLM Client Layer:**
-- Purpose: Abstract away backend differences (local vLLM, OpenAI, DeepInfra APIs)
-- Location: `src/llm_client.py`
-- Contains: `LLMClient` ABC, `VLLMClient`, `OpenAIClient`, `DeepInfraClient`, factory function `create_llm_client()`
-- Depends on: vLLM or OpenAI SDK, Hugging Face transformers
-- Used by: All optimization algorithms (OPRO, ProTeGi, GEPA, EcoFlow-BO)
+**Shared Infrastructure Layer:**
+- Purpose: Provide pluggable LLM clients and evaluation utilities used by all optimizers
+- Location: `shared/`
+- Contains: LLMClient (ABC), Concrete implementations (VLLMClient, OpenAIClient, DeepInfraClient, TransformersClient), GSM8KEvaluator
+- Depends on: External LLM APIs (vLLM, OpenAI, DeepInfra), HuggingFace Transformers, Datasets
+- Used by: All optimizer methods (OPRO, ProTeGi, GEPA, EcoFlow, NFBO)
 
-**Evaluation Layer:**
-- Purpose: Assess prompt quality on GSM8K dataset with lm-eval-harness standard metrics
-- Location: `src/gsm8k_evaluator.py`
-- Contains: Answer extraction (multiple pattern-matching strategies), ground truth comparison, batch evaluation
-- Depends on: Hugging Face datasets (Arrow format)
-- Used by: OPRO, ProTeGi, GEPA (for scoring), EcoFlow-BO (for objective)
+**Prompt Optimization Methods Layer:**
+- Purpose: Implement distinct optimization algorithms for discovering better task prompts
+- Location: `opro/`, `protegi/`, `gepa/`, `ecoflow/`, `nfbo/`
+- Contains: Optimizer classes (OPROOptimizer, ProTeGiOptimizer, GEPAOptimizer, BOOptimizationLoop, NFBoLoop), run.py CLI entry points
+- Depends on: Shared infrastructure, PyTorch, specialized packages (torchcfm, botorch, gpytorch)
+- Used by: CLI entry points for running optimization experiments
 
-**Prompt Optimization Algorithms:**
-- Purpose: Generate and refine instruction prompts via different optimization strategies
-- Location: `src/opro.py`, `src/protegi.py`, `src/gepa.py`
-- Contains:
-  - `OPRO`: Meta-optimizer with bucketed scoring and top-K memory
-  - `ProTeGi`: Textual gradients + beam search with UCB bandit
-  - `GEPA`: Pareto selection + reflection-based mutation
-- Depends on: LLM Client, Evaluator, prompt templates in `src/prompts/gsm8k/`
-- Used by: Entry points `run_opro.py`, `run_protegi.py`, `run_gepa.py`
+**EcoFlow-Specific Architecture (Sub-layer):**
+- Purpose: Flow matching guided Bayesian optimization in SONAR embedding space
+- Components:
+  - `velocity_network.py`: DiT-style transformer with AdaLN time conditioning for velocity field modeling
+  - `flow_model.py`: Conditional flow matching model wrapping velocity network with training utilities
+  - `guided_flow.py`: GuidedFlowSampler combining GP-UCB guidance with ODE sampling
+  - `gp_surrogate.py`: GP surrogate models (SonarGPSurrogate, BAxUSGPSurrogate, Heteroscedastic)
+  - `decoder.py`: SonarDecoder wrapping Meta SONAR text-to-embedding and embedding-to-text models
+  - `optimization_loop.py`: BOOptimizationLoop orchestrating full BO cycle
+  - `train_flow.py`: Flow model training with EMA and checkpoint management
 
-**Embedding-Space Optimization (EcoFlow-BO):**
-- Purpose: Bayesian optimization in latent space for prompt embeddings
-- Location: `ecoflow_bo/` directory
-- Key Components:
-  - Encoder (`encoder.py`): Matryoshka VAE (768D → 16D core + 32D detail residual latent)
-  - Velocity Network (`velocity_network.py`): Diffusion Transformer for flow matching
-  - Decoder (`cfm_decoder.py`, `perceiver_decoder.py`): Rectified flow or Perceiver-based reconstruction
-  - GP (`latent_gp.py`): Coarse-to-fine Gaussian Process on z_core (16D)
-  - Acquisition (`density_acquisition.py`): Density-aware candidate generation
-  - Cycle Consistency (`cycle_consistency.py`): Hallucination detection via encode-decode roundtrip
-  - Detail Retriever (`detail_retriever.py`): Nearest-neighbor lookup of z_detail from training set
-  - Main Optimizer (`optimizer.py`): Orchestrates all components
-- Depends on: torch, gpytorch, botorch, torchcfm
-- Used by: Future integration with prompt optimization
+**NFBO-Specific Architecture (Sub-layer):**
+- Purpose: Normalizing flow Bayesian optimization (RealNVP latent space BO)
+- Components:
+  - `model.py`: RealNVP normalizing flow with invertible transformations
+  - `sampler.py`: NFBoSampler implementing latent BO in Z-space
+  - `loop.py`: NFBoLoop extending BOOptimizationLoop with flow fitting and latent optimization
 
-**Entry Points:**
-- Location: `run_opro.py`, `run_protegi.py`, `run_gepa.py` (algorithms), scripts in root
-- Purpose: Command-line interfaces with model/backend selection and experiment configuration
-- Responsibilities: Argument parsing, model aliasing, training vs test evaluation, results serialization
+**CLI and Configuration Layer:**
+- Purpose: User-facing entry points with argument parsing and logging
+- Location: `*/run.py` files for each method
+- Contains: Argument parsers, initialization logic, main loop coordination
+- Depends on: Method-specific optimizers, shared infrastructure
+- Used by: Command-line invocation
 
 ## Data Flow
 
-**OPRO Optimization Flow:**
+**OPRO (Meta-optimization) Flow:**
 
-1. Load task LLM and optionally separate meta-optimizer LLM via `create_llm_client()`
-2. Initialize `GSM8KEvaluator` with dataset split (train or test)
-3. Create fixed evaluation set (same minibatch for all prompt candidates)
+1. Initialize task and meta LLM clients (same or different models)
+2. Create fixed evaluation set from GSM8K train split (261 examples)
+3. For each iteration:
+   - Generate K candidates from meta-model using best prompts + example failures as context
+   - Score each candidate on fixed eval set with task model
+   - Collect feedback (which candidates worked best)
+   - Meta-model proposes next candidates based on scored history
+4. Return best prompt, evaluate on test set, save results
+
+**ProTeGi (Textual Gradients) Flow:**
+
+1. Initialize task model and meta model
+2. Start with random prompt
+3. For each step:
+   - Evaluate prompt on examples, identify failure cases
+   - Meta-model generates "textual gradients" (natural language error analysis)
+   - Generate edited candidates from gradients
+   - Monte Carlo paraphrasing for local search
+   - Beam search + UCB bandit selection to choose best candidates
+   - Track top-K prompts in beam
+4. Return best prompt with test set evaluation
+
+**GEPA (Genetic-Pareto) Flow:**
+
+1. Initialize population of candidates
+2. For each iteration:
+   - Evaluate candidates, maintain Pareto front (accuracy vs response length)
+   - For low-scoring examples, extract reasoning traces
+   - Meta-model reflects on failures ("what would fix this?")
+   - Generate mutations based on reflections
+   - Combine mutations with parent candidates
+   - Select next generation via Pareto dominance
+3. Return best prompt from final population
+
+**EcoFlow (Flow + BO) Flow:**
+
+1. Load pretrained FlowMatchingModel (trained on SONAR embeddings)
+2. Initialize SonarDecoder (embedding → text)
+3. Create GP surrogate (BAxUS or Heteroscedastic)
 4. For each iteration:
-   - Generate N candidate prompts via meta-LLM with example few-shots
-   - Evaluate each on fixed minibatch
-   - Bucket scores into 20 buckets (from OPRO paper)
-   - Keep top-K prompts in memory
-   - Pass top-K + random examples to meta-LLM for next iteration
-5. Test best prompt on full test set
-6. Save results as JSON with history
+   - Optimize GP-UCB acquisition function in embedding space (bounded to high-confidence region)
+   - Sample from flow model using guided ODE with UCB guidance
+   - Apply L2-r filtering (round-trip fidelity check via SONAR encoder)
+   - Decode selected embedding to text prompt
+   - Evaluate prompt on GSM8K subset via LLM
+   - Update GP with observation
+   - Track best score and prompt
+5. Save checkpoints, metrics, best prompt
 
-**ProTeGi Optimization Flow:**
+**NFBO (Normalizing Flow BO) Flow:**
 
-1. Initialize beam with diverse candidate prompts
-2. For each iteration:
-   - Evaluate beam on fixed minibatch
-   - Use UCB bandit to select which prompts to edit
-   - For selected prompts:
-     - Generate "textual gradients" (LLM critiques of failures)
-     - Use gradient LLM to propose edits
-     - Apply Monte Carlo paraphrasing for exploration
-   - Evaluate new candidates
-   - Update beam (keep best by UCB score)
-3. Test best prompt on full test set
-
-**GEPA Optimization Flow:**
-
-1. Initialize population with seed prompts
-2. For each iteration:
-   - Evaluate all candidates on minibatch
-   - Compute Pareto frontier (non-dominated candidates)
-   - For each frontier member:
-     - Reflection LLM analyzes failure patterns
-     - Mutation LLM applies targeted improvements
-   - Evaluate mutations
-   - Update population (merge Pareto fronts)
-3. Test best prompt on full test set
-
-**EcoFlow-BO Optimization Flow:**
-
-1. Pre-encode initial prompts to embeddings (768D GTR)
-2. Run Matryoshka encoder to get z_core (16D) + z_detail (32D)
-3. Initialize detail retriever with training set z_details
-4. For each BO iteration:
-   - Evaluate current candidates (requires decoding back to text)
-   - Update GP on z_core with scores
-   - Generate acquisition candidates (density-aware UCB)
-   - Check cycle consistency (encode-decode roundtrip validity)
-   - Propose next z_core, retrieve z_detail from nearest neighbor
-   - Decode via flow matching to get new prompt embeddings
-5. Return best prompt and final embedding
+1. Initialize random samples, evaluate
+2. Fit RealNVP normalizing flow on observed embeddings
+3. For each iteration:
+   - Create GP in Z-space (latent of RealNVP)
+   - Optimize GP-UCB in Z-space, sample optimized z
+   - Transform z → x via flow bijection
+   - Apply L2-r filter if enabled
+   - Decode embedding to prompt
+   - Evaluate, update observations and flow
+4. Return best prompt and metrics
 
 **State Management:**
-- OPRO: `scored_prompts` list, `fixed_eval_set`
-- ProTeGi: `beam` (list of ScoredPrompt), `total_visits` counter for UCB
-- GEPA: `population` list with separate scoring for speed/quality metrics
-- EcoFlow-BO: `best_z_core`, `best_z_detail`, `best_embedding`, `history` dict list
+
+- **OPRO/ProTeGi/GEPA:** Store scored prompts in memory, serialize best prompt to JSON/TXT
+- **EcoFlow/NFBO:** Use OptimizationState dataclass with save/load methods, checkpoint embeddings (train_X/train_Y), best prompt, iteration counter
 
 ## Key Abstractions
 
-**LLMClient (ABC):**
-- Purpose: Unified interface for any LLM backend
-- Examples: `VLLMClient`, `OpenAIClient`, `DeepInfraClient`
-- Pattern: Factory `create_llm_client()` auto-detects backend from model name
-- Methods: `generate(prompt, **kwargs)`, `generate_batch(prompts, **kwargs)`
+**LLMClient:**
+- Purpose: Unified interface for different LLM backends
+- Examples: `shared/llm_client.py` (VLLMClient, OpenAIClient, DeepInfraClient, TransformersClient)
+- Pattern: Abstract base class with `generate()` and `generate_batch()` methods; factory function `create_llm_client()` with auto-detection
+
+**Evaluator:**
+- Purpose: Score prompts on task (GSM8K math reasoning)
+- Examples: `shared/gsm8k_evaluator.py` (GSM8KEvaluator)
+- Pattern: Load dataset, provide batch evaluation with answer extraction and comparison
 
 **ScoredPrompt:**
-- Purpose: Immutable record of a prompt and its evaluation score
-- Examples: Used in OPRO (`src/opro.py`), ProTeGi (`src/protegi.py`)
-- Pattern: Dataclass with `__repr__` for truncated display (first 50 chars)
+- Purpose: Encapsulate prompt + score with metadata
+- Examples: `opro/opro.py` (ScoredPrompt), `protegi/protegi.py` (ScoredPrompt with UCB stats), `gepa/gepa.py` (ScoredCandidate with traces)
+- Pattern: Dataclass holding text and metrics, methods for comparison/selection
 
-**Evaluator Interface:**
-- Purpose: Standard evaluation API regardless of dataset
-- Examples: `GSM8KEvaluator`
-- Pattern: `evaluate_batch(outputs, indices) -> Dict[accuracy, correct, total, details]`
-- Answer extraction: Multiple fallback patterns (####, \boxed{}, last number)
+**BOOptimizationLoop:**
+- Purpose: Orchestrate full Bayesian optimization cycle
+- Examples: `ecoflow/optimization_loop.py` (base), `nfbo/loop.py` (extends with flow fitting)
+- Pattern: Initialize with models/evaluators, expose `initialize()` and `step()` methods, manage state
 
-**CoarseToFineGP:**
-- Purpose: Progressive dimension unlocking for tractable Bayesian optimization
-- Pattern: Stage-based active dimensions schedule (4D → 8D → 16D)
-- Advances automatically when enough training points collected
-
-**MatryoshkaEncoder:**
-- Purpose: Hierarchical embedding compression with multi-scale supervision
-- Pattern: Output at multiple dimensions [2, 4, 8, 16] with weighted reconstruction loss
-- Result: z_core (16D) useful at all scales, z_detail (32D) for final 48D capacity
+**OptimizationState:**
+- Purpose: Checkpoint-able full state for resumable optimization
+- Examples: `ecoflow/optimization_loop.py`
+- Pattern: Dataclass with torch tensors, save/load via torch.save()
 
 ## Entry Points
 
-**run_opro.py:**
-- Location: `/home/prusek/NLP/run_opro.py`
-- Triggers: Command line via `uv run python run_opro.py [args]`
-- Responsibilities:
-  - Model aliasing and backend selection
-  - Dataset loading
-  - OPRO optimizer instantiation and execution
-  - Test set evaluation
-  - Results serialization (JSON + text prompt file)
+**OPRO:**
+- Location: `opro/run.py`
+- Triggers: `python -m opro.run [--model qwen] [--iterations 200]`
+- Responsibilities: Parse args, initialize LLM clients/evaluator, run OPROOptimizer.optimize(), evaluate on test set, save results JSON + prompt TXT
 
-**run_protegi.py:**
-- Location: `/home/prusek/NLP/run_protegi.py`
-- Triggers: Command line via `uv run python run_protegi.py [args]`
-- Responsibilities: ProTeGi-specific optimization
+**ProTeGi:**
+- Location: `protegi/run.py`
+- Triggers: `python -m protegi.run [--model qwen] [--steps 6]`
+- Responsibilities: Similar to OPRO but coordinates ProTeGiOptimizer with beam search and UCB selection
 
-**run_gepa.py:**
-- Location: `/home/prusek/NLP/run_gepa.py`
-- Triggers: Command line via `uv run python run_gepa.py [args]`
-- Responsibilities: GEPA-specific optimization with Pareto frontier management
+**GEPA:**
+- Location: `gepa/run.py`
+- Triggers: `python -m gepa.run [--model qwen] [--budget 150000]`
+- Responsibilities: Initialize population, run GEPA loop with Pareto selection and reflection-based mutations
+
+**EcoFlow:**
+- Location: `ecoflow/run.py`
+- Triggers: `python -m ecoflow.run [--iterations 100] [--flow-checkpoint path]`
+- Responsibilities: Load flow model, initialize GP/decoder/evaluator, run BOOptimizationLoop with checkpoint save/resume support
+
+**NFBO:**
+- Location: `nfbo/run.py`
+- Triggers: `python -m nfbo.run [--iterations 50] [--n-initial 20]`
+- Responsibilities: Initialize evaluator, create NFBoSampler + NFBoLoop, run BO with flow fitting per iteration
+
+**Flow Training (EcoFlow):**
+- Location: `ecoflow/train_flow.py`
+- Triggers: `python -m ecoflow.train_flow [--epochs 50] [--batch-size 1024]`
+- Responsibilities: Load SONAR embeddings, train FlowMatchingModel with EMA, save checkpoints
 
 ## Error Handling
 
-**Strategy:** Fail-fast with informative messages; distinguish recoverable (API transients) from fatal errors.
+**Strategy:**
+- Early API failures (missing keys, bad auth) → raise immediately
+- Generation failures (content filter, API error) → return None, allow downstream to handle
+- Numeric edge cases (division by zero in metrics) → log warning, use safe defaults
+- Decoder failures (invalid embedding) → fall back to generic placeholder prompt
 
 **Patterns:**
-- OpenAI/DeepInfra clients catch per-prompt failures and return `None`, not raising
-- Authentication errors (401) re-raised immediately (fatal)
-- Empty LLM responses logged but continue (distinguishable from failures)
-- vLLM platform detection includes fallback logic for broken NVML
-- GSM8K evaluator validates dataset splits before loading
-- All answer extraction has multiple fallback patterns (strict → flexible)
+
+**LLMClient Exception Handling:**
+```python
+# OpenAI/DeepInfra batch generation
+for prompt in prompts:
+    try:
+        response = client.chat.completions.create(...)
+        results.append(response.choices[0].message.content)
+    except KeyboardInterrupt:
+        raise  # Never swallow
+    except Exception as e:
+        if "auth" in type(e).__name__.lower():
+            raise  # Re-raise auth errors
+        results.append(None)  # Return None for recoverable errors
+```
+
+**Decoder Safe Decoding:**
+```python
+# `ecoflow/optimization_loop.py` _decode_safe()
+try:
+    prompts = self.decoder.decode(embedding)
+    return prompts
+except Exception as e:
+    logger.warning(f"Decoder failed: {e}")
+    return ["Provide a concise step-by-step solution."]  # Fallback
+```
 
 ## Cross-Cutting Concerns
 
 **Logging:**
-- No centralized logger; uses `print()` for interactive feedback
-- Critical: Full prompt logging (no truncation) per CLAUDE.md
-- vLLM setup logs platform detection, tensor parallelism
-- Evaluator logs dataset size and accuracy metrics
+- Method-specific: Print statements for visibility (OPRO/ProTeGi/GEPA)
+- EcoFlow/NFBO: Python logging module via `logging.getLogger(__name__)`
+- CLI: Configure via `--log-level` argument (INFO, DEBUG, WARNING, ERROR)
+- CLAUDE.md constraint: Always log full prompt text, never truncate
 
 **Validation:**
-- GSM8K answer extraction validates 3 patterns before returning None
-- Model alias resolution with helpful warnings
-- GPU ID validation via CUDA_VISIBLE_DEVICES
-- Minibatch size validation against dataset size
+- Prompt format: Check non-empty, reasonable length in decoder
+- Answer extraction: Regex-based with multiple pattern fallbacks (####, \\boxed{}, last number)
+- Embedding validity: L2-r filter checks round-trip fidelity in EcoFlow
+- Budget checking: OPRO tracks total_budget spent across iterations
 
 **Authentication:**
-- API keys loaded via `.env` and `python-dotenv`
-- Defaults: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPINFRA_API_KEY`
-- Raises `ValueError` if required key missing for backend
+- Environment variables: OPENAI_API_KEY, DEEPINFRA_API_KEY, ANTHROPIC_API_KEY loaded via dotenv
+- Client factory auto-detects based on model name (gpt → OpenAI, google/* → DeepInfra, others → vLLM)
 
-**Optimization Hyperparameters:**
-- Temperature: 0.0 for task LLM (deterministic solving), 1.0 for meta-optimizer (diverse candidates)
-- Budget tracking: All algorithms track LLM call costs
-- Minibatch size: Fixed across all prompts in iteration (reproducible fairness)
-- Top-K selection: OPRO keeps 20 prompts; ProTeGi keeps variable beam width
+**GPU Management:**
+- vLLM: Multiple clients managed via CUDA_VISIBLE_DEVICES, tensor_parallel_size
+- EcoFlow: Explicit device passing, deterministic random seed for reproducibility
+- Cleanup: VLLMClient.cleanup() to free memory between model loads
 
 ---
 
-*Architecture analysis: 2026-01-28*
+*Architecture analysis: 2026-01-31*
