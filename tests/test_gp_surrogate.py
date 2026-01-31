@@ -8,7 +8,7 @@ Tests cover:
 import pytest
 import torch
 
-from src.ecoflow.gp_surrogate import (
+from ecoflow.gp_surrogate import (
     HeteroscedasticSonarGP,
     SonarGPSurrogate,
     create_surrogate,
