@@ -95,8 +95,8 @@ class NFBoSampler:
         # 3. Optimize Acquisition in Z
         # We start optimization from the best Z found so far (or random points)
         best_idx = train_Y.argmax()
-        start_z = train_Z[best_idx].clone().unsqueeze(0) # [1, D]
-        
+        start_z = train_Z[best_idx].clone().unsqueeze(0).to(self.device)  # [1, D]
+
         # Or batch of random starts for robustness
         # z ~ N(0, I) is the prior base, so valid Zs are normally distributed
         random_starts = torch.randn(16, self.dim, device=self.device)

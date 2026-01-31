@@ -2,7 +2,6 @@ import torch
 import logging
 from ecoflow.optimization_loop import BOOptimizationLoop
 from nfbo.sampler import NFBoSampler
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +59,7 @@ class NFBoLoop(BOOptimizationLoop):
         
         # 2. Evaluate
         if self._is_valid_prompt(prompt):
-             scores = self._evaluate_prompts([prompt])
-             score = scores[0]
+            score = self._evaluate_prompt(prompt)
         else:
              logger.info("  Invalid prompt generated.")
              score = 0.0

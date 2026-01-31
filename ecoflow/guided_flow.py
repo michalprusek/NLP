@@ -95,7 +95,7 @@ class GuidedFlowSampler:
         self, z: torch.Tensor, t: torch.Tensor, step: int, num_steps: int
     ) -> torch.Tensor:
         """Compute velocity with optional UCB guidance."""
-        v = self.flow_model.ode_func(t, z)
+        v = self.flow_model._ode_func(t, z)
 
         lambda_t = self._get_guidance_lambda(step, num_steps)
         if lambda_t > 0 and self.gp.model is not None:
@@ -137,7 +137,7 @@ class GuidedFlowSampler:
                 if with_guidance:
                     v = self._guided_velocity(z, t, i, num_steps)
                 else:
-                    v = self.flow_model.ode_func(t, z)
+                    v = self.flow_model._ode_func(t, z)
                 z = z + v * dt
 
             elif method == "heun":

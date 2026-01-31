@@ -261,8 +261,12 @@ class BOOptimizationLoop:
                 re_embeddings = torch.tensor(re_embeddings, device=embeddings.device)
             re_embeddings = re_embeddings.to(embeddings.device)
         except Exception as e:
-            logger.warning(f"Re-encoding failed: {e}")
-            return torch.zeros(embeddings.shape[0], device=embeddings.device)
+            logger.error(
+                f"SONAR re-encoding failed: {e}. "
+                "L2-r filtering is DISABLED for this batch - returning inf to reject."
+            )
+            # Return high L2-r values to REJECT these embeddings rather than silently accept
+            return torch.full((embeddings.shape[0],), float('inf'), device=embeddings.device)
 
         return (embeddings - re_embeddings).norm(dim=-1)
 
@@ -277,8 +281,12 @@ class BOOptimizationLoop:
                 try:
                     text = self.decoder.decode(embeddings[i : i + 1])[0]
                     texts.append(text)
-                except Exception:
+                except Exception as inner_e:
+                    logger.warning(f"Individual decode failed for embedding {i}: {inner_e}")
                     texts.append("")
+            n_failed = sum(1 for t in texts if t == "")
+            if n_failed > 0:
+                logger.warning(f"Decoding: {n_failed}/{len(texts)} embeddings failed to decode")
             return texts
 
     def _evaluate_prompt(self, prompt: str) -> float:
