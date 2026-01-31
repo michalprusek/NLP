@@ -36,11 +36,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Normalization statistics (mean/std) are computed and saved
   4. SONAR decoder produces coherent text from denormalized embeddings
   5. Data loading pipeline returns properly normalized tensors
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: Dataset generation and splitting
-- [ ] 01-02: Normalization pipeline and SONAR verification
+- [ ] 01-01-PLAN.md - Generate 10K VS dataset and create nested splits
+- [ ] 01-02-PLAN.md - Normalization pipeline and SONAR decoder verification
 
 ### Phase 2: Training Infrastructure
 **Goal**: Training system ready for all experiments with proper tracking and reproducibility
@@ -215,7 +215,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Pipeline | 0/2 | Not started | - |
+| 1. Data Pipeline | 0/2 | Planned | - |
 | 2. Training Infrastructure | 0/2 | Not started | - |
 | 3. Baseline Architectures | 0/2 | Not started | - |
 | 4. Flow Matching Baselines | 0/3 | Not started | - |
@@ -229,4 +229,4 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 ---
 *Roadmap created: 2026-01-31*
-*Last updated: 2026-01-31*
+*Last updated: 2026-02-01*
