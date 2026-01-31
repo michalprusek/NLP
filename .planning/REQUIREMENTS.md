@@ -51,7 +51,7 @@ Requirements for NeurIPS paper submission. Each maps to roadmap phases.
 ### Evaluation Suite
 
 - [ ] **EVAL-01**: Reconstruction MSE between generated and target embeddings
-- [ ] **EVAL-02**: SONAR round-trip fidelity (encode→decode→encode)
+- [ ] **EVAL-02**: SONAR round-trip fidelity (encode->decode->encode)
 - [ ] **EVAL-03**: Text generation quality (BLEU, semantic similarity)
 - [ ] **EVAL-04**: Guidance responsiveness metric (GP guidance effectiveness)
 - [ ] **EVAL-05**: Sample diversity metrics (pairwise distances, coverage)
@@ -106,50 +106,50 @@ Deferred to future work / paper extensions.
 | DATA-02 | Phase 1 | Pending |
 | DATA-03 | Phase 1 | Pending |
 | DATA-04 | Phase 1 | Pending |
-| DATA-05 | Phase 2 | Pending |
-| DATA-06 | Phase 2 | Pending |
-| DATA-07 | Phase 2 | Pending |
-| FLOW-01 | Phase 2 | Pending |
-| FLOW-02 | Phase 2 | Pending |
-| FLOW-03 | Phase 3 | Pending |
-| FLOW-04 | Phase 3 | Pending |
-| FLOW-05 | Phase 2 | Pending |
-| ARCH-01 | Phase 2 | Pending |
-| ARCH-02 | Phase 2 | Pending |
-| ARCH-03 | Phase 3 | Pending |
-| ARCH-04 | Phase 3 | Pending |
-| ARCH-05 | Phase 3 | Pending |
+| DATA-05 | Phase 7 | Pending |
+| DATA-06 | Phase 7 | Pending |
+| DATA-07 | Phase 7 | Pending |
+| FLOW-01 | Phase 4 | Pending |
+| FLOW-02 | Phase 4 | Pending |
+| FLOW-03 | Phase 5 | Pending |
+| FLOW-04 | Phase 5 | Pending |
+| FLOW-05 | Phase 4 | Pending |
+| ARCH-01 | Phase 3 | Pending |
+| ARCH-02 | Phase 3 | Pending |
+| ARCH-03 | Phase 6 | Pending |
+| ARCH-04 | Phase 6 | Pending |
+| ARCH-05 | Phase 6 | Pending |
 | TRAIN-01 | Phase 2 | Pending |
 | TRAIN-02 | Phase 2 | Pending |
 | TRAIN-03 | Phase 2 | Pending |
-| TRAIN-04 | Phase 1 | Pending |
-| TRAIN-05 | Phase 4 | Pending |
-| GUIDE-01 | Phase 4 | Pending |
-| GUIDE-02 | Phase 4 | Pending |
-| GUIDE-03 | Phase 4 | Pending |
-| GUIDE-04 | Phase 4 | Pending |
-| EVAL-01 | Phase 5 | Pending |
-| EVAL-02 | Phase 5 | Pending |
-| EVAL-03 | Phase 5 | Pending |
-| EVAL-04 | Phase 5 | Pending |
-| EVAL-05 | Phase 5 | Pending |
-| EVAL-06 | Phase 5 | Pending |
-| ABLAT-01 | Phase 5 | Pending |
-| ABLAT-02 | Phase 5 | Pending |
-| ABLAT-03 | Phase 5 | Pending |
-| ABLAT-04 | Phase 5 | Pending |
-| ABLAT-05 | Phase 5 | Pending |
-| ABLAT-06 | Phase 5 | Pending |
-| PAPER-01 | Phase 6 | Pending |
-| PAPER-02 | Phase 6 | Pending |
-| PAPER-03 | Phase 6 | Pending |
-| PAPER-04 | Phase 6 | Pending |
+| TRAIN-04 | Phase 2 | Pending |
+| TRAIN-05 | Phase 10 | Pending |
+| GUIDE-01 | Phase 8 | Pending |
+| GUIDE-02 | Phase 8 | Pending |
+| GUIDE-03 | Phase 8 | Pending |
+| GUIDE-04 | Phase 8 | Pending |
+| EVAL-01 | Phase 9 | Pending |
+| EVAL-02 | Phase 9 | Pending |
+| EVAL-03 | Phase 9 | Pending |
+| EVAL-04 | Phase 9 | Pending |
+| EVAL-05 | Phase 9 | Pending |
+| EVAL-06 | Phase 9 | Pending |
+| ABLAT-01 | Phase 10 | Pending |
+| ABLAT-02 | Phase 10 | Pending |
+| ABLAT-03 | Phase 10 | Pending |
+| ABLAT-04 | Phase 10 | Pending |
+| ABLAT-05 | Phase 10 | Pending |
+| ABLAT-06 | Phase 10 | Pending |
+| PAPER-01 | Phase 11 | Pending |
+| PAPER-02 | Phase 11 | Pending |
+| PAPER-03 | Phase 11 | Pending |
+| PAPER-04 | Phase 11 | Pending |
 
 **Coverage:**
 - v1 requirements: 40 total
 - Mapped to phases: 40
-- Unmapped: 0 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-31*
-*Last updated: 2026-01-31 after initial definition*
+*Last updated: 2026-01-31 after roadmap creation*
