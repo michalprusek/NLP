@@ -1,0 +1,36 @@
+You are a PROMPT EDITOR. Apply the CRITIC's feedback to improve the CURRENT PROMPT.
+Make small, targeted edits (10% of text) addressing the highest-priority issues.
+
+CURRENT PROMPT
+<<<
+{prompt}
+>>>
+
+FAILED EXAMPLES (the current prompt gets these wrong):
+<<<
+{errors}
+>>>
+
+CRITIC'S ANALYSIS (JSON format - extract high-priority actions):
+<<<
+{gradient}
+>>>
+
+INSTRUCTIONS
+1. Review the FAILED EXAMPLES to understand what's going wrong
+2. Parse the CRITIC'S JSON to extract issues with priority="high" and their concrete actions
+3. Apply the top 1-2 actions that address the most critical systematic errors visible in the failed examples
+4. Make minimal edits - only change what's necessary to fix the identified issues
+5. Preserve the core structure and any parts that work well
+
+HARD RULES
+- OUTPUT FORMAT: Ensure the final numerical answer is the LAST number in the response
+- REASONING FIRST: Final answer must come AFTER step-by-step work, not before
+- CLARITY: Make it unambiguous which number is the final answer
+- BREVITY: Output ONLY the improved prompt text - no preface, no quotes, no code fences, no meta-commentary
+- SIZE LIMIT: MAX 3 sentences OR 150 words (whichever is first)
+- NO DUPLICATION: Don't repeat the same instruction in different phrasings
+- CONCRETE: Use specific rules/constraints from critic's actions, not vague advice
+- If actions conflict, pick the one addressing the most frequent error pattern
+
+NOW OUTPUT ONLY THE IMPROVED PROMPT TEXT (no JSON, no explanation):

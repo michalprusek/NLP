@@ -1,8 +1,0 @@
-Generate a variation of the following instruction while keeping the semantic meaning.
-The variation should be a complete, self-contained instruction for solving math word problems.
-
-Original instruction:
-{prompt_instruction}
-
-Write your variation wrapped with <PROMPT> and </PROMPT> tags.
-Output ONLY the instruction inside the tags, no explanations.
