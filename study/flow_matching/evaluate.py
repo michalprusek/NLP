@@ -1,7 +1,17 @@
-"""Flow model evaluation: reconstruction MSE and text generation.
+"""Flow model evaluation: distribution MSE and text generation.
 
 This module provides evaluation utilities for trained flow matching models,
-including reconstruction quality measurement and text generation verification.
+including distribution quality measurement and text generation verification.
+
+NOTE ON ICFM EVALUATION:
+ICFM (Independent Conditional Flow Matching) learns to transport samples from
+N(0,I) noise to the data distribution. This is NOT reconstruction - the model
+generates NEW samples in the data distribution, not specific target samples.
+
+The "distribution MSE" measures how far generated samples are from random test
+samples. Expected value ~1.0 for normalized data (variance ~1 per dimension).
+This validates that generated samples have similar statistics to the data
+distribution. The key quality metric is coherent text generation.
 
 Usage:
     # CLI evaluation
@@ -11,8 +21,8 @@ Usage:
         --test-split study/datasets/splits/1k/test.pt
 
     # Programmatic usage
-    from study.flow_matching.evaluate import compute_reconstruction_mse, generate_and_decode
-    mse_results = compute_reconstruction_mse(model, test_embeddings, n_samples=100, n_steps=100, device="cuda:0")
+    from study.flow_matching.evaluate import compute_distribution_mse, generate_and_decode
+    mse_results = compute_distribution_mse(model, test_embeddings, n_samples=100, n_steps=100, device="cuda:0")
     texts = generate_and_decode(model, stats, decoder, n_samples=5, n_steps=100, device="cuda:0")
 """
 
@@ -76,7 +86,7 @@ def euler_ode_integrate(
 
 
 @torch.no_grad()
-def compute_reconstruction_mse(
+def compute_distribution_mse(
     model: torch.nn.Module,
     test_embeddings: Tensor,
     n_samples: int,
@@ -84,12 +94,21 @@ def compute_reconstruction_mse(
     device: str | torch.device,
 ) -> dict:
     """
-    Compute reconstruction MSE by comparing flow-generated embeddings to targets.
+    Compute distribution MSE by comparing flow-generated embeddings to random test samples.
 
-    For each test embedding x1 (target):
+    NOTE: This is NOT reconstruction. ICFM generates NEW samples from the learned
+    distribution, not reconstructions of specific targets. The MSE measures how
+    similar generated samples are to the test set distribution.
+
+    Expected MSE ~1.0 for normalized data, indicating:
+    - Generated samples have unit variance (like the data)
+    - Model successfully transports noise to data distribution
+
+    Process:
     1. Sample random noise x0 ~ N(0, I)
     2. Run Euler ODE integration from t=0 to t=1 to get x1_hat
-    3. Compute MSE = mean((x1 - x1_hat)^2)
+    3. Compare x1_hat to random test embeddings (NOT paired)
+    4. Compute MSE = mean((x1_test - x1_hat)^2)
 
     Args:
         model: Velocity network in eval mode.
@@ -100,7 +119,7 @@ def compute_reconstruction_mse(
 
     Returns:
         Dictionary with:
-            - mse: Mean squared error (float)
+            - mse: Mean squared error (float) - expected ~1.0 for normalized data
             - std: Standard deviation of per-sample MSE (float)
             - n_samples: Number of samples evaluated
             - n_steps: Number of integration steps used
@@ -130,7 +149,7 @@ def compute_reconstruction_mse(
     mse = per_sample_mse.mean().item()
     std = per_sample_mse.std().item()
 
-    logger.info(f"Reconstruction MSE: {mse:.6f} +/- {std:.6f}")
+    logger.info(f"Distribution MSE: {mse:.6f} +/- {std:.6f} (expected ~1.0 for normalized data)")
 
     return {
         "mse": mse,
@@ -138,6 +157,10 @@ def compute_reconstruction_mse(
         "n_samples": n_actual,
         "n_steps": n_steps,
     }
+
+
+# Backward compatibility alias
+compute_reconstruction_mse = compute_distribution_mse
 
 
 @torch.no_grad()
@@ -327,12 +350,13 @@ Examples:
     test_embeddings = test_data["embeddings"]
     logger.info(f"Loaded {test_embeddings.shape[0]} test embeddings")
 
-    # Compute reconstruction MSE
+    # Compute distribution MSE
     print("\n" + "=" * 50)
-    print("=== Reconstruction MSE ===")
+    print("=== Distribution MSE ===")
     print("=" * 50)
+    print("(Expected ~1.0 for normalized data - validates distribution match)")
 
-    mse_results = compute_reconstruction_mse(
+    mse_results = compute_distribution_mse(
         model=model,
         test_embeddings=test_embeddings,
         n_samples=args.n_mse_samples,
