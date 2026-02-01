@@ -12,6 +12,7 @@ Public API:
 """
 
 from study.flow_matching.config import TrainingConfig
+from study.flow_matching.trainer import FlowTrainer
 from study.flow_matching.utils import (
     EarlyStopping,
     EMAModel,
@@ -20,6 +21,7 @@ from study.flow_matching.utils import (
 
 __all__ = [
     "TrainingConfig",
+    "FlowTrainer",
     "EarlyStopping",
     "EMAModel",
     "get_cosine_schedule_with_warmup",
