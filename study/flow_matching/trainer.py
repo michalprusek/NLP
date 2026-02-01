@@ -8,6 +8,7 @@ Provides FlowTrainer class that orchestrates training with:
 - Early stopping based on validation loss
 - Wandb experiment tracking
 - Checkpoint saving/loading with resume support
+- Mixed precision training (AMP) for efficiency
 """
 
 import logging
@@ -18,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
+from torch.cuda.amp import GradScaler, autocast
 from torch.optim import AdamW
 
 from study.data.augmentation import AugmentationConfig, augment_batch
@@ -67,6 +69,8 @@ class FlowTrainer:
         device: torch.device,
         wandb_project: str = "flow-matching-study",
         resume_path: Optional[str] = None,
+        test_dataset: Optional[FlowDataset] = None,
+        use_amp: bool = False,
     ):
         """Initialize trainer.
 
@@ -78,13 +82,20 @@ class FlowTrainer:
             device: Device for training.
             wandb_project: Wandb project name.
             resume_path: Path to checkpoint to resume from (optional).
+            test_dataset: Test dataset for final evaluation (optional).
+            use_amp: If True, use automatic mixed precision (FP16).
         """
         self.config = config
         self.device = device
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
+        self.test_dataset = test_dataset
         self.wandb_project = wandb_project
         self.resume_path = resume_path
+        self.use_amp = use_amp
+
+        # Setup AMP GradScaler
+        self.scaler = GradScaler(enabled=use_amp)
 
         # Move model to device FIRST, then create EMA
         self.model = model.to(device)
@@ -270,24 +281,26 @@ class FlowTrainer:
             # Get interpolated samples and target velocity from coupling
             t, x_t, v_target = self.coupling.sample(x0, x1)
 
-            # Forward pass
-            v_pred = self.model(x_t, t)
+            # Forward pass with optional AMP
+            with autocast(enabled=self.use_amp):
+                v_pred = self.model(x_t, t)
+                # MSE loss
+                loss = F.mse_loss(v_pred, v_target)
 
-            # MSE loss
-            loss = F.mse_loss(v_pred, v_target)
-
-            # Backward pass
+            # Backward pass with AMP scaler
             self.optimizer.zero_grad()
-            loss.backward()
+            self.scaler.scale(loss).backward()
 
-            # Gradient clipping
+            # Gradient clipping (unscale first for proper clipping)
+            self.scaler.unscale_(self.optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 max_norm=self.config.grad_clip,
             )
 
-            # Optimizer step
-            self.optimizer.step()
+            # Optimizer step with scaler
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             self.scheduler.step()
 
             # EMA update
@@ -351,11 +364,10 @@ class FlowTrainer:
                 # Get interpolated samples and target velocity from coupling
                 t, x_t, v_target = self.coupling.sample(x0, x1)
 
-                # Forward pass
-                v_pred = self.model(x_t, t)
-
-                # Loss
-                loss = F.mse_loss(v_pred, v_target)
+                # Forward pass with optional AMP
+                with autocast(enabled=self.use_amp):
+                    v_pred = self.model(x_t, t)
+                    loss = F.mse_loss(v_pred, v_target)
 
                 total_loss += loss.item()
                 n_batches += 1
@@ -366,6 +378,95 @@ class FlowTrainer:
 
         self.model.train()
         return total_loss / n_batches
+
+    @torch.no_grad()
+    def evaluate_test(self, use_ema: bool = True, n_samples: int = 100, n_steps: int = 100) -> Dict:
+        """Evaluate on test set after training.
+
+        Computes distribution MSE on test embeddings to measure generation quality.
+
+        Args:
+            use_ema: If True, use EMA weights for evaluation.
+            n_samples: Number of samples for distribution MSE.
+            n_steps: ODE integration steps.
+
+        Returns:
+            Dictionary with test metrics:
+            - test_loss: Flow matching loss on test set
+            - test_mse: Distribution MSE (expected ~1.0 for normalized data)
+            - test_mse_std: Standard deviation of per-sample MSE
+        """
+        if self.test_dataset is None:
+            logger.warning("No test dataset provided, skipping test evaluation")
+            return {}
+
+        self.model.eval()
+
+        # Apply EMA weights if requested
+        if use_ema:
+            self.ema.apply(self.model)
+
+        try:
+            # Create test dataloader
+            test_loader = create_dataloader(
+                self.test_dataset,
+                batch_size=self.config.batch_size,
+                shuffle=False,
+                seed=42,
+                num_workers=4,
+                pin_memory=True,
+                drop_last=False,
+            )
+
+            # Compute flow matching loss on test set
+            total_loss = 0.0
+            n_batches = 0
+
+            for x1 in test_loader:
+                x1 = x1.to(self.device)
+                x0 = torch.randn_like(x1)
+                t, x_t, v_target = self.coupling.sample(x0, x1)
+                with autocast(enabled=self.use_amp):
+                    v_pred = self.model(x_t, t)
+                    loss = F.mse_loss(v_pred, v_target)
+                total_loss += loss.item()
+                n_batches += 1
+
+            test_loss = total_loss / n_batches
+
+            # Compute distribution MSE
+            from study.flow_matching.solvers import euler_integrate
+
+            # Get test embeddings (first n_samples)
+            test_embeddings = []
+            for x1 in test_loader:
+                test_embeddings.append(x1)
+                if sum(e.shape[0] for e in test_embeddings) >= n_samples:
+                    break
+            test_embeddings = torch.cat(test_embeddings, dim=0)[:n_samples].to(self.device)
+
+            # Generate from noise
+            x0 = torch.randn_like(test_embeddings)
+            x1_hat = euler_integrate(self.model, x0, n_steps, self.device, show_progress=False)
+
+            # Per-sample MSE
+            per_sample_mse = ((test_embeddings - x1_hat) ** 2).mean(dim=1)
+            test_mse = per_sample_mse.mean().item()
+            test_mse_std = per_sample_mse.std().item()
+
+            logger.info(f"Test loss: {test_loss:.6f}")
+            logger.info(f"Test distribution MSE: {test_mse:.6f} +/- {test_mse_std:.6f}")
+
+            return {
+                "test_loss": test_loss,
+                "test_mse": test_mse,
+                "test_mse_std": test_mse_std,
+            }
+
+        finally:
+            # Restore original weights
+            if use_ema:
+                self.ema.restore(self.model)
 
     def train(self) -> Dict:
         """Run full training loop.
@@ -477,6 +578,17 @@ class FlowTrainer:
                 f"Best val loss: {self._best_val_loss:.6f}"
             )
 
+            # Run test evaluation if test dataset provided
+            test_metrics = {}
+            if self.test_dataset is not None:
+                logger.info("Running test set evaluation...")
+                test_metrics = self.evaluate_test(use_ema=True)
+
+                # Log test metrics to Wandb
+                for key, value in test_metrics.items():
+                    wandb.summary[key] = value
+                    wandb.log({f"test/{key}": value}, step=self._global_step)
+
             # Update Wandb summary
             wandb.summary["final_epoch"] = self._current_epoch
             wandb.summary["best_val_loss"] = self._best_val_loss
@@ -497,7 +609,7 @@ class FlowTrainer:
 
             raise
 
-        return {
+        result = {
             "epochs_run": self._current_epoch,
             "best_val_loss": self._best_val_loss,
             "final_train_loss": final_train_loss,
@@ -505,6 +617,9 @@ class FlowTrainer:
             "early_stopped": early_stopped,
             "checkpoint_path": self._checkpoint_path,
         }
+        # Add test metrics if available
+        result.update(test_metrics)
+        return result
 
     def finish(self) -> None:
         """Finish Wandb run for clean shutdown."""

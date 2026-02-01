@@ -8,39 +8,139 @@ Key fix (from code review): The 1024-dim embedding is now chunked into 16 tokens
 each, so attention can actually learn cross-chunk dependencies (unlike single-token which
 trivially returns q@k^T@v = v).
 
+Improvements (NeurIPS 2026):
+- QK-normalization for improved training stability (optional, enabled by default)
+
 Target: ~9.3M parameters with default configuration (hidden_dim=384, num_layers=3, num_heads=6).
 """
 
+import math
+from typing import Optional
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from study.flow_matching.models.mlp import timestep_embedding
 
 
-class AdaLNBlock(nn.Module):
-    """Transformer block with AdaLN-Zero (6 modulation params: shift/scale/gate for attn and mlp)."""
+class QKNormAttention(nn.Module):
+    """Multi-head self-attention with QK-normalization.
 
-    def __init__(self, hidden_dim: int, num_heads: int, mlp_ratio: float = 4.0):
+    QK-normalization applies LayerNorm to Q and K vectors before computing
+    attention scores. This improves training stability and allows for larger
+    learning rates, especially beneficial for flow matching where the velocity
+    field must be learned accurately.
+
+    Reference: Dehghani et al., "Scaling Vision Transformers to 22 Billion Parameters"
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+    ):
+        """Initialize QK-normalized attention.
+
+        Args:
+            embed_dim: Total dimension of the model.
+            num_heads: Number of attention heads.
+            dropout: Dropout probability.
+        """
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+
+        # QKV projection
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
+
+        # QK normalization (per-head LayerNorm)
+        self.q_norm = nn.LayerNorm(self.head_dim)
+        self.k_norm = nn.LayerNorm(self.head_dim)
+
+        # Output projection
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass with QK-normalized attention.
+
+        Args:
+            x: Input tensor [B, S, D].
+
+        Returns:
+            Output tensor [B, S, D].
+        """
+        B, S, D = x.shape
+
+        # Compute Q, K, V
+        qkv = self.qkv(x).reshape(B, S, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, S, head_dim]
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # Apply QK-normalization
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
+        # Scaled dot-product attention
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+
+        # Apply attention to values
+        out = attn @ v  # [B, H, S, head_dim]
+        out = out.transpose(1, 2).reshape(B, S, D)
+
+        return self.out_proj(out)
+
+
+class AdaLNBlock(nn.Module):
+    """Transformer block with AdaLN-Zero (6 modulation params: shift/scale/gate for attn and mlp).
+
+    Supports optional QK-normalization for improved training stability.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        use_qk_norm: bool = False,
+    ):
         """Initialize AdaLN transformer block.
 
         Args:
             hidden_dim: Hidden dimension for attention and MLP.
             num_heads: Number of attention heads.
             mlp_ratio: Expansion ratio for MLP hidden dimension.
+            use_qk_norm: If True, use QK-normalized attention.
         """
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.use_qk_norm = use_qk_norm
 
         # Layer norms without learnable parameters (AdaLN provides modulation)
         self.norm1 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
         self.norm2 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
 
-        # Self-attention
-        self.attn = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True,
-        )
+        # Self-attention (with or without QK-norm)
+        if use_qk_norm:
+            self.attn = QKNormAttention(
+                embed_dim=hidden_dim,
+                num_heads=num_heads,
+            )
+        else:
+            self.attn = nn.MultiheadAttention(
+                embed_dim=hidden_dim,
+                num_heads=num_heads,
+                batch_first=True,
+            )
 
         # MLP with GELU activation
         mlp_hidden = int(hidden_dim * mlp_ratio)
@@ -76,7 +176,13 @@ class AdaLNBlock(nn.Module):
         # Attention block with AdaLN
         x_norm = self.norm1(x)
         x_mod = x_norm * (1 + scale_attn.unsqueeze(1)) + shift_attn.unsqueeze(1)
-        attn_out, _ = self.attn(x_mod, x_mod, x_mod)
+
+        # Apply attention (different interface for QK-norm vs standard)
+        if self.use_qk_norm:
+            attn_out = self.attn(x_mod)
+        else:
+            attn_out, _ = self.attn(x_mod, x_mod, x_mod)
+
         x = x + gate_attn.unsqueeze(1) * attn_out
 
         # MLP block with AdaLN
@@ -121,6 +227,7 @@ class DiTVelocityNetwork(nn.Module):
         num_heads: int = 6,
         time_embed_dim: int = 256,
         num_tokens: int = 16,  # Chunk 1024 into 16 tokens of 64 dims
+        use_qk_norm: bool = True,  # QK-normalization for stability
     ):
         """Initialize DiTVelocityNetwork.
 
@@ -131,6 +238,7 @@ class DiTVelocityNetwork(nn.Module):
             num_heads: Number of attention heads (6 for 64 dim per head).
             time_embed_dim: Dimension for sinusoidal time embeddings.
             num_tokens: Number of tokens to split input into (default 16).
+            use_qk_norm: If True, use QK-normalized attention (recommended).
         """
         super().__init__()
         self.input_dim = input_dim
@@ -138,6 +246,7 @@ class DiTVelocityNetwork(nn.Module):
         self.time_embed_dim = time_embed_dim
         self.num_tokens = num_tokens
         self.token_dim = input_dim // num_tokens
+        self.use_qk_norm = use_qk_norm
 
         assert input_dim % num_tokens == 0, f"input_dim ({input_dim}) must be divisible by num_tokens ({num_tokens})"
 
@@ -155,9 +264,10 @@ class DiTVelocityNetwork(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_tokens, hidden_dim))
         nn.init.normal_(self.pos_embed, std=0.02)
 
-        # AdaLN transformer blocks
+        # AdaLN transformer blocks with optional QK-norm
         self.blocks = nn.ModuleList([
-            AdaLNBlock(hidden_dim, num_heads) for _ in range(num_layers)
+            AdaLNBlock(hidden_dim, num_heads, use_qk_norm=use_qk_norm)
+            for _ in range(num_layers)
         ])
 
         # Final layer norm and output projection

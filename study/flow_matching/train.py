@@ -224,6 +224,13 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for reproducibility",
     )
 
+    # Mixed precision training
+    parser.add_argument(
+        "--amp",
+        action="store_true",
+        help="Enable automatic mixed precision (FP16) training for faster computation",
+    )
+
     return parser.parse_args()
 
 
@@ -306,7 +313,11 @@ def main() -> None:
             device=device,
             wandb_project=args.wandb_project,
             resume_path=resume_path,
+            test_dataset=test_ds,  # Pass test dataset for final evaluation
+            use_amp=args.amp,  # Mixed precision training
         )
+        if args.amp:
+            logger.info("Mixed precision (AMP) training enabled")
         result = trainer.train()
 
         # Calculate training time
@@ -327,6 +338,12 @@ def main() -> None:
         print(f"Early stopped: {result['early_stopped']}")
         print(f"Checkpoint: {result['checkpoint_path']}")
         print(f"Training time: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        # Print test metrics if available
+        if "test_loss" in result:
+            print("-" * 60)
+            print("TEST EVALUATION")
+            print(f"Test loss: {result['test_loss']:.6f}")
+            print(f"Test MSE: {result['test_mse']:.6f} +/- {result['test_mse_std']:.6f}")
         print("=" * 60)
 
     except Exception as e:

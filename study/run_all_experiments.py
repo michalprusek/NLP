@@ -45,9 +45,12 @@ from typing import Optional
 # =============================================================================
 
 # Default training settings
-DEFAULT_EPOCHS = 100
+DEFAULT_EPOCHS = 300
 DEFAULT_BATCH_SIZE = 256
 DEFAULT_GROUP = "ablation-study"
+
+# Multiple seeds for statistical rigor (NeurIPS requirement: ≥3 seeds)
+DEFAULT_SEEDS = [42, 123, 456]
 
 # Experiment matrix
 FLOW_METHODS = ["icfm", "otcfm", "si-gvp"]  # reflow handled separately
@@ -66,6 +69,7 @@ class Experiment:
     dataset: str
     aug: str
     scale: str = "small"
+    seed: int = 42
     epochs: int = DEFAULT_EPOCHS
     batch_size: int = DEFAULT_BATCH_SIZE
     extra_args: list = field(default_factory=list)
@@ -77,6 +81,9 @@ class Experiment:
         # Include scale in name if not default
         if self.scale != "small":
             base = f"{self.arch}-{self.scale}-{self.flow}-{self.dataset}-{self.aug}"
+        # Include seed in name if not default (for multi-seed runs)
+        if self.seed != 42:
+            base = f"{base}-s{self.seed}"
         return base
 
     @property
@@ -97,6 +104,7 @@ class Experiment:
             "--dataset", self.dataset,
             "--aug", self.aug,
             "--scale", self.scale,
+            "--seed", str(self.seed),
             "--epochs", str(self.epochs),
             "--batch-size", str(self.batch_size),
             "--group", group,
@@ -224,6 +232,149 @@ def get_all_experiments() -> list[Experiment]:
     return unique
 
 
+def get_grid_search() -> list[Experiment]:
+    """Full grid search: Flow × Arch × Dataset = 27 combinations.
+
+    This provides comprehensive coverage of the main hyperparameter space.
+    All experiments use aug=none and scale=small to isolate core factors.
+    """
+    experiments = []
+    for flow in FLOW_METHODS:
+        for arch in ARCHITECTURES:
+            for dataset in DATASET_SIZES:
+                experiments.append(Experiment(
+                    name=f"grid-{arch}-{flow}-{dataset}",
+                    arch=arch,
+                    flow=flow,
+                    dataset=dataset,
+                    aug="none",
+                    scale="small",
+                ))
+    return experiments
+
+
+def get_grid_with_aug() -> list[Experiment]:
+    """Extended grid: Core grid (27) + Augmentation variants on 5k dataset (12).
+
+    Total: 27 + 12 = 39 experiments (some overlap removed = ~36 unique)
+    """
+    experiments = []
+
+    # Core grid: Flow × Arch × Dataset (27)
+    for flow in FLOW_METHODS:
+        for arch in ARCHITECTURES:
+            for dataset in DATASET_SIZES:
+                experiments.append(Experiment(
+                    name=f"grid-{arch}-{flow}-{dataset}",
+                    arch=arch,
+                    flow=flow,
+                    dataset=dataset,
+                    aug="none",
+                    scale="small",
+                ))
+
+    # Augmentation variants on all archs with best flow (otcfm) and 5k dataset
+    for arch in ARCHITECTURES:
+        for aug in ["mixup", "noise", "mixup+noise"]:  # none already in grid
+            experiments.append(Experiment(
+                name=f"aug-{arch}-{aug}",
+                arch=arch,
+                flow="otcfm",  # Best flow from initial experiments
+                dataset="5k",
+                aug=aug,
+                scale="small",
+            ))
+
+    # Remove duplicates
+    seen = set()
+    unique = []
+    for exp in experiments:
+        if exp.run_name not in seen:
+            seen.add(exp.run_name)
+            unique.append(exp)
+
+    return unique
+
+
+def get_full_grid() -> list[Experiment]:
+    """Complete grid: Flow × Arch × Dataset × Aug = 108 combinations.
+
+    WARNING: This is computationally expensive!
+    """
+    experiments = []
+    for flow in FLOW_METHODS:
+        for arch in ARCHITECTURES:
+            for dataset in DATASET_SIZES:
+                for aug in AUGMENTATIONS:
+                    experiments.append(Experiment(
+                        name=f"full-{arch}-{flow}-{dataset}-{aug}",
+                        arch=arch,
+                        flow=flow,
+                        dataset=dataset,
+                        aug=aug,
+                        scale="small",
+                    ))
+    return experiments
+
+
+def expand_with_seeds(experiments: list[Experiment], seeds: list[int]) -> list[Experiment]:
+    """Expand a list of experiments to run with multiple seeds.
+
+    Creates a new experiment for each seed in the list.
+
+    Args:
+        experiments: Base experiments to expand.
+        seeds: List of random seeds (e.g., [42, 123, 456]).
+
+    Returns:
+        Expanded list with len(experiments) * len(seeds) entries.
+    """
+    expanded = []
+    for exp in experiments:
+        for seed in seeds:
+            expanded.append(Experiment(
+                name=exp.name,
+                arch=exp.arch,
+                flow=exp.flow,
+                dataset=exp.dataset,
+                aug=exp.aug,
+                scale=exp.scale,
+                seed=seed,
+                epochs=exp.epochs,
+                batch_size=exp.batch_size,
+                extra_args=exp.extra_args.copy() if exp.extra_args else [],
+            ))
+    return expanded
+
+
+def get_top10_multiseed() -> list[Experiment]:
+    """Top-10 configurations with 3 seeds each for statistical validation.
+
+    Selected configurations for NeurIPS statistical rigor:
+    - Best of each flow method (3): icfm, otcfm, si-gvp on mlp/5k
+    - Best of each architecture (3): mlp, dit, unet on otcfm/5k
+    - Best augmentation configs (4): all augs on mlp/otcfm/5k
+
+    Total: ~10 unique × 3 seeds = 30 runs
+    """
+    base_experiments = [
+        # Flow method comparison (best arch/dataset)
+        Experiment(name="top-flow-icfm", arch="mlp", flow="icfm", dataset="5k", aug="none"),
+        Experiment(name="top-flow-otcfm", arch="mlp", flow="otcfm", dataset="5k", aug="none"),
+        Experiment(name="top-flow-sigvp", arch="mlp", flow="si-gvp", dataset="5k", aug="none"),
+        # Architecture comparison (best flow)
+        Experiment(name="top-arch-mlp", arch="mlp", flow="otcfm", dataset="5k", aug="none"),
+        Experiment(name="top-arch-dit", arch="dit", flow="otcfm", dataset="5k", aug="none"),
+        Experiment(name="top-arch-unet", arch="unet", flow="otcfm", dataset="5k", aug="none"),
+        # Augmentation comparison (best setup)
+        Experiment(name="top-aug-none", arch="mlp", flow="otcfm", dataset="5k", aug="none"),
+        Experiment(name="top-aug-mixup", arch="mlp", flow="otcfm", dataset="5k", aug="mixup"),
+        Experiment(name="top-aug-noise", arch="mlp", flow="otcfm", dataset="5k", aug="noise"),
+        Experiment(name="top-aug-both", arch="mlp", flow="otcfm", dataset="5k", aug="mixup+noise"),
+    ]
+    return expand_with_seeds(base_experiments, DEFAULT_SEEDS)
+
+
 ABLATION_REGISTRY = {
     "flow": get_flow_ablation,
     "arch": get_arch_ablation,
@@ -231,6 +382,10 @@ ABLATION_REGISTRY = {
     "augmentation": get_augmentation_ablation,
     "scale": get_scale_ablation,
     "all": get_all_experiments,
+    "grid": get_grid_search,           # Flow × Arch × Dataset = 27
+    "grid-aug": get_grid_with_aug,     # Grid + augmentation variants = ~36
+    "full-grid": get_full_grid,        # Flow × Arch × Dataset × Aug = 108
+    "multiseed": get_top10_multiseed,  # Top-10 configs × 3 seeds = 30 (NeurIPS stats)
 }
 
 
@@ -297,17 +452,31 @@ def run_ablation(
     gpu: int,
     resume_from: Optional[str] = None,
     dry_run: bool = False,
+    seeds: Optional[list[int]] = None,
 ) -> dict:
     """Run an ablation study.
 
+    Args:
+        ablation: Name of the ablation from ABLATION_REGISTRY.
+        group: Wandb group name.
+        gpu: GPU device to use.
+        resume_from: Run name to resume from (skip experiments until this one).
+        dry_run: If True, print commands without executing.
+        seeds: If provided, expand each experiment to run with each seed.
+
     Returns:
-        Results dictionary
+        Results dictionary with experiment outcomes and summary.
     """
     if ablation not in ABLATION_REGISTRY:
         raise ValueError(f"Unknown ablation: {ablation}. "
                         f"Available: {list(ABLATION_REGISTRY.keys())}")
 
     experiments = ABLATION_REGISTRY[ablation]()
+
+    # Expand with multiple seeds if requested
+    if seeds:
+        experiments = expand_with_seeds(experiments, seeds)
+        print(f"\nExpanded experiments with seeds {seeds}: {len(experiments)} total")
 
     # Resume logic
     skip_until = None
@@ -436,8 +605,28 @@ def main():
         action="store_true",
         help="List all experiments and exit",
     )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        metavar="SEEDS",
+        help="Comma-separated seeds to run (e.g., '42,123,456'). Expands each experiment to run with each seed.",
+    )
+    parser.add_argument(
+        "--multiseed",
+        action="store_true",
+        help="Shortcut for --seeds=42,123,456 (NeurIPS standard)",
+    )
 
     args = parser.parse_args()
+
+    # Parse seeds
+    if args.multiseed:
+        args.seeds = DEFAULT_SEEDS
+    elif args.seeds:
+        args.seeds = [int(s.strip()) for s in args.seeds.split(",")]
+    else:
+        args.seeds = None
 
     # Determine what to run
     if args.list:
@@ -467,6 +656,7 @@ def main():
             gpu=args.gpu,
             resume_from=args.resume,
             dry_run=args.dry_run,
+            seeds=args.seeds,
         )
 
         print_summary(results)

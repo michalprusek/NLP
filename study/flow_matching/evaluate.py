@@ -13,34 +13,45 @@ samples. Expected value ~1.0 for normalized data (variance ~1 per dimension).
 This validates that generated samples have similar statistics to the data
 distribution. The key quality metric is coherent text generation.
 
+Solvers:
+- euler: 1st order, simple but slow
+- heun: 2nd order, better accuracy
+- rk4: 4th order, highest accuracy
+- dpm++: DPM-Solver++ 2nd order, fast convergence
+
 Usage:
     # CLI evaluation
     python -m study.flow_matching.evaluate \\
         --checkpoint study/checkpoints/mlp-icfm-1k-none/best.pt \\
         --arch mlp \\
-        --test-split study/datasets/splits/1k/test.pt
+        --test-split study/datasets/splits/1k/test.pt \\
+        --solver heun --n-steps 50
 
     # Programmatic usage
     from study.flow_matching.evaluate import compute_distribution_mse, generate_and_decode
-    mse_results = compute_distribution_mse(model, test_embeddings, n_samples=100, n_steps=100, device="cuda:0")
-    texts = generate_and_decode(model, stats, decoder, n_samples=5, n_steps=100, device="cuda:0")
+    mse_results = compute_distribution_mse(model, test_embeddings, n_samples=100, n_steps=100, device="cuda:0", solver="heun")
+    texts = generate_and_decode(model, stats, decoder, n_samples=5, n_steps=100, device="cuda:0", solver="heun")
 """
 
 import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Literal, Optional
 
 import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from study.flow_matching.models import create_model
+from study.flow_matching.solvers import get_solver, list_solvers, euler_integrate
 from study.data.normalize import denormalize, load_stats, DEFAULT_STATS_PATH
 from ecoflow.decoder import SonarDecoder
 
 logger = logging.getLogger(__name__)
+
+# Type alias for solver names
+SolverName = Literal["euler", "heun", "rk4", "dpm++", "dpm_solver_pp", "adaptive_heun"]
 
 
 @torch.no_grad()
@@ -93,6 +104,7 @@ def compute_distribution_mse(
     n_samples: int,
     n_steps: int,
     device: str | torch.device,
+    solver: SolverName = "euler",
 ) -> dict:
     """
     Compute distribution MSE by comparing flow-generated embeddings to random test samples.
@@ -107,7 +119,7 @@ def compute_distribution_mse(
 
     Process:
     1. Sample random noise x0 ~ N(0, I)
-    2. Run Euler ODE integration from t=0 to t=1 to get x1_hat
+    2. Run ODE integration from t=0 to t=1 to get x1_hat
     3. Compare x1_hat to random test embeddings (NOT paired)
     4. Compute MSE = mean((x1_test - x1_hat)^2)
 
@@ -117,6 +129,7 @@ def compute_distribution_mse(
         n_samples: Number of samples to evaluate.
         n_steps: Number of ODE integration steps.
         device: Computation device.
+        solver: ODE solver to use (euler, heun, rk4, dpm++).
 
     Returns:
         Dictionary with:
@@ -124,6 +137,7 @@ def compute_distribution_mse(
             - std: Standard deviation of per-sample MSE (float)
             - n_samples: Number of samples evaluated
             - n_steps: Number of integration steps used
+            - solver: Solver name used
     """
     device = torch.device(device) if isinstance(device, str) else device
     model.eval()
@@ -140,9 +154,10 @@ def compute_distribution_mse(
     # Sample random noise as starting points
     x0 = torch.randn_like(x1_target)
 
-    # Run ODE integration
-    logger.info(f"Running ODE integration for {n_actual} samples with {n_steps} steps...")
-    x1_hat = euler_ode_integrate(model, x0, n_steps, device, show_progress=True)
+    # Run ODE integration with selected solver
+    solver_fn = get_solver(solver)
+    logger.info(f"Running {solver} ODE integration for {n_actual} samples with {n_steps} steps...")
+    x1_hat = solver_fn(model, x0, n_steps, device, show_progress=True)
 
     # Compute per-sample MSE
     per_sample_mse = ((x1_target - x1_hat) ** 2).mean(dim=1)  # [N]
@@ -157,6 +172,7 @@ def compute_distribution_mse(
         "std": std,
         "n_samples": n_actual,
         "n_steps": n_steps,
+        "solver": solver,
     }
 
 
@@ -253,13 +269,14 @@ def generate_and_decode(
     n_samples: int,
     n_steps: int,
     device: str | torch.device,
+    solver: SolverName = "euler",
 ) -> List[str]:
     """
     Generate embeddings from noise and decode to text.
 
     Process:
     1. Sample random noise x0 ~ N(0, I) of shape [n_samples, 1024]
-    2. Run Euler ODE integration to get x1_hat (normalized)
+    2. Run ODE integration to get x1_hat (normalized)
     3. Denormalize x1_hat using stats
     4. Decode using SonarDecoder
 
@@ -270,6 +287,7 @@ def generate_and_decode(
         n_samples: Number of samples to generate.
         n_steps: Number of ODE integration steps.
         device: Computation device.
+        solver: ODE solver to use (euler, heun, rk4, dpm++).
 
     Returns:
         List of decoded text strings.
@@ -280,9 +298,10 @@ def generate_and_decode(
     # Sample random noise
     x0 = torch.randn(n_samples, 1024, device=device)
 
-    # Run ODE integration
-    logger.info(f"Generating {n_samples} samples with {n_steps} steps...")
-    x1_hat_normalized = euler_ode_integrate(model, x0, n_steps, device, show_progress=True)
+    # Run ODE integration with selected solver
+    solver_fn = get_solver(solver)
+    logger.info(f"Generating {n_samples} samples with {n_steps} {solver} steps...")
+    x1_hat_normalized = solver_fn(model, x0, n_steps, device, show_progress=True)
 
     # Denormalize
     x1_hat_denormalized = denormalize(x1_hat_normalized, stats)
@@ -401,6 +420,13 @@ Examples:
         default="cuda:0",
         help="CUDA device (default: cuda:0)",
     )
+    parser.add_argument(
+        "--solver",
+        type=str,
+        default="euler",
+        choices=list_solvers(),
+        help=f"ODE solver (default: euler). Available: {list_solvers()}",
+    )
 
     args = parser.parse_args()
 
@@ -444,8 +470,10 @@ Examples:
         n_samples=args.n_mse_samples,
         n_steps=args.n_steps,
         device=args.device,
+        solver=args.solver,
     )
 
+    print(f"Solver: {mse_results['solver']}")
     print(f"MSE: {mse_results['mse']:.6f} +/- {mse_results['std']:.6f}")
     print(f"Samples: {mse_results['n_samples']}")
     print(f"Steps: {mse_results['n_steps']}")
@@ -484,6 +512,7 @@ Examples:
         n_samples=args.n_gen_samples,
         n_steps=args.n_steps,
         device=args.device,
+        solver=args.solver,
     )
 
     for i, text in enumerate(texts, 1):

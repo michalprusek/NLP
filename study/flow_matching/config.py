@@ -54,7 +54,7 @@ class TrainingConfig:
     # Locked parameters (do not change)
     ema_decay: float = field(default=0.9999, repr=False)
     grad_clip: float = field(default=1.0, repr=False)
-    patience: int = field(default=20, repr=False)
+    patience: int = field(default=100, repr=False)
     min_delta: float = field(default=0.0, repr=False)
     val_frequency: int = field(default=1, repr=False)
 
