@@ -27,18 +27,18 @@ Requirements for NeurIPS paper submission. Each maps to roadmap phases.
 
 ### Velocity Network Architectures
 
-- [ ] **ARCH-01**: Implement Simple MLP baseline (~1M params)
-- [ ] **ARCH-02**: Port DiT baseline from ecoflow (~9.4M params)
+- [x] **ARCH-01**: Implement Simple MLP baseline (~1M params)
+- [x] **ARCH-02**: Port DiT baseline from ecoflow (~9.4M params)
 - [ ] **ARCH-03**: Implement U-Net MLP with FiLM conditioning (~2.5M params)
 - [ ] **ARCH-04**: Implement Mamba/SSM velocity network (experimental)
 - [ ] **ARCH-05**: Implement scaled versions for different dataset sizes (Tiny/Small/Base)
 
 ### Training Infrastructure
 
-- [ ] **TRAIN-01**: Training loop with EMA, gradient clipping, early stopping
-- [ ] **TRAIN-02**: Checkpoint management with best model selection
-- [ ] **TRAIN-03**: Wandb experiment tracking integration
-- [ ] **TRAIN-04**: GPU 1 (A5000) configuration with CUDA_VISIBLE_DEVICES=1
+- [x] **TRAIN-01**: Training loop with EMA, gradient clipping, early stopping
+- [x] **TRAIN-02**: Checkpoint management with best model selection
+- [x] **TRAIN-03**: Wandb experiment tracking integration
+- [x] **TRAIN-04**: GPU 1 (A5000) configuration with CUDA_VISIBLE_DEVICES=1
 - [ ] **TRAIN-05**: Hyperparameter sweep infrastructure
 
 ### GP-Guided Sampling
@@ -114,15 +114,15 @@ Deferred to future work / paper extensions.
 | FLOW-03 | Phase 5 | Pending |
 | FLOW-04 | Phase 5 | Pending |
 | FLOW-05 | Phase 4 | Pending |
-| ARCH-01 | Phase 3 | Pending |
-| ARCH-02 | Phase 3 | Pending |
+| ARCH-01 | Phase 3 | Complete |
+| ARCH-02 | Phase 3 | Complete |
 | ARCH-03 | Phase 6 | Pending |
 | ARCH-04 | Phase 6 | Pending |
 | ARCH-05 | Phase 6 | Pending |
-| TRAIN-01 | Phase 2 | Pending |
-| TRAIN-02 | Phase 2 | Pending |
-| TRAIN-03 | Phase 2 | Pending |
-| TRAIN-04 | Phase 2 | Pending |
+| TRAIN-01 | Phase 2 | Complete |
+| TRAIN-02 | Phase 2 | Complete |
+| TRAIN-03 | Phase 2 | Complete |
+| TRAIN-04 | Phase 2 | Complete |
 | TRAIN-05 | Phase 10 | Pending |
 | GUIDE-01 | Phase 8 | Pending |
 | GUIDE-02 | Phase 8 | Pending |

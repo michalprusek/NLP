@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Data Pipeline** - Dataset generation, splits, normalization, SONAR decoder verification
 - [x] **Phase 2: Training Infrastructure** - Training loop, checkpointing, experiment tracking, GPU config
-- [ ] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
+- [x] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
 - [ ] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
 - [ ] **Phase 5: Advanced Flow Methods** - Rectified Flow and Stochastic Interpolants
 - [ ] **Phase 6: Advanced Architectures** - U-Net MLP, Mamba, and scaled variants
@@ -72,7 +72,7 @@ Plans:
 Plans:
 - [x] 03-01-PLAN.md - Simple MLP implementation with model factory
 - [x] 03-02-PLAN.md - DiT port from ecoflow and verification
-- [ ] 03-03-PLAN.md - Reconstruction MSE and text generation verification (gap closure)
+- [x] 03-03-PLAN.md - Reconstruction MSE and text generation verification (gap closure)
 
 ### Phase 4: Flow Matching Baselines
 **Goal**: I-CFM and OT-CFM flow matching methods working with baseline architectures
@@ -218,7 +218,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 |-------|----------------|--------|-----------|
 | 1. Data Pipeline | 2/2 | Complete | 2026-02-01 |
 | 2. Training Infrastructure | 2/2 | Complete | 2026-02-01 |
-| 3. Baseline Architectures | 2/3 | In progress | - |
+| 3. Baseline Architectures | 3/3 | Complete | 2026-02-01 |
 | 4. Flow Matching Baselines | 0/3 | Not started | - |
 | 5. Advanced Flow Methods | 0/2 | Not started | - |
 | 6. Advanced Architectures | 0/3 | Not started | - |
