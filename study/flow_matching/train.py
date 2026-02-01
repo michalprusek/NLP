@@ -186,6 +186,12 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Gaussian noise std (overrides --aug default, 0=disabled)",
     )
+    parser.add_argument(
+        "--dropout-rate",
+        type=float,
+        default=0.0,
+        help="Dimension dropout rate (0.0 = disabled, recommended 0.1)",
+    )
 
     # Resume training
     parser.add_argument(
@@ -250,6 +256,7 @@ def main() -> None:
             si_schedule=args.schedule if args.flow.startswith("si") else "gvp",
             mixup_alpha=args.mixup_alpha,
             noise_std=args.noise_std,
+            dropout_rate=args.dropout_rate,
         )
 
         logger.info(f"Run name: {config.run_name}")
