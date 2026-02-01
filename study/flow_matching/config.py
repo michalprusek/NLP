@@ -39,10 +39,10 @@ class TrainingConfig:
 
     # Experiment identification
     arch: str
-    flow: str
-    dataset: str
-    aug: str
-    group: str
+    flow: str = "icfm"  # Default to I-CFM for backward compatibility
+    dataset: str = ""
+    aug: str = ""
+    group: str = ""
 
     # Training parameters (configurable)
     epochs: int = 100
@@ -56,6 +56,11 @@ class TrainingConfig:
     patience: int = field(default=20, repr=False)
     min_delta: float = field(default=0.0, repr=False)
     val_frequency: int = field(default=1, repr=False)
+
+    # OT-CFM specific parameters (only used when flow='otcfm')
+    otcfm_sigma: float = field(default=0.0, repr=False)
+    otcfm_reg: float = field(default=0.5, repr=False)
+    otcfm_normalize_cost: bool = field(default=True, repr=False)
 
     # Paths
     checkpoint_dir: str = "study/checkpoints"
@@ -83,6 +88,9 @@ class TrainingConfig:
             "patience": self.patience,
             "min_delta": self.min_delta,
             "val_frequency": self.val_frequency,
+            "otcfm_sigma": self.otcfm_sigma,
+            "otcfm_reg": self.otcfm_reg,
+            "otcfm_normalize_cost": self.otcfm_normalize_cost,
             "checkpoint_dir": self.checkpoint_dir,
             "stats_path": self.stats_path,
             "run_name": self.run_name,

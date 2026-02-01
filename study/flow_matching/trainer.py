@@ -22,6 +22,7 @@ from torch.optim import AdamW
 
 from study.data.dataset import FlowDataset, create_dataloader
 from study.flow_matching.config import TrainingConfig
+from study.flow_matching.coupling import create_coupling
 from study.flow_matching.utils import (
     EarlyStopping,
     EMAModel,
@@ -100,9 +101,20 @@ class FlowTrainer:
         self._setup()
 
     def _setup(self) -> None:
-        """Initialize optimizer, scheduler, EMA, early stopping, data loaders, and Wandb."""
+        """Initialize optimizer, scheduler, EMA, coupling, early stopping, data loaders, and Wandb."""
         # Create EMA after model is on device
         self.ema = EMAModel(self.model, decay=self.config.ema_decay)
+
+        # Create coupling method based on config
+        coupling_kwargs = {}
+        if self.config.flow == "otcfm":
+            coupling_kwargs = {
+                "sigma": self.config.otcfm_sigma,
+                "reg": self.config.otcfm_reg,
+                "normalize_cost": self.config.otcfm_normalize_cost,
+            }
+        self.coupling = create_coupling(self.config.flow, **coupling_kwargs)
+        logger.info(f"Using {self.config.flow} coupling method")
 
         # Create optimizer
         self.optimizer = AdamW(
@@ -201,15 +213,8 @@ class FlowTrainer:
             # Sample noise (source distribution)
             x0 = torch.randn_like(x1)
 
-            # Sample time uniformly
-            t = torch.rand(x1.shape[0], device=self.device)
-
-            # Interpolate: x_t = (1-t)*x0 + t*x1
-            t_unsqueeze = t.unsqueeze(-1)
-            x_t = (1 - t_unsqueeze) * x0 + t_unsqueeze * x1
-
-            # Target velocity: v = x1 - x0
-            v_target = x1 - x0
+            # Get interpolated samples and target velocity from coupling
+            t, x_t, v_target = self.coupling.sample(x0, x1)
 
             # Forward pass
             v_pred = self.model(x_t, t)
@@ -279,15 +284,8 @@ class FlowTrainer:
             # Sample noise
             x0 = torch.randn_like(x1)
 
-            # Sample time
-            t = torch.rand(x1.shape[0], device=self.device)
-
-            # Interpolate
-            t_unsqueeze = t.unsqueeze(-1)
-            x_t = (1 - t_unsqueeze) * x0 + t_unsqueeze * x1
-
-            # Target velocity
-            v_target = x1 - x0
+            # Get interpolated samples and target velocity from coupling
+            t, x_t, v_target = self.coupling.sample(x0, x1)
 
             # Forward pass
             v_pred = self.model(x_t, t)
