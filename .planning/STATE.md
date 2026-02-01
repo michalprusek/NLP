@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 5 - Advanced Flow Methods (ready to start)
+**Current focus:** Phase 5 - Advanced Flow Methods (in progress)
 
 ## Current Position
 
-Phase: 4 of 11 (Flow Matching Baselines) - COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed 04-03-PLAN.md (CFG-Zero* guidance)
+Phase: 5 of 11 (Advanced Flow Methods)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 05-01-PLAN.md (Reflow/Rectified Flow)
 
-Progress: [████████░░] 42%
+Progress: [████████░░] 46%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 10
-- Average duration: 19 min
-- Total execution time: 3.1 hours
+- Total plans completed: 11
+- Average duration: 18 min
+- Total execution time: 3.2 hours
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [████████░░] 42%
 | 02-training-infrastructure | 2 | 9min | 5min |
 | 03-baseline-architectures | 3 | 10min | 3min |
 | 04-flow-matching-baselines | 3 | 12min | 4min |
+| 05-advanced-flow-methods | 1 | 5min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 03-03 (4min), 04-01 (5min), 04-02 (4min), 04-03 (3min)
-- Trend: Fast execution continues (guidance + verification)
+- Last 5 plans: 04-01 (5min), 04-02 (4min), 04-03 (3min), 05-01 (5min)
+- Trend: Fast execution continues
 
 *Updated after each plan completion*
 
@@ -75,6 +76,8 @@ Recent decisions affecting current work:
 - Path straightness similar for both methods (~0.0016 deviation) on small MLP (04-02/04-03)
 - CFG-Zero* uses 4% zero-init fraction matching ecoflow/guided_flow.py (04-03)
 - Gradient clipping at max_grad_norm=10.0 for guidance stability (04-03)
+- Reflow uses 10K pairs (10x dataset) from OT-CFM teacher (05-01)
+- Reflow pairs cached at study/datasets/reflow_pairs_1k.pt (05-01)
 
 ### Pending Todos
 
@@ -90,9 +93,33 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 10:20 UTC
-Stopped at: Completed 04-03-PLAN.md (Phase 4 complete)
+Last session: 2026-02-01 11:34 UTC
+Stopped at: Completed 05-01-PLAN.md (Reflow)
 Resume file: None
+
+## Phase 5 Progress
+
+**Phase 5 in progress.** Advanced flow methods.
+
+Delivered (05-01):
+- ReflowPairGenerator for synthetic pair generation via teacher ODE
+- ReflowCoupling for training on pre-generated pairs
+- Training script study/flow_matching/reflow/train_reflow.py
+- 2-rectified flow checkpoint: study/checkpoints/mlp-reflow-1k-none/best.pt
+- Path straightness 3.1x better than I-CFM (0.00052 vs 0.0016)
+
+**Reflow results (100 epochs, 10K pairs from OT-CFM teacher):**
+| Metric | Reflow | I-CFM | OT-CFM |
+|--------|--------|-------|--------|
+| Train Loss | 0.000038 | 2.008 | 1.841 |
+| Mean Path Dev | 0.00052 | 0.0016 | 0.0016 |
+| Text Quality | Coherent | Coherent | Coherent |
+
+**Key finding:** Reflow produces significantly straighter paths (3x) by training on deterministically coupled pairs from the teacher.
+
+Remaining plans:
+- 05-02: Stochastic Interpolant with GVP schedule
+- 05-03: Minibatch OT coupling
 
 ## Phase 4 Summary (COMPLETE)
 
