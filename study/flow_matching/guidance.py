@@ -78,7 +78,7 @@ def guided_euler_ode_integrate(
         grad_clip_norm: Maximum norm for guidance gradient clipping.
         show_progress: Whether to show tqdm progress bar.
         velocity_scale: Scale factor for model output (for SI-GVP trained with
-                       normalized loss, use pi/2 ≈ 1.57 to un-normalize).
+                       normalized loss, use pi/(2*sqrt(2)) ≈ 1.11 to un-normalize).
 
     Returns:
         x1: Points at t=1, shape [N, D].

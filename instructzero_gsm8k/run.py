@@ -266,7 +266,7 @@ class InstructZeroGSM8K:
         exemplars = []
         for idx in example_indices:
             item = self.evaluator.dataset[idx]
-            exemplars.append(f"Q: {item['question']}\nA: {item['answer'][:150]}...")
+            exemplars.append(f"Q: {item['question']}\nA: {item['answer']}")
         demo_text = "\n\n".join(exemplars)
 
         # Use z to select instruction focus (z[3:6])
@@ -416,7 +416,8 @@ Instruction:"""
             Y.append(accuracy)
             Y_scores.append(scores)
 
-            logger.info(f"Seed {i+1}: acc={accuracy:.3f} - {instruction[:80]}...")
+            logger.info(f"Seed {i+1}: acc={accuracy:.3f}")
+            logger.info(f"  Instruction: {instruction}")
 
             if accuracy > self.best_score:
                 self.best_score = accuracy

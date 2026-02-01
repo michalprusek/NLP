@@ -197,7 +197,7 @@ class InstructZeroLoop:
 
             if self.verbose:
                 logger.info(f"Seed {i+1}/{n_seeds}: acc={score:.3f}")
-                logger.info(f"  {instruction[:80]}...")
+                logger.info(f"  {instruction}")
 
             if score > self.best_score:
                 self.best_score = score
@@ -221,7 +221,7 @@ class InstructZeroLoop:
 
                 if self.verbose:
                     logger.info(f"Random {i+1}/{n_random}: acc={score:.3f}")
-                    logger.info(f"  {instruction[:80]}...")
+                    logger.info(f"  {instruction}")
 
                 if score > self.best_score:
                     self.best_score = score
@@ -297,7 +297,7 @@ class InstructZeroLoop:
 
                 if self.verbose:
                     logger.info(f"Candidate {i+1}/{self.batch_size}: acc={score:.3f}")
-                    logger.info(f"  {instruction[:100]}...")
+                    logger.info(f"  {instruction}")
 
                 # Track best
                 if score > self.best_score:

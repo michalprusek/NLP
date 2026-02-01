@@ -416,7 +416,8 @@ def benchmark_solvers(
                 "mse": mse,
                 "max_error": max_error,
                 "time_seconds": elapsed,
-                "nfe": n_steps if solver_name in ["euler"] else n_steps * 2,  # Function evals
+                # NFE varies by solver: euler=1/step, heun=2/step, rk4=4/step, dpm++=1/step (multistep)
+                "nfe": n_steps * {"euler": 1, "heun": 2, "rk4": 4, "dpm++": 1, "dpm_solver_pp": 1}.get(solver_name, 2),
             }
 
             logger.info(

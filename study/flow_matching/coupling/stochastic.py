@@ -12,9 +12,9 @@ This allows for variance-preserving schedules (GVP) that can improve
 sample quality, especially for high-dimensional data.
 
 Loss normalization (from code review):
-For GVP schedule, the velocity target has magnitude (pi/2)^2 ≈ 2.47 times larger
-than I-CFM. To make validation losses comparable across methods, we normalize
-the velocity target by (pi/2) so E[||u_t||^2] matches I-CFM.
+For GVP schedule, the velocity coefficient (pi/2) results in ~1.23x larger target
+variance compared to I-CFM. To make validation losses comparable across methods,
+we normalize the velocity target by pi/(2*sqrt(2)) ≈ 1.11 so E[||u_t||^2] matches I-CFM.
 """
 
 import math
@@ -41,8 +41,9 @@ class StochasticInterpolantCoupling:
     - 'gvp': Variance-preserving (alpha=cos, sigma=sin) - better for some tasks
 
     Loss normalization:
-    For GVP schedule, the velocity magnitude is (pi/2) times larger than I-CFM.
-    We normalize by this factor so validation losses are comparable across methods.
+    For GVP schedule, the velocity variance is ~1.23x larger than I-CFM due to
+    the (pi/2) coefficient in alpha_dot and sigma_dot. We normalize by
+    pi/(2*sqrt(2)) ≈ 1.11 so validation losses are comparable across methods.
     This is a training convenience and doesn't affect the learned dynamics
     (the model learns the normalized velocity, and we un-normalize at inference).
 
@@ -57,9 +58,10 @@ class StochasticInterpolantCoupling:
     """
 
     # Normalization factors for each schedule (to match I-CFM loss scale)
-    # I-CFM target variance: E[||x1-x0||^2] = 2D
-    # GVP target variance: E[||alpha_dot*x0 + sigma_dot*x1||^2] = (pi/2)^2 * D ≈ 2.47D
-    # To match: scale = sqrt((pi/2)^2 / 2) = pi / (2*sqrt(2)) ≈ 1.11
+    # I-CFM target variance: E[||x1-x0||^2] = 2D (when x0, x1 ~ N(0,I))
+    # GVP: alpha_dot^2 + sigma_dot^2 = (pi/2)^2 (cos^2 + sin^2) = (pi/2)^2 ≈ 2.47
+    # GVP target variance: E[||u_t||^2] ≈ (pi/2)^2 / 2 * 2D ≈ 2.47D (averaged over t)
+    # To match I-CFM: scale = sqrt(2.47D / 2D) = pi / (2*sqrt(2)) ≈ 1.11
     # Linear: alpha_dot=-1, sigma_dot=1, variance = 2D (same as I-CFM)
     VELOCITY_SCALE = {
         "linear": 1.0,

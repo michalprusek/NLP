@@ -76,9 +76,15 @@ def compare_methods(
         try:
             from ecoflow.decoder import SonarDecoder
             decoder = SonarDecoder(device=device)
-        except Exception as e:
-            logger.warning(f"Could not initialize decoder: {e}")
+        except ImportError as e:
+            logger.error(f"SonarDecoder unavailable - missing dependencies: {e}")
             generate_text = False
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+            logger.error(f"Failed to initialize decoder on {device} - GPU/CUDA error: {e}")
+            generate_text = False
+        except Exception as e:
+            logger.error(f"Unexpected error initializing decoder: {type(e).__name__}: {e}")
+            raise  # Re-raise unexpected errors for debugging
 
     results = {}
     for name, checkpoint_path in CHECKPOINTS.items():
@@ -118,15 +124,26 @@ def compare_methods(
                         model, stats, decoder, n_samples=text_samples, n_steps=n_steps, device=device
                     )
                     results[name]["texts"] = texts
+                except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+                    logger.warning(f"Text generation failed for {name} (GPU error): {e}")
+                    results[name]["texts"] = []
                 except Exception as e:
-                    logger.warning(f"Text generation failed for {name}: {e}")
+                    logger.warning(f"Text generation failed for {name}: {type(e).__name__}: {e}")
                     results[name]["texts"] = []
 
             logger.info(f"{name}: MSE={results[name]['mse']:.4f}, PathDev={results[name]['path_dev']:.4f}")
 
-        except Exception as e:
-            logger.error(f"Failed to evaluate {name}: {e}")
+        except (FileNotFoundError, KeyError) as e:
+            logger.error(f"Failed to load checkpoint for {name}: {e}")
             continue
+        except torch.cuda.OutOfMemoryError as e:
+            logger.error(f"Out of GPU memory evaluating {name}: {e}. Try reducing n_samples.")
+            continue
+        except Exception as e:
+            import traceback
+            logger.error(f"Unexpected error evaluating {name}: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
+            raise  # Re-raise unexpected errors for debugging
 
     return results
 

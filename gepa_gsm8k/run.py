@@ -150,7 +150,7 @@ class VLLMChatWrapper:
             raise
 
         if self.call_count <= 5:
-            logger.info(f"Response #{self.call_count}: {response[:100]}...")
+            logger.info(f"Response #{self.call_count}:\n{response}")
 
         return response
 

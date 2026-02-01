@@ -12,6 +12,7 @@ Provides FlowTrainer class that orchestrates training with:
 """
 
 import logging
+import pickle
 import traceback
 from typing import Dict, Optional
 
@@ -19,7 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import wandb
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 
 from study.data.augmentation import AugmentationConfig, augment_batch
@@ -282,7 +283,7 @@ class FlowTrainer:
             t, x_t, v_target = self.coupling.sample(x0, x1)
 
             # Forward pass with optional AMP
-            with autocast(enabled=self.use_amp):
+            with autocast('cuda', enabled=self.use_amp):
                 v_pred = self.model(x_t, t)
                 # MSE loss
                 loss = F.mse_loss(v_pred, v_target)
@@ -365,7 +366,7 @@ class FlowTrainer:
                 t, x_t, v_target = self.coupling.sample(x0, x1)
 
                 # Forward pass with optional AMP
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     v_pred = self.model(x_t, t)
                     loss = F.mse_loss(v_pred, v_target)
 
@@ -426,7 +427,7 @@ class FlowTrainer:
                 x1 = x1.to(self.device)
                 x0 = torch.randn_like(x1)
                 t, x_t, v_target = self.coupling.sample(x0, x1)
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     v_pred = self.model(x_t, t)
                     loss = F.mse_loss(v_pred, v_target)
                 total_loss += loss.item()
@@ -535,8 +536,18 @@ class FlowTrainer:
                                     map_location="cpu",
                                     weights_only=True,
                                 )
+                            except FileNotFoundError:
+                                logger.error(
+                                    f"Stats file not found: {self.config.stats_path}. "
+                                    "Checkpoint will be saved without normalization stats."
+                                )
+                            except (RuntimeError, pickle.UnpicklingError) as e:
+                                logger.error(
+                                    f"Failed to load stats (corrupted file?): {e}. "
+                                    "Checkpoint will be saved without stats."
+                                )
                             except Exception as e:
-                                logger.warning(f"Could not load stats for checkpoint: {e}")
+                                logger.error(f"Unexpected error loading stats: {type(e).__name__}: {e}")
 
                         save_checkpoint(
                             path=self._checkpoint_path,
