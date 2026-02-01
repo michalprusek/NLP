@@ -24,7 +24,6 @@ Usage:
 import argparse
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -77,6 +76,8 @@ class SampleComplexityResult:
 
     def extrapolate(self, target_loss: float) -> int:
         """Estimate dataset size needed to achieve target loss."""
+        if self.alpha == 0:
+            raise ValueError("Cannot extrapolate with alpha=0 (no scaling relationship)")
         # loss = C * N^(-alpha)  =>  N = (loss / C)^(-1/alpha)
         return int(np.power(target_loss / np.exp(self.log_c), -1 / self.alpha))
 
@@ -517,8 +518,8 @@ def compare_scaling_laws(
             result = analyze_checkpoints(checkpoints)
             results[config] = result
             logger.info(f"\n{config}: α={result.alpha:.4f}, R²={result.r_squared:.4f}")
-        except Exception as e:
-            logger.warning(f"Failed to analyze {config}: {e}")
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Skipping {config}: {e}")
 
     # Generate comparison plot
     if output_path and results:

@@ -9,9 +9,12 @@ Augmentation happens BEFORE coupling.sample().
 Order of operations: mixup -> noise -> dropout (as per research).
 """
 
+import logging
 from dataclasses import dataclass
 
 import torch
+
+logger = logging.getLogger(__name__)
 import torch.nn.functional as F
 from torch import Tensor
 
@@ -174,4 +177,7 @@ def parse_aug_string(aug: str) -> AugmentationConfig:
     Returns:
         AugmentationConfig with appropriate parameter values.
     """
+    if aug not in _AUG_PRESETS:
+        available = ", ".join(sorted(_AUG_PRESETS.keys()))
+        logger.warning(f"Unknown augmentation '{aug}', using no augmentation. Available: {available}")
     return _AUG_PRESETS.get(aug, AugmentationConfig())

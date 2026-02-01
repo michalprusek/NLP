@@ -12,6 +12,7 @@ Provides FlowTrainer class that orchestrates training with:
 """
 
 import logging
+import pickle
 import traceback
 from typing import Dict, Optional
 
@@ -129,8 +130,14 @@ class FlowTrainer:
             return None
         try:
             return torch.load(self.config.stats_path, map_location="cpu", weights_only=True)
-        except Exception as e:
-            logger.error(f"Failed to load stats for checkpoint: {e}")
+        except FileNotFoundError:
+            logger.warning(
+                f"Stats file not found: {self.config.stats_path}. "
+                "Checkpoint will be saved without normalization stats."
+            )
+            return None
+        except (RuntimeError, pickle.UnpicklingError) as e:
+            logger.error(f"Failed to load stats (corrupted file?): {e}")
             return None
 
     def _create_aug_config(self) -> Optional[AugmentationConfig]:
