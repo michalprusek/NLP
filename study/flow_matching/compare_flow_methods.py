@@ -16,6 +16,7 @@ Usage:
 import argparse
 import logging
 import os
+import pickle
 from typing import Optional
 
 import torch
@@ -66,8 +67,19 @@ def compare_methods(
         Dictionary with results for each method.
     """
     # Load test data
-    test_data = torch.load("study/datasets/splits/1k/test.pt", weights_only=False)
-    test_embeddings = test_data["embeddings"]
+    test_path = "study/datasets/splits/1k/test.pt"
+    try:
+        test_data = torch.load(test_path, weights_only=False)
+        test_embeddings = test_data["embeddings"]
+    except FileNotFoundError:
+        logger.error(f"Test data not found: {test_path}. Run data preparation first.")
+        raise
+    except KeyError as e:
+        logger.error(f"Test data missing required key {e}. Check data format in {test_path}")
+        raise
+    except (RuntimeError, pickle.UnpicklingError) as e:
+        logger.error(f"Failed to load test data (corrupted or incompatible): {e}")
+        raise
     logger.info(f"Loaded {len(test_embeddings)} test embeddings")
 
     # Initialize decoder if generating text
