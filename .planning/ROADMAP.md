@@ -131,11 +131,11 @@ Plans:
   2. Gaussian noise injection augments training data
   3. Dimension dropout/masking augments training data
   4. Augmented training improves generalization (lower val loss)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: Mixup and noise injection
-- [ ] 07-02: Dimension dropout and integration
+- [ ] 07-01-PLAN.md - Mixup and noise injection with trainer integration
+- [ ] 07-02-PLAN.md - Dimension dropout and ablation validation
 
 ### Phase 8: GP-Guided Sampling
 **Goal**: Full GP-UCB guided sampling pipeline with adaptive guidance
