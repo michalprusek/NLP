@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Training Infrastructure** - Training loop, checkpointing, experiment tracking, GPU config
 - [x] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
 - [x] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
-- [ ] **Phase 5: Advanced Flow Methods** - Rectified Flow and Stochastic Interpolants
+- [x] **Phase 5: Advanced Flow Methods** - Rectified Flow and Stochastic Interpolants
 - [ ] **Phase 6: Advanced Architectures** - U-Net MLP, Mamba, and scaled variants
 - [ ] **Phase 7: Data Augmentation** - Mixup, noise injection, dimension dropout
 - [ ] **Phase 8: GP-Guided Sampling** - UCB gradient injection, adaptive guidance, manifold projection
@@ -103,8 +103,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01-PLAN.md - Rectified Flow with reflow pair generation and training
-- [ ] 05-02-PLAN.md - Stochastic Interpolants with GVP schedule and phase comparison
+- [x] 05-01-PLAN.md - Rectified Flow with reflow pair generation and training
+- [x] 05-02-PLAN.md - Stochastic Interpolants with GVP schedule and phase comparison
 
 ### Phase 6: Advanced Architectures
 **Goal**: U-Net MLP, Mamba, and scaled variants implemented for ablation
@@ -220,7 +220,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 | 2. Training Infrastructure | 2/2 | Complete | 2026-02-01 |
 | 3. Baseline Architectures | 3/3 | Complete | 2026-02-01 |
 | 4. Flow Matching Baselines | 3/3 | Complete | 2026-02-01 |
-| 5. Advanced Flow Methods | 0/2 | Not started | - |
+| 5. Advanced Flow Methods | 2/2 | Complete | 2026-02-01 |
 | 6. Advanced Architectures | 0/3 | Not started | - |
 | 7. Data Augmentation | 0/2 | Not started | - |
 | 8. GP-Guided Sampling | 0/2 | Not started | - |
@@ -230,4 +230,4 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 ---
 *Roadmap created: 2026-01-31*
-*Last updated: 2026-02-01 (Phase 4 complete)*
+*Last updated: 2026-02-01 (Phase 5 complete)*

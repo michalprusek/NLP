@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 5 - Advanced Flow Methods (in progress)
+**Current focus:** Phase 6 - Advanced Architectures (ready to start)
 
 ## Current Position
 
-Phase: 5 of 11 (Advanced Flow Methods)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-01 -- Completed 05-02-PLAN.md (Stochastic Interpolants)
+Phase: 5 of 11 (Advanced Flow Methods) - COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed Phase 5 execution
 
-Progress: [████████░░] 50%
+Progress: [█████████░] 50%
 
 ## Performance Metrics
 
@@ -80,7 +80,7 @@ Recent decisions affecting current work:
 - Reflow pairs cached at study/datasets/reflow_pairs_1k.pt (05-01)
 - GVP schedule (cos/sin) is variance-preserving: alpha^2 + sigma^2 = 1 (05-02)
 - SI velocity target is alpha_dot*x0 + sigma_dot*x1, NOT x1-x0 (05-02)
-- Reflow produces 3x straighter paths than other methods (05-02)
+- Reflow produces 3x straighter paths than other methods (0.0005 vs 0.0015) (05-02)
 
 ### Pending Todos
 
@@ -96,20 +96,20 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 11:35 UTC
-Stopped at: Completed 05-02-PLAN.md (Stochastic Interpolants)
+Last session: 2026-02-01 12:35 UTC
+Stopped at: Completed Phase 5 (Advanced Flow Methods)
 Resume file: None
 
-## Phase 5 Progress
+## Phase 5 Summary (COMPLETE)
 
-**Phase 5 in progress.** Advanced flow methods.
+**Phase 5 complete.** Advanced flow methods implemented and compared.
 
 Delivered (05-01):
 - ReflowPairGenerator for synthetic pair generation via teacher ODE
 - ReflowCoupling for training on pre-generated pairs
 - Training script study/flow_matching/reflow/train_reflow.py
 - 2-rectified flow checkpoint: study/checkpoints/mlp-reflow-1k-none/best.pt
-- Path straightness 3.1x better than I-CFM (0.00052 vs 0.0016)
+- Path straightness 3x better than I-CFM (0.00052 vs 0.0016)
 
 Delivered (05-02):
 - Schedule module with linear and GVP interpolation (study/flow_matching/schedules.py)
@@ -125,14 +125,19 @@ Delivered (05-02):
 | Reflow | 0.9923 | 0.000521 | 0.001036 |
 | SI-GVP | 1.0006 | 0.001556 | 0.003182 |
 
+**Phase 5 success criteria - ALL VERIFIED:**
+1. [x] Rectified Flow reflow procedure runs on trained I-CFM model
+2. [x] Reflow produces straighter paths (3x improvement: 0.0005 vs 0.0015)
+3. [x] Stochastic Interpolants with learnable interpolation trains
+4. [x] All flow methods produce comparable sample quality
+
 **Key findings:**
 1. Reflow produces 3x straighter paths (0.0005 vs 0.0015)
 2. All methods have similar distribution MSE (~1.0)
 3. SI-GVP offers no advantage over I-CFM for SONAR embeddings
 4. All methods generate coherent text
 
-Remaining plans:
-- 05-03: Minibatch OT coupling
+Ready for: Phase 6 (Advanced Architectures), Phase 7 (Data Augmentation), Phase 8 (GP-Guided Sampling)
 
 ## Phase 4 Summary (COMPLETE)
 
@@ -163,13 +168,4 @@ Delivered (04-03):
 | I-CFM | 2.008 | 0.0016 | Coherent |
 | OT-CFM | 1.841 | 0.0016 | Coherent |
 
-**Phase 4 success criteria - ALL VERIFIED:**
-1. [x] I-CFM trains with independent coupling
-2. [x] OT-CFM trains with Sinkhorn coupling
-3. [x] Path straightness measured and compared
-4. [x] CFG-Zero* zeros first 4% of steps
-5. [x] Both methods generate valid SONAR embeddings
-
 **Key finding:** OT-CFM's benefit at this scale is training efficiency (lower loss), not straighter paths. Both methods produce very straight paths (~0.0016 deviation).
-
-Ready for: Phase 5 (Advanced Flow Methods) and Phase 8 (GP-Guided Sampling)
