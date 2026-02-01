@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
 - [x] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
 - [x] **Phase 5: Advanced Flow Methods** - Rectified Flow and Stochastic Interpolants
-- [ ] **Phase 6: Advanced Architectures** - U-Net MLP, Mamba, and scaled variants
+- [x] **Phase 6: Advanced Architectures** - U-Net MLP, Mamba, and scaled variants
 - [ ] **Phase 7: Data Augmentation** - Mixup, noise injection, dimension dropout
 - [ ] **Phase 8: GP-Guided Sampling** - UCB gradient injection, adaptive guidance, manifold projection
 - [ ] **Phase 9: Evaluation Suite** - Metrics implementation and statistical infrastructure
@@ -118,9 +118,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01-PLAN.md - U-Net MLP with FiLM time conditioning
-- [ ] 06-02-PLAN.md - Mamba velocity network (experimental, graceful fallback)
-- [ ] 06-03-PLAN.md - Architecture scaling variants (Tiny/Small/Base)
+- [x] 06-01-PLAN.md - U-Net MLP with FiLM time conditioning
+- [x] 06-02-PLAN.md - Mamba velocity network (experimental, graceful fallback)
+- [x] 06-03-PLAN.md - Architecture scaling variants (Tiny/Small/Base)
 
 ### Phase 7: Data Augmentation
 **Goal**: Three augmentation strategies implemented and tested
@@ -221,7 +221,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 | 3. Baseline Architectures | 3/3 | Complete | 2026-02-01 |
 | 4. Flow Matching Baselines | 3/3 | Complete | 2026-02-01 |
 | 5. Advanced Flow Methods | 2/2 | Complete | 2026-02-01 |
-| 6. Advanced Architectures | 0/3 | Not started | - |
+| 6. Advanced Architectures | 3/3 | Complete | 2026-02-01 |
 | 7. Data Augmentation | 0/2 | Not started | - |
 | 8. GP-Guided Sampling | 0/2 | Not started | - |
 | 9. Evaluation Suite | 0/3 | Not started | - |
@@ -230,4 +230,4 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 ---
 *Roadmap created: 2026-01-31*
-*Last updated: 2026-02-01 (Phase 5 complete)*
+*Last updated: 2026-02-01 (Phase 6 complete)*
