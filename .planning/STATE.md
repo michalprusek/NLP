@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 4 of 11 (Flow Matching Baselines)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-01 -- Completed 04-01-PLAN.md (Coupling abstraction)
+Last activity: 2026-02-01 -- Completed 04-02-PLAN.md (OT-CFM training and path straightness)
 
-Progress: [████████░░] 36%
+Progress: [████████░░] 39%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
-- Average duration: 22 min
-- Total execution time: 2.8 hours
+- Total plans completed: 9
+- Average duration: 20 min
+- Total execution time: 2.9 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [████████░░] 36%
 | 01-data-pipeline | 2 | 133min | 67min |
 | 02-training-infrastructure | 2 | 9min | 5min |
 | 03-baseline-architectures | 3 | 10min | 3min |
-| 04-flow-matching-baselines | 1 | 5min | 5min |
+| 04-flow-matching-baselines | 2 | 9min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 03-01 (2min), 03-02 (4min), 03-03 (4min), 04-01 (5min)
-- Trend: Fast execution continues (coupling abstraction)
+- Last 5 plans: 03-02 (4min), 03-03 (4min), 04-01 (5min), 04-02 (4min)
+- Trend: Fast execution continues (evaluation + training)
 
 *Updated after each plan completion*
 
@@ -71,7 +71,9 @@ Recent decisions affecting current work:
 - Key quality metric is coherent text generation, not reconstruction MSE (03-03)
 - OT-CFM uses OTPlanSampler with method='exact', reg=0.5, normalize_cost=True (04-01)
 - Factory pattern for coupling selection: create_coupling(method) (04-01)
-- OT-CFM produces ~6% lower loss than I-CFM due to straighter paths (04-01)
+- OT-CFM produces ~8% lower val loss than I-CFM (1.841 vs 2.008) (04-02)
+- Path straightness similar for both methods (~0.0015 deviation) on small MLP (04-02)
+- OT-CFM's main advantage at small scale is training efficiency, not path geometry (04-02)
 
 ### Pending Todos
 
@@ -82,16 +84,17 @@ None.
 - GPU 0 (A100 80GB) unavailable during 01-01 execution, used GPU 1 (A5000 24GB) which is slower
 - 10K generation took longer than estimated (~114 min vs ~67 min) due to deduplication overhead
 - 2 samples (0.4%) failed round-trip verification - acceptable edge cases (mixed language, grammar reconstruction)
+- WANDB authentication missing - using WANDB_MODE=offline for training runs
 
 ## Session Continuity
 
-Last session: 2026-02-01 10:15 UTC
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-02-01 10:19 UTC
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
 
 ## Phase 4 Summary (IN PROGRESS)
 
-**Phase 4 started.** Implementing flow matching baselines.
+**Phase 4 in progress.** Implementing flow matching baselines.
 
 Delivered (04-01):
 - Coupling abstraction module (study/flow_matching/coupling/)
@@ -99,12 +102,18 @@ Delivered (04-01):
 - Factory function create_coupling() for method selection
 - FlowTrainer refactored to use coupling abstraction
 - OT-CFM config parameters (sigma, reg, normalize_cost)
-- Backward compatible: flow defaults to 'icfm'
 
-**Smoke test results (2 epochs, 1k):**
-| Method | Val Loss | Notes |
-|--------|----------|-------|
-| I-CFM | 2.011 | Baseline |
-| OT-CFM | 1.884 | ~6% lower |
+Delivered (04-02):
+- Path straightness evaluation function (compute_path_straightness)
+- OT-CFM checkpoint: study/checkpoints/mlp-otcfm-1k-none/best.pt
+- Quantitative comparison: OT-CFM ~8% lower loss, similar path geometry
 
-Next: 04-02 (Validation Strategies)
+**Full training results (100 epochs, 1k):**
+| Method | Val Loss | Mean Path Dev | Text Quality |
+|--------|----------|---------------|--------------|
+| I-CFM | 2.008 | 0.001560 | Coherent |
+| OT-CFM | 1.841 | 0.001555 | Coherent |
+
+**Key finding:** OT-CFM's benefit at this scale is training efficiency (lower loss), not straighter paths. Both methods produce very straight paths (~0.0015 deviation).
+
+Next: 04-03 (Architecture Comparison)
