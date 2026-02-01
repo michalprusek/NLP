@@ -24,10 +24,10 @@ import warnings
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 from study.data.dataset import load_all_splits
 from study.flow_matching.config import TrainingConfig
+from study.flow_matching.models import create_model
 from study.flow_matching.trainer import FlowTrainer
 
 # Configure logging
@@ -37,60 +37,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-
-class SimpleVelocityNet(nn.Module):
-    """Simple MLP velocity network for testing.
-
-    This is a placeholder model for testing the training pipeline.
-    Real models will be added in Phase 3.
-
-    Input: x_t (batch, 1024) + t (batch,)
-    Output: velocity (batch, 1024)
-    """
-
-    def __init__(self, dim: int = 1024, hidden: int = 512, num_layers: int = 3):
-        """Initialize simple velocity network.
-
-        Args:
-            dim: Input/output dimension (1024 for SONAR).
-            hidden: Hidden layer dimension.
-            num_layers: Number of hidden layers.
-        """
-        super().__init__()
-
-        # Time embedding
-        self.time_embed = nn.Sequential(
-            nn.Linear(1, hidden),
-            nn.SiLU(),
-            nn.Linear(hidden, hidden),
-        )
-
-        # Main network
-        layers = [nn.Linear(dim + hidden, hidden), nn.SiLU()]
-        for _ in range(num_layers - 1):
-            layers.extend([nn.Linear(hidden, hidden), nn.SiLU()])
-        layers.append(nn.Linear(hidden, dim))
-
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: Noisy input tensor (batch, 1024).
-            t: Time tensor (batch,) in [0, 1].
-
-        Returns:
-            Predicted velocity (batch, 1024).
-        """
-        # Embed time
-        t = t.unsqueeze(-1) if t.dim() == 1 else t
-        t_emb = self.time_embed(t)
-
-        # Concatenate and forward
-        h = torch.cat([x, t_emb], dim=-1)
-        return self.net(h)
 
 
 def set_seed(seed: int) -> None:
@@ -301,10 +247,10 @@ def main() -> None:
             f"Loaded datasets: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}"
         )
 
-        # Create model (placeholder - real models in Phase 3)
-        model = SimpleVelocityNet(dim=1024, hidden=512, num_layers=3)
+        # Create model via factory
+        model = create_model(args.arch)
         param_count = sum(p.numel() for p in model.parameters())
-        logger.info(f"Model parameters: {param_count:,}")
+        logger.info(f"Model: {args.arch}, Parameters: {param_count:,}")
 
         # Create trainer and run
         trainer = FlowTrainer(
