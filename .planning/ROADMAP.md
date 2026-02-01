@@ -115,12 +115,12 @@ Plans:
   2. Mamba/SSM velocity network trains (experimental)
   3. Tiny/Small/Base variants exist for dataset size scaling
   4. All architectures produce valid SONAR embeddings
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: U-Net MLP with FiLM conditioning
-- [ ] 06-02: Mamba velocity network (experimental)
-- [ ] 06-03: Architecture scaling variants
+- [ ] 06-01-PLAN.md - U-Net MLP with FiLM time conditioning
+- [ ] 06-02-PLAN.md - Mamba velocity network (experimental, graceful fallback)
+- [ ] 06-03-PLAN.md - Architecture scaling variants (Tiny/Small/Base)
 
 ### Phase 7: Data Augmentation
 **Goal**: Three augmentation strategies implemented and tested
