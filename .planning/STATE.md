@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 3 - Baseline Architectures (COMPLETE)
+**Current focus:** Phase 4 - Flow Matching Baselines
 
 ## Current Position
 
-Phase: 3 of 11 (Baseline Architectures)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed 03-03-PLAN.md (Gap closure: evaluation infrastructure)
+Phase: 4 of 11 (Flow Matching Baselines)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 04-01-PLAN.md (Coupling abstraction)
 
-Progress: [███████░░░] 32%
+Progress: [████████░░] 36%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
-- Average duration: 24 min
-- Total execution time: 2.7 hours
+- Total plans completed: 8
+- Average duration: 22 min
+- Total execution time: 2.8 hours
 
 **By Phase:**
 
@@ -30,10 +30,11 @@ Progress: [███████░░░] 32%
 | 01-data-pipeline | 2 | 133min | 67min |
 | 02-training-infrastructure | 2 | 9min | 5min |
 | 03-baseline-architectures | 3 | 10min | 3min |
+| 04-flow-matching-baselines | 1 | 5min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 02-02 (5min), 03-01 (2min), 03-02 (4min), 03-03 (4min)
-- Trend: Fast execution continues (model creation and verification)
+- Last 5 plans: 03-01 (2min), 03-02 (4min), 03-03 (4min), 04-01 (5min)
+- Trend: Fast execution continues (coupling abstraction)
 
 *Updated after each plan completion*
 
@@ -68,6 +69,9 @@ Recent decisions affecting current work:
 - Velocity prediction loss ~2.0 is expected for normalized ICFM training (03-02)
 - ICFM distribution MSE ~1.0 is expected (comparing generated to random targets) (03-03)
 - Key quality metric is coherent text generation, not reconstruction MSE (03-03)
+- OT-CFM uses OTPlanSampler with method='exact', reg=0.5, normalize_cost=True (04-01)
+- Factory pattern for coupling selection: create_coupling(method) (04-01)
+- OT-CFM produces ~6% lower loss than I-CFM due to straighter paths (04-01)
 
 ### Pending Todos
 
@@ -81,35 +85,26 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 09:39 UTC
-Stopped at: Completed 03-03-PLAN.md (Phase 3 complete)
+Last session: 2026-02-01 10:15 UTC
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
 
-## Phase 3 Summary (COMPLETE)
+## Phase 4 Summary (IN PROGRESS)
 
-**Phase 3 complete.** All baseline architectures trained and verified.
+**Phase 4 started.** Implementing flow matching baselines.
 
-Delivered (03-01):
-- SimpleMLP velocity network (~920K params)
-- Sinusoidal timestep embedding function
-- Model factory create_model() for CLI architecture selection
+Delivered (04-01):
+- Coupling abstraction module (study/flow_matching/coupling/)
+- ICFMCoupling and OTCFMCoupling classes
+- Factory function create_coupling() for method selection
+- FlowTrainer refactored to use coupling abstraction
+- OT-CFM config parameters (sigma, reg, normalize_cost)
+- Backward compatible: flow defaults to 'icfm'
 
-Delivered (03-02):
-- DiTVelocityNetwork (~9.3M params) with AdaLN-Zero conditioning
-- AdaLNBlock transformer block
-- Verified training and text generation for both architectures
-- Extended training shows stable optimization (best val loss: 2.003)
+**Smoke test results (2 epochs, 1k):**
+| Method | Val Loss | Notes |
+|--------|----------|-------|
+| I-CFM | 2.011 | Baseline |
+| OT-CFM | 1.884 | ~6% lower |
 
-Delivered (03-03):
-- evaluate.py with ODE integration and SONAR decoder integration
-- Verified all 3 checkpoints produce coherent English text
-- Clarified ICFM evaluation semantics (distribution MSE ~1.0 expected)
-
-**Verified checkpoints:**
-| Checkpoint | Architecture | Val Loss | Text Quality |
-|------------|--------------|----------|--------------|
-| mlp-icfm-1k-none | MLP | 2.008 | Coherent |
-| dit-icfm-1k-none | DiT | 2.008 | Coherent |
-| mlp-icfm-5k-none | MLP | 2.003 | Coherent |
-
-Next: Phase 4 - Loss Landscape Analysis
+Next: 04-02 (Validation Strategies)
