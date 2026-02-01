@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 5 of 11 (Advanced Flow Methods)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-01 -- Completed 05-01-PLAN.md (Reflow/Rectified Flow)
+Last activity: 2026-02-01 -- Completed 05-02-PLAN.md (Stochastic Interpolants)
 
-Progress: [████████░░] 46%
+Progress: [████████░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 11
-- Average duration: 18 min
-- Total execution time: 3.2 hours
+- Total plans completed: 12
+- Average duration: 17 min
+- Total execution time: 3.3 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: [████████░░] 46%
 | 02-training-infrastructure | 2 | 9min | 5min |
 | 03-baseline-architectures | 3 | 10min | 3min |
 | 04-flow-matching-baselines | 3 | 12min | 4min |
-| 05-advanced-flow-methods | 1 | 5min | 5min |
+| 05-advanced-flow-methods | 2 | 10min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 04-01 (5min), 04-02 (4min), 04-03 (3min), 05-01 (5min)
+- Last 5 plans: 04-02 (4min), 04-03 (3min), 05-01 (5min), 05-02 (5min)
 - Trend: Fast execution continues
 
 *Updated after each plan completion*
@@ -78,6 +78,9 @@ Recent decisions affecting current work:
 - Gradient clipping at max_grad_norm=10.0 for guidance stability (04-03)
 - Reflow uses 10K pairs (10x dataset) from OT-CFM teacher (05-01)
 - Reflow pairs cached at study/datasets/reflow_pairs_1k.pt (05-01)
+- GVP schedule (cos/sin) is variance-preserving: alpha^2 + sigma^2 = 1 (05-02)
+- SI velocity target is alpha_dot*x0 + sigma_dot*x1, NOT x1-x0 (05-02)
+- Reflow produces 3x straighter paths than other methods (05-02)
 
 ### Pending Todos
 
@@ -93,8 +96,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 11:34 UTC
-Stopped at: Completed 05-01-PLAN.md (Reflow)
+Last session: 2026-02-01 11:35 UTC
+Stopped at: Completed 05-02-PLAN.md (Stochastic Interpolants)
 Resume file: None
 
 ## Phase 5 Progress
@@ -108,17 +111,27 @@ Delivered (05-01):
 - 2-rectified flow checkpoint: study/checkpoints/mlp-reflow-1k-none/best.pt
 - Path straightness 3.1x better than I-CFM (0.00052 vs 0.0016)
 
-**Reflow results (100 epochs, 10K pairs from OT-CFM teacher):**
-| Metric | Reflow | I-CFM | OT-CFM |
-|--------|--------|-------|--------|
-| Train Loss | 0.000038 | 2.008 | 1.841 |
-| Mean Path Dev | 0.00052 | 0.0016 | 0.0016 |
-| Text Quality | Coherent | Coherent | Coherent |
+Delivered (05-02):
+- Schedule module with linear and GVP interpolation (study/flow_matching/schedules.py)
+- StochasticInterpolantCoupling with time-varying velocity target
+- SI-GVP trained model checkpoint: study/checkpoints/mlp-si-gvp-1k-none/best.pt
+- Comprehensive comparison script: study/flow_matching/compare_flow_methods.py
 
-**Key finding:** Reflow produces significantly straighter paths (3x) by training on deterministically coupled pairs from the teacher.
+**Full Flow Method Comparison (100 samples, 100 steps):**
+| Method | Dist MSE | Path Dev | Path Max |
+|--------|----------|----------|----------|
+| I-CFM | 0.9979 | 0.001541 | 0.003143 |
+| OT-CFM | 0.9986 | 0.001553 | 0.003250 |
+| Reflow | 0.9923 | 0.000521 | 0.001036 |
+| SI-GVP | 1.0006 | 0.001556 | 0.003182 |
+
+**Key findings:**
+1. Reflow produces 3x straighter paths (0.0005 vs 0.0015)
+2. All methods have similar distribution MSE (~1.0)
+3. SI-GVP offers no advantage over I-CFM for SONAR embeddings
+4. All methods generate coherent text
 
 Remaining plans:
-- 05-02: Stochastic Interpolant with GVP schedule
 - 05-03: Minibatch OT coupling
 
 ## Phase 4 Summary (COMPLETE)
