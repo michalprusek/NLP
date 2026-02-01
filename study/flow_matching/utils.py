@@ -1,15 +1,19 @@
 """Training utilities for flow matching experiments.
 
-Provides EarlyStopping, EMAModel, and cosine schedule with warmup.
+Provides EarlyStopping, EMAModel, cosine schedule with warmup, and checkpoint utilities.
 """
 
 import copy
+import logging
 import math
-from typing import Dict
+import os
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import LambdaLR
+
+logger = logging.getLogger(__name__)
 
 
 class EarlyStopping:
@@ -182,3 +186,229 @@ def get_cosine_schedule_with_warmup(
         return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
     return LambdaLR(optimizer, lr_lambda)
+
+
+# =============================================================================
+# Checkpoint Utilities
+# =============================================================================
+
+
+def get_checkpoint_path(run_name: str) -> str:
+    """Get checkpoint path for a run.
+
+    Args:
+        run_name: Run name (e.g., 'mlp-icfm-5k-none').
+
+    Returns:
+        Path to best checkpoint: study/checkpoints/{run_name}/best.pt
+    """
+    return f"study/checkpoints/{run_name}/best.pt"
+
+
+def save_checkpoint(
+    path: str,
+    epoch: int,
+    model: nn.Module,
+    ema: EMAModel,
+    optimizer: torch.optim.Optimizer,
+    scheduler: LambdaLR,
+    best_loss: float,
+    config: Dict[str, Any],
+    stats: Optional[Dict[str, torch.Tensor]] = None,
+) -> None:
+    """Save training checkpoint.
+
+    Saves all training state required for resumption:
+    - Model weights
+    - EMA shadow parameters
+    - Optimizer state
+    - Scheduler state
+    - Training progress
+
+    Args:
+        path: Path to save checkpoint.
+        epoch: Current training epoch (0-indexed).
+        model: Model being trained.
+        ema: EMA model wrapper.
+        optimizer: Optimizer with state.
+        scheduler: Learning rate scheduler.
+        best_loss: Best validation loss achieved.
+        config: Training configuration dict.
+        stats: Optional normalization stats for consistency verification.
+    """
+    # Create parent directory if needed
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "ema_shadow": ema.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "best_loss": best_loss,
+        "config": config,
+    }
+
+    # Include normalization stats if provided
+    if stats is not None:
+        checkpoint["normalization_stats"] = stats
+
+    # Save checkpoint
+    torch.save(checkpoint, path)
+
+    # Verify file exists and has content
+    if not os.path.exists(path):
+        raise RuntimeError(f"Failed to save checkpoint: {path} does not exist")
+
+    file_size = os.path.getsize(path)
+    if file_size == 0:
+        raise RuntimeError(f"Failed to save checkpoint: {path} is empty")
+
+    logger.info(f"Saved checkpoint: {path} ({file_size:,} bytes)")
+
+
+def load_checkpoint(
+    path: str,
+    model: nn.Module,
+    ema: EMAModel,
+    optimizer: torch.optim.Optimizer,
+    scheduler: LambdaLR,
+    device: torch.device,
+) -> Tuple[int, float]:
+    """Load training checkpoint.
+
+    CRITICAL: State restoration order:
+    1. Load model.state_dict() FIRST (model must exist and be on device)
+    2. Load EMA shadow state SECOND (after model loaded)
+    3. Load optimizer state THIRD (after model parameters accessible)
+    4. Load scheduler state LAST (after optimizer created)
+
+    This order ensures optimizer state tensors match model parameters.
+
+    Args:
+        path: Path to checkpoint file.
+        model: Model to load weights into (must be on device).
+        ema: EMA wrapper to load shadow state into.
+        optimizer: Optimizer to load state into.
+        scheduler: Scheduler to load state into.
+        device: Device to move tensors to.
+
+    Returns:
+        Tuple of (start_epoch, best_loss) where start_epoch is epoch+1
+        (the next epoch to train).
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+
+    # Load checkpoint (weights_only=False because we have config dict)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+
+    # 1. Load model state FIRST
+    model.load_state_dict(checkpoint["model_state_dict"])
+    logger.debug("Loaded model state dict")
+
+    # 2. Load EMA shadow state SECOND
+    ema.load_state_dict(checkpoint["ema_shadow"])
+    logger.debug("Loaded EMA shadow state")
+
+    # 3. Load optimizer state THIRD
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    logger.debug("Loaded optimizer state dict")
+
+    # 4. Load scheduler state LAST
+    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    logger.debug("Loaded scheduler state dict")
+
+    epoch = checkpoint["epoch"]
+    best_loss = checkpoint["best_loss"]
+
+    logger.info(
+        f"Loaded checkpoint from epoch {epoch}, best_loss={best_loss:.6f}"
+    )
+
+    # Return next epoch to train
+    return epoch + 1, best_loss
+
+
+def load_checkpoint_with_stats_check(
+    path: str,
+    model: nn.Module,
+    ema: EMAModel,
+    optimizer: torch.optim.Optimizer,
+    scheduler: LambdaLR,
+    device: torch.device,
+    current_stats_path: Optional[str] = None,
+) -> Tuple[int, float]:
+    """Load checkpoint with normalization stats consistency check.
+
+    Wrapper around load_checkpoint that verifies normalization stats
+    haven't changed since the checkpoint was created. This helps detect
+    data pipeline changes that could cause training inconsistencies.
+
+    Args:
+        path: Path to checkpoint file.
+        model: Model to load weights into.
+        ema: EMA wrapper to load shadow state into.
+        optimizer: Optimizer to load state into.
+        scheduler: Scheduler to load state into.
+        device: Device to move tensors to.
+        current_stats_path: Path to current normalization stats file.
+            If None, stats check is skipped.
+
+    Returns:
+        Tuple of (start_epoch, best_loss).
+    """
+    # Load the checkpoint first
+    start_epoch, best_loss = load_checkpoint(
+        path, model, ema, optimizer, scheduler, device
+    )
+
+    # Skip stats check if no current stats path provided
+    if current_stats_path is None:
+        logger.debug("Stats consistency check: SKIPPED (no stats path)")
+        return start_epoch, best_loss
+
+    # Load checkpoint again to get stats (already in memory but cleaner)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    saved_stats = checkpoint.get("normalization_stats")
+
+    if saved_stats is None:
+        logger.warning(
+            "Stats consistency check: SKIPPED (no stats in checkpoint)"
+        )
+        return start_epoch, best_loss
+
+    # Check if current stats file exists
+    if not os.path.exists(current_stats_path):
+        logger.warning(
+            f"Stats consistency check: SKIPPED (stats file not found: {current_stats_path})"
+        )
+        return start_epoch, best_loss
+
+    # Load current stats
+    current_stats = torch.load(current_stats_path, map_location="cpu", weights_only=True)
+
+    # Compare stats by computing checksums
+    try:
+        saved_mean_sum = saved_stats["mean"].sum().item()
+        saved_std_sum = saved_stats["std"].sum().item()
+        current_mean_sum = current_stats["mean"].sum().item()
+        current_std_sum = current_stats["std"].sum().item()
+
+        # Check if stats match (with small tolerance)
+        mean_match = abs(saved_mean_sum - current_mean_sum) < 1e-5
+        std_match = abs(saved_std_sum - current_std_sum) < 1e-5
+
+        if mean_match and std_match:
+            logger.info("Stats consistency check: PASSED")
+        else:
+            logger.warning(
+                "Stats consistency check: WARNING - stats differ. "
+                f"Saved: mean_sum={saved_mean_sum:.6f}, std_sum={saved_std_sum:.6f}. "
+                f"Current: mean_sum={current_mean_sum:.6f}, std_sum={current_std_sum:.6f}. "
+                "This may indicate data pipeline changes."
+            )
+    except (KeyError, TypeError) as e:
+        logger.warning(f"Stats consistency check: ERROR - {e}")
+
+    return start_epoch, best_loss
