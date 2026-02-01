@@ -15,18 +15,15 @@ import argparse
 import json
 import os
 import random
-import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
-# Add project root to path for imports
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+from study.data import DEFAULT_VS_10K_PATH, GSM8K_PATH, PROJECT_ROOT
 
 
 def load_gsm8k_questions(gsm8k_path: str) -> List[str]:
@@ -284,8 +281,8 @@ def generate_vs_dataset(
 def main():
     parser = argparse.ArgumentParser(description="Generate VS dataset with SONAR embeddings")
     parser.add_argument("--target", type=int, default=10000, help="Target number of samples")
-    parser.add_argument("--output", type=str, default="study/datasets/vs_10k.pt", help="Output path")
-    parser.add_argument("--gsm8k-path", type=str, default="datasets/gsm8k", help="GSM8K dataset path")
+    parser.add_argument("--output", type=str, default=DEFAULT_VS_10K_PATH, help="Output path")
+    parser.add_argument("--gsm8k-path", type=str, default=GSM8K_PATH, help="GSM8K dataset path")
     parser.add_argument("--model", type=str, default="qwen", help="LLM model name or alias")
     parser.add_argument("--backend", type=str, default="vllm", help="LLM backend")
     parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")

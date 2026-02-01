@@ -10,10 +10,12 @@ enabling faster sampling with fewer integration steps.
 """
 
 import logging
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import torch
 from torch import Tensor
+
+from study.flow_matching.coupling.icfm import linear_interpolate
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +34,11 @@ class ReflowCoupling:
         x0_all: All noise samples [N, D] on CPU.
         x1_all: All ODE endpoints [N, D] on CPU.
         n_pairs: Number of stored pairs.
-        current_batch_size: Size of batches returned by sample().
+        batch_size: Size of batches returned by sample().
 
     Example:
-        >>> # Generate pairs from teacher
         >>> x0, x1 = generator.generate_pairs(10000, 'cuda')
         >>> coupling = ReflowCoupling(pair_tensors=(x0, x1))
-        >>>
-        >>> # During training (ignores inputs)
         >>> t, x_t, u_t = coupling.sample(data_noise, data_batch)
     """
 
@@ -47,7 +46,7 @@ class ReflowCoupling:
         self,
         pair_tensors: Tuple[Tensor, Tensor],
         batch_size: Optional[int] = None,
-        sigma: float = 0.0,
+        **kwargs,
     ):
         """Initialize reflow coupling with pre-generated pairs.
 
@@ -56,39 +55,28 @@ class ReflowCoupling:
                 - x0: Noise samples [N, D]
                 - x1: ODE endpoints [N, D]
             batch_size: Number of pairs to sample per call (default: all pairs).
-            sigma: Noise level for interpolation (unused, for interface compatibility).
+            **kwargs: Ignored (for API compatibility).
 
         Note: Pairs are stored on CPU and moved to GPU during sample().
         """
         x0_all, x1_all = pair_tensors
-
-        # Ensure on CPU for storage
         self.x0_all = x0_all.cpu()
         self.x1_all = x1_all.cpu()
         self.n_pairs = x0_all.shape[0]
         self.dim = x0_all.shape[1]
-        self.sigma = sigma  # Unused but kept for interface compatibility
-
-        # Batch size defaults to total pairs (one epoch = one pass)
-        self.current_batch_size = batch_size or self.n_pairs
-
-        # Shuffle indices for random sampling
+        self.batch_size = batch_size or self.n_pairs
         self._indices = torch.randperm(self.n_pairs)
         self._current_idx = 0
 
         logger.info(
-            f"ReflowCoupling initialized with {self.n_pairs} pairs, "
-            f"dim={self.dim}, batch_size={self.current_batch_size}"
+            f"ReflowCoupling: {self.n_pairs} pairs, dim={self.dim}, "
+            f"batch_size={self.batch_size}"
         )
 
     def reset(self) -> None:
-        """Reshuffle pairs for new epoch.
-
-        Call at the start of each epoch to ensure random sampling.
-        """
+        """Reshuffle pairs for new epoch."""
         self._indices = torch.randperm(self.n_pairs)
         self._current_idx = 0
-        logger.debug("ReflowCoupling: shuffled pairs for new epoch")
 
     def sample(
         self,
@@ -97,49 +85,36 @@ class ReflowCoupling:
     ) -> Tuple[Tensor, Tensor, Tensor]:
         """Sample t, x_t, u_t from stored pairs.
 
-        IMPORTANT: This ignores the x0, x1 inputs and uses stored pairs.
-        The inputs are only used to infer device and batch size.
+        Note: Inputs x0, x1 are ignored. They are only used to infer
+        device and batch size.
 
         Args:
-            x0: Ignored (noise from data loader). Can be None.
-            x1: Ignored (data from data loader). Can be None.
+            x0: Ignored. Used for device/batch inference if x1 is None.
+            x1: Ignored. Used for device/batch inference.
 
         Returns:
-            t: Uniformly sampled timesteps [B]
-            x_t: Interpolated samples [B, D]
-            u_t: Target velocity [B, D]
+            t: Uniformly sampled timesteps [B].
+            x_t: Interpolated samples [B, D].
+            u_t: Target velocity [B, D].
         """
-        # Determine batch size and device
+        # Infer batch size and device from inputs
         if x1 is not None:
-            batch_size = x1.shape[0]
-            device = x1.device
+            batch_size, device, dtype = x1.shape[0], x1.device, x1.dtype
         elif x0 is not None:
-            batch_size = x0.shape[0]
-            device = x0.device
+            batch_size, device, dtype = x0.shape[0], x0.device, x0.dtype
         else:
-            batch_size = self.current_batch_size
-            device = torch.device("cpu")
+            batch_size, device, dtype = self.batch_size, torch.device("cpu"), torch.float32
 
-        # Get random pairs from stored data
+        # Reshuffle if we've exhausted the pairs
         if self._current_idx + batch_size > self.n_pairs:
-            # Wrap around and reshuffle if needed
             self.reset()
 
         idx = self._indices[self._current_idx : self._current_idx + batch_size]
         self._current_idx += batch_size
 
-        # Get pairs and move to device
-        x0_pair = self.x0_all[idx].to(device)
-        x1_pair = self.x1_all[idx].to(device)
+        x0_pair = self.x0_all[idx].to(device=device, dtype=dtype)
+        x1_pair = self.x1_all[idx].to(device=device, dtype=dtype)
 
-        # Sample time uniformly
-        t = torch.rand(batch_size, device=device)
-
-        # Interpolate (ICFM formulation)
-        t_unsqueeze = t.unsqueeze(-1)
-        x_t = (1 - t_unsqueeze) * x0_pair + t_unsqueeze * x1_pair
-
-        # Target velocity (constant)
-        u_t = x1_pair - x0_pair
-
+        t = torch.rand(batch_size, device=device, dtype=dtype)
+        x_t, u_t = linear_interpolate(x0_pair, x1_pair, t)
         return t, x_t, u_t

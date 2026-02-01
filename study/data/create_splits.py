@@ -15,14 +15,12 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict
 
 import numpy as np
 import torch
 
-# Add project root to path for imports
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+from study.data import DEFAULT_VS_10K_PATH, PROJECT_ROOT, SPLITS_DIR
 
 
 def create_splits(
@@ -264,8 +262,8 @@ def verify_splits(output_dir: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Create nested train/val/test splits")
-    parser.add_argument("--input", type=str, default="study/datasets/vs_10k.pt", help="Input dataset path")
-    parser.add_argument("--output", type=str, default="study/datasets/splits", help="Output directory")
+    parser.add_argument("--input", type=str, default=DEFAULT_VS_10K_PATH, help="Input dataset path")
+    parser.add_argument("--output", type=str, default=SPLITS_DIR, help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for shuffling")
     parser.add_argument("--verify", action="store_true", help="Verify existing splits instead of creating")
 

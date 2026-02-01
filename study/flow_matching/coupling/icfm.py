@@ -9,6 +9,26 @@ from typing import Tuple
 import torch
 
 
+def linear_interpolate(
+    x0: torch.Tensor, x1: torch.Tensor, t: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Linear interpolation and constant velocity for flow matching.
+
+    Args:
+        x0: Source samples [B, D].
+        x1: Target samples [B, D].
+        t: Timesteps [B].
+
+    Returns:
+        x_t: Interpolated samples [B, D].
+        u_t: Target velocity [B, D].
+    """
+    t_expanded = t.unsqueeze(-1)
+    x_t = (1 - t_expanded) * x0 + t_expanded * x1
+    u_t = x1 - x0
+    return x_t, u_t
+
+
 class ICFMCoupling:
     """Independent Conditional Flow Matching coupling.
 
@@ -18,43 +38,22 @@ class ICFMCoupling:
     The ICFM formulation:
     - x_t = (1-t)*x0 + t*x1 (linear interpolation)
     - u_t = x1 - x0 (constant velocity)
-
-    Attributes:
-        sigma: Noise level for interpolation (unused in deterministic case).
     """
-
-    def __init__(self, sigma: float = 0.0):
-        """Initialize I-CFM coupling.
-
-        Args:
-            sigma: Noise level for interpolation (default 0.0 for deterministic).
-        """
-        self.sigma = sigma
 
     def sample(
         self, x0: torch.Tensor, x1: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample t, x_t, u_t for velocity matching.
 
-        ICFM formulation: x_t = (1-t)*x0 + t*x1, u_t = x1 - x0
-
         Args:
-            x0: Source samples (noise) [B, D]
-            x1: Target samples (data) [B, D]
+            x0: Source samples (noise) [B, D].
+            x1: Target samples (data) [B, D].
 
         Returns:
-            t: Uniformly sampled timesteps [B]
-            x_t: Interpolated samples [B, D]
-            u_t: Target velocity [B, D]
+            t: Uniformly sampled timesteps [B].
+            x_t: Interpolated samples [B, D].
+            u_t: Target velocity [B, D].
         """
-        # Sample time uniformly
-        t = torch.rand(x1.shape[0], device=x1.device)
-
-        # Interpolate
-        t_unsqueeze = t.unsqueeze(-1)
-        x_t = (1 - t_unsqueeze) * x0 + t_unsqueeze * x1
-
-        # Target velocity
-        u_t = x1 - x0
-
+        t = torch.rand(x0.shape[0], device=x0.device, dtype=x0.dtype)
+        x_t, u_t = linear_interpolate(x0, x1, t)
         return t, x_t, u_t

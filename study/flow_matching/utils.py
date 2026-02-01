@@ -358,24 +358,42 @@ def load_checkpoint_with_stats_check(
     Returns:
         Tuple of (start_epoch, best_loss).
     """
-    # Load the checkpoint first
-    start_epoch, best_loss = load_checkpoint(
-        path, model, ema, optimizer, scheduler, device
-    )
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
+
+    # Load checkpoint once (weights_only=False because we have config dict)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+
+    # 1. Load model state
+    model.load_state_dict(checkpoint["model_state_dict"])
+    logger.debug("Loaded model state dict")
+
+    # 2. Load EMA shadow state
+    ema.load_state_dict(checkpoint["ema_shadow"])
+    logger.debug("Loaded EMA shadow state")
+
+    # 3. Load optimizer state
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    logger.debug("Loaded optimizer state dict")
+
+    # 4. Load scheduler state
+    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    logger.debug("Loaded scheduler state dict")
+
+    epoch = checkpoint["epoch"]
+    best_loss = checkpoint["best_loss"]
+    start_epoch = epoch + 1
+
+    logger.info(f"Loaded checkpoint from epoch {epoch}, best_loss={best_loss:.6f}")
 
     # Skip stats check if no current stats path provided
     if current_stats_path is None:
         logger.debug("Stats consistency check: SKIPPED (no stats path)")
         return start_epoch, best_loss
 
-    # Load checkpoint again to get stats (already in memory but cleaner)
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     saved_stats = checkpoint.get("normalization_stats")
-
     if saved_stats is None:
-        logger.warning(
-            "Stats consistency check: SKIPPED (no stats in checkpoint)"
-        )
+        logger.warning("Stats consistency check: SKIPPED (no stats in checkpoint)")
         return start_epoch, best_loss
 
     # Check if current stats file exists
@@ -385,17 +403,15 @@ def load_checkpoint_with_stats_check(
         )
         return start_epoch, best_loss
 
-    # Load current stats
+    # Load current stats and compare
     current_stats = torch.load(current_stats_path, map_location="cpu", weights_only=True)
 
-    # Compare stats by computing checksums
     try:
         saved_mean_sum = saved_stats["mean"].sum().item()
         saved_std_sum = saved_stats["std"].sum().item()
         current_mean_sum = current_stats["mean"].sum().item()
         current_std_sum = current_stats["std"].sum().item()
 
-        # Check if stats match (with small tolerance)
         mean_match = abs(saved_mean_sum - current_mean_sum) < 1e-5
         std_match = abs(saved_std_sum - current_std_sum) < 1e-5
 

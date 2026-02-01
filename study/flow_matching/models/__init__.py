@@ -21,7 +21,9 @@ Usage:
 import logging
 from typing import Optional
 
-from study.flow_matching.models.mlp import SimpleMLP, timestep_embedding
+import torch.nn as nn
+
+from study.flow_matching.models.mlp import SimpleMLP, normalize_timestep, timestep_embedding
 from study.flow_matching.models.dit import DiTVelocityNetwork, AdaLNBlock
 from study.flow_matching.models.unet_mlp import UNetMLP, FiLMLayer
 from study.flow_matching.models.mamba_velocity import MambaVelocityNetwork, MAMBA_AVAILABLE
@@ -38,6 +40,7 @@ __all__ = [
     "FiLMLayer",
     "MambaVelocityNetwork",
     "MAMBA_AVAILABLE",
+    "normalize_timestep",
     "timestep_embedding",
     "SCALING_CONFIGS",
     "get_scaled_config",
@@ -53,7 +56,7 @@ _DEFAULTS = {
 }
 
 
-def create_model(arch: str, scale: Optional[str] = None, **kwargs) -> "torch.nn.Module":
+def create_model(arch: str, scale: Optional[str] = None, **kwargs) -> nn.Module:
     """Create velocity network by architecture name with optional scaling.
 
     Args:
@@ -86,8 +89,6 @@ def create_model(arch: str, scale: Optional[str] = None, **kwargs) -> "torch.nn.
         >>> model = create_model("dit", "small")  # Current default equivalent
         >>> model = create_model("unet", "base")  # Large U-Net (~15M params)
     """
-    import torch  # Deferred import for type annotation
-
     # Validate architecture
     if arch not in ["mlp", "dit", "unet", "mamba"]:
         available = ["mlp", "dit", "unet"]

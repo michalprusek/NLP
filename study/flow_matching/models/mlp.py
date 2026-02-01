@@ -12,6 +12,25 @@ import torch
 import torch.nn as nn
 
 
+def normalize_timestep(t: torch.Tensor, batch_size: int) -> torch.Tensor:
+    """Normalize timestep tensor to shape [B].
+
+    Handles various input shapes: scalar, [B], or [B, 1].
+
+    Args:
+        t: Timestep tensor (scalar, [B], or [B, 1]).
+        batch_size: Expected batch size for scalar expansion.
+
+    Returns:
+        Timestep tensor of shape [B].
+    """
+    if t.dim() == 2:
+        t = t.squeeze(-1)
+    if t.dim() == 0:
+        t = t.unsqueeze(0).expand(batch_size)
+    return t
+
+
 def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000) -> torch.Tensor:
     """Create sinusoidal timestep embeddings.
 
@@ -122,16 +141,6 @@ class SimpleMLP(nn.Module):
         Returns:
             Velocity tensor [B, 1024].
         """
-        # Handle t shape variations
-        if t.dim() == 2:
-            t = t.squeeze(-1)
-        if t.dim() == 0:
-            t = t.unsqueeze(0).expand(x.shape[0])
-
-        # Time embedding
-        t_emb = timestep_embedding(t, self.time_embed_dim)
-        t_emb = self.time_mlp(t_emb)
-
-        # Concatenate and forward
-        h = torch.cat([x, t_emb], dim=-1)
-        return self.net(h)
+        t = normalize_timestep(t, x.shape[0])
+        t_emb = self.time_mlp(timestep_embedding(t, self.time_embed_dim))
+        return self.net(torch.cat([x, t_emb], dim=-1))

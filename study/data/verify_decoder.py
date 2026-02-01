@@ -7,7 +7,6 @@ This ensures the normalization pipeline preserves semantic content.
 import argparse
 import json
 import logging
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -15,20 +14,16 @@ from typing import Optional
 import torch
 from torch import Tensor
 from torch.nn.functional import cosine_similarity
-from tqdm import tqdm
-
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ecoflow.decoder import SonarDecoder
+from study.data import DATASETS_DIR, DEFAULT_STATS_PATH, get_split_path
 from study.data.normalize import denormalize, load_stats
 
 logger = logging.getLogger(__name__)
 
 # Default paths
-DEFAULT_TEST_PATH = "study/datasets/splits/10k/test.pt"
-DEFAULT_STATS_PATH = "study/datasets/normalization_stats.pt"
-DEFAULT_FAILURES_PATH = "study/datasets/verification_failures.json"
+DEFAULT_TEST_PATH = get_split_path("10k", "test")
+DEFAULT_FAILURES_PATH = f"{DATASETS_DIR}/verification_failures.json"
 
 
 class SonarEncoder:

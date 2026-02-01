@@ -11,6 +11,7 @@ For actual GP-guided sampling, see Phase 8 which integrates with GP surrogate.
 """
 
 import logging
+import math
 from typing import Callable, Optional
 
 import torch
@@ -122,9 +123,6 @@ def guided_euler_ode_integrate(
     return x
 
 
-import math as _math  # For SI velocity scale constant
-
-
 def get_velocity_scale(flow_method: str) -> float:
     """Get velocity scale factor for un-normalizing model output.
 
@@ -143,7 +141,7 @@ def get_velocity_scale(flow_method: str) -> float:
         Scale factor (1.0 for I-CFM/OT-CFM, ~1.11 for SI-GVP).
     """
     if flow_method in ("si-gvp", "si"):
-        return _math.pi / (2 * _math.sqrt(2))  # ~1.11
+        return math.pi / (2 * math.sqrt(2))  # ~1.11
     return 1.0
 
 

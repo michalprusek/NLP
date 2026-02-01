@@ -16,19 +16,26 @@ Example:
     >>> otcfm = create_coupling('otcfm', reg=0.5)
     >>> t, x_t, u_t = otcfm.sample(x0, x1)
     >>>
-    >>> # Reflow requires pre-generated pairs
     >>> reflow = create_coupling('reflow', pair_tensors=(x0_pairs, x1_pairs))
     >>> t, x_t, u_t = reflow.sample(None, None)  # Ignores inputs
     >>>
-    >>> # Stochastic Interpolant with GVP schedule
     >>> si = create_coupling('si')  # or 'si-gvp'
     >>> t, x_t, u_t = si.sample(x0, x1)
 """
 
-from study.flow_matching.coupling.icfm import ICFMCoupling
+from study.flow_matching.coupling.icfm import ICFMCoupling, linear_interpolate
 from study.flow_matching.coupling.otcfm import OTCFMCoupling
 from study.flow_matching.coupling.reflow import ReflowCoupling
 from study.flow_matching.coupling.stochastic import StochasticInterpolantCoupling
+
+_COUPLING_CLASSES = {
+    "icfm": ICFMCoupling,
+    "otcfm": OTCFMCoupling,
+    "reflow": ReflowCoupling,
+    "si": StochasticInterpolantCoupling,
+    "si-gvp": StochasticInterpolantCoupling,
+    "si-linear": StochasticInterpolantCoupling,
+}
 
 
 def create_coupling(method: str, **kwargs):
@@ -41,49 +48,38 @@ def create_coupling(method: str, **kwargs):
             - 'reflow': Rectified Flow
             - 'si' or 'si-gvp': Stochastic Interpolant with GVP schedule
             - 'si-linear': Stochastic Interpolant with linear schedule
-        **kwargs: Passed to coupling constructor
-            - For icfm: sigma (float)
-            - For otcfm: sigma (float), reg (float), normalize_cost (bool)
+        **kwargs: Passed to coupling constructor.
+            - For otcfm: reg (float), normalize_cost (bool)
             - For reflow: pair_tensors (tuple of x0, x1), batch_size (int)
-            - For si: schedule (str, default 'gvp')
+            - For si: schedule (str), normalize_loss (bool)
 
     Returns:
-        Coupling instance with sample() method
+        Coupling instance with sample() method.
 
     Raises:
-        ValueError: If method is unknown or required kwargs missing
-
-    Example:
-        >>> icfm = create_coupling('icfm')
-        >>> otcfm = create_coupling('otcfm', reg=0.5, normalize_cost=True)
-        >>> reflow = create_coupling('reflow', pair_tensors=(x0, x1))
-        >>> si = create_coupling('si')  # GVP schedule (default)
-        >>> si_linear = create_coupling('si-linear')  # Linear schedule
+        ValueError: If method is unknown or required kwargs missing.
     """
-    if method == "icfm":
-        return ICFMCoupling(**kwargs)
-    elif method == "otcfm":
-        return OTCFMCoupling(**kwargs)
-    elif method == "reflow":
-        if "pair_tensors" not in kwargs:
-            raise ValueError("ReflowCoupling requires pair_tensors=(x0, x1) argument")
-        return ReflowCoupling(**kwargs)
-    elif method in ("si", "si-gvp"):
-        # Stochastic Interpolant with GVP schedule (default)
-        schedule = kwargs.pop("schedule", "gvp")
-        return StochasticInterpolantCoupling(schedule=schedule, **kwargs)
+    if method not in _COUPLING_CLASSES:
+        available = ", ".join(sorted(_COUPLING_CLASSES.keys()))
+        raise ValueError(f"Unknown coupling method: {method}. Available: {available}")
+
+    if method == "reflow" and "pair_tensors" not in kwargs:
+        raise ValueError("ReflowCoupling requires pair_tensors=(x0, x1) argument")
+
+    # Handle schedule extraction for SI variants
+    if method == "si-gvp":
+        kwargs.setdefault("schedule", "gvp")
     elif method == "si-linear":
-        # Stochastic Interpolant with linear schedule (for ablation)
-        return StochasticInterpolantCoupling(schedule="linear", **kwargs)
-    else:
-        raise ValueError(
-            f"Unknown coupling method: {method}. "
-            "Choose 'icfm', 'otcfm', 'reflow', 'si', 'si-gvp', or 'si-linear'"
-        )
+        kwargs["schedule"] = "linear"
+    elif method == "si":
+        kwargs.setdefault("schedule", "gvp")
+
+    return _COUPLING_CLASSES[method](**kwargs)
 
 
 __all__ = [
     "create_coupling",
+    "linear_interpolate",
     "ICFMCoupling",
     "OTCFMCoupling",
     "ReflowCoupling",

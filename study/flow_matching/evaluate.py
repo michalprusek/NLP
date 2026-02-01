@@ -37,64 +37,22 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal
 
 import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from study.flow_matching.models import create_model
-from study.flow_matching.solvers import get_solver, list_solvers, euler_integrate
-from study.data.normalize import denormalize, load_stats, DEFAULT_STATS_PATH
+from study.flow_matching.solvers import get_solver, list_solvers
+from study.data import DEFAULT_STATS_PATH
+from study.data.normalize import denormalize, load_stats
 from ecoflow.decoder import SonarDecoder
 
 logger = logging.getLogger(__name__)
 
 # Type alias for solver names
 SolverName = Literal["euler", "heun", "rk4", "dpm++", "dpm_solver_pp", "adaptive_heun"]
-
-
-@torch.no_grad()
-def euler_ode_integrate(
-    model: torch.nn.Module,
-    x0: Tensor,
-    n_steps: int,
-    device: torch.device,
-    show_progress: bool = True,
-) -> Tensor:
-    """
-    Integrate ODE from t=0 to t=1 using Euler method.
-
-    The flow ODE is: dx/dt = v(x, t) where v is the learned velocity network.
-    Euler integration: x_{t+dt} = x_t + dt * v(x_t, t)
-
-    Args:
-        model: Velocity network with forward(x, t) -> v signature.
-        x0: Initial points at t=0, shape [N, D].
-        n_steps: Number of integration steps.
-        device: Computation device.
-        show_progress: Whether to show tqdm progress bar.
-
-    Returns:
-        x1: Points at t=1, shape [N, D].
-    """
-    dt = 1.0 / n_steps
-    x = x0.to(device)
-
-    iterator = range(n_steps)
-    if show_progress:
-        iterator = tqdm(iterator, desc="ODE integration", leave=False)
-
-    for i in iterator:
-        t = i / n_steps
-        # Expand t to batch dimension
-        t_batch = torch.full((x.shape[0],), t, device=device, dtype=x.dtype)
-        # Velocity prediction
-        v = model(x, t_batch)
-        # Euler step
-        x = x + dt * v
-
-    return x
 
 
 @torch.no_grad()

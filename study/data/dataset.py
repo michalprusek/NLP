@@ -6,7 +6,6 @@ reproducibility and DataLoader creation utilities.
 
 import logging
 import random
-import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -15,15 +14,10 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
-# Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
+from study.data import DEFAULT_STATS_PATH, EMBEDDING_DIM, get_split_path
 from study.data.normalize import load_stats, normalize
 
 logger = logging.getLogger(__name__)
-
-# Default paths
-DEFAULT_STATS_PATH = "study/datasets/normalization_stats.pt"
 
 
 class FlowDataset(Dataset):
@@ -116,7 +110,7 @@ class FlowDataset(Dataset):
     @property
     def embedding_dim(self) -> int:
         """Return embedding dimension (always 1024 for SONAR)."""
-        return 1024
+        return EMBEDDING_DIM
 
     def get_all_embeddings(self, normalized: bool = True) -> Tensor:
         """
@@ -192,20 +186,6 @@ def create_dataloader(
     )
 
     return loader
-
-
-def get_split_path(size: str, split: str) -> str:
-    """
-    Get path to split file.
-
-    Args:
-        size: Dataset size ("1k", "5k", "10k")
-        split: Split type ("train", "val", "test")
-
-    Returns:
-        Path string
-    """
-    return f"study/datasets/splits/{size}/{split}.pt"
 
 
 def load_all_splits(
@@ -315,7 +295,6 @@ def main():
 
     # Test 5: get_original returns unnormalized
     print("\n[Test 5] Testing get_original() returns unnormalized...")
-    ds_unnorm = FlowDataset(get_split_path("1k", "test"), return_normalized=False)
     emb_norm = ds[0]  # Normalized from ds
     emb_orig, text = ds.get_original(0)
 

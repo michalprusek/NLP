@@ -12,7 +12,6 @@ Provides FlowTrainer class that orchestrates training with:
 """
 
 import logging
-import pickle
 import traceback
 from typing import Dict, Optional
 
@@ -23,8 +22,12 @@ import wandb
 from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 
-from study.data.augmentation import AugmentationConfig, augment_batch
-from study.data.dataset import FlowDataset, create_dataloader
+from study.data import (
+    AugmentationConfig,
+    FlowDataset,
+    augment_batch,
+    create_dataloader,
+)
 from study.flow_matching.config import TrainingConfig
 from study.flow_matching.coupling import create_coupling
 from study.flow_matching.utils import (
@@ -115,6 +118,20 @@ class FlowTrainer:
 
         # Setup training infrastructure (includes Wandb init and checkpoint loading)
         self._setup()
+
+    def _load_stats_for_checkpoint(self) -> Optional[Dict]:
+        """Load normalization stats for checkpoint saving.
+
+        Returns:
+            Stats dict if available, None otherwise.
+        """
+        if not self.config.stats_path:
+            return None
+        try:
+            return torch.load(self.config.stats_path, map_location="cpu", weights_only=True)
+        except Exception as e:
+            logger.error(f"Failed to load stats for checkpoint: {e}")
+            return None
 
     def _create_aug_config(self) -> Optional[AugmentationConfig]:
         """Create augmentation config from config parameters.
@@ -527,27 +544,7 @@ class FlowTrainer:
                         )
 
                         # Save checkpoint on improvement
-                        # Load normalization stats if available
-                        stats = None
-                        if self.config.stats_path:
-                            try:
-                                stats = torch.load(
-                                    self.config.stats_path,
-                                    map_location="cpu",
-                                    weights_only=True,
-                                )
-                            except FileNotFoundError:
-                                logger.error(
-                                    f"Stats file not found: {self.config.stats_path}. "
-                                    "Checkpoint will be saved without normalization stats."
-                                )
-                            except (RuntimeError, pickle.UnpicklingError) as e:
-                                logger.error(
-                                    f"Failed to load stats (corrupted file?): {e}. "
-                                    "Checkpoint will be saved without stats."
-                                )
-                            except Exception as e:
-                                logger.error(f"Unexpected error loading stats: {type(e).__name__}: {e}")
+                        stats = self._load_stats_for_checkpoint()
 
                         save_checkpoint(
                             path=self._checkpoint_path,

@@ -16,7 +16,7 @@ will be False and MambaVelocityNetwork will raise ImportError on instantiation.
 import torch
 import torch.nn as nn
 
-from study.flow_matching.models.mlp import timestep_embedding
+from study.flow_matching.models.mlp import normalize_timestep, timestep_embedding
 
 # Try to import mamba-ssm; fallback gracefully if not available
 try:
@@ -155,16 +155,8 @@ class MambaVelocityNetwork(nn.Module):
             Velocity tensor [B, 1024].
         """
         B = x.shape[0]
-
-        # Handle t shape variations
-        if t.dim() == 2:
-            t = t.squeeze(-1)
-        if t.dim() == 0:
-            t = t.unsqueeze(0).expand(B)
-
-        # Time embedding
-        t_emb = timestep_embedding(t, self.time_embed_dim)
-        cond = self.time_mlp(t_emb)  # [B, hidden_dim]
+        t = normalize_timestep(t, B)
+        cond = self.time_mlp(timestep_embedding(t, self.time_embed_dim))
 
         # Reshape embedding to sequence of chunks
         # [B, 1024] -> [B, n_chunks, chunk_size]

@@ -15,12 +15,16 @@ from torch import Tensor
 
 logger = logging.getLogger(__name__)
 
-# Default paths
-DEFAULT_STATS_PATH = "study/datasets/normalization_stats.pt"
-DEFAULT_TRAIN_PATH = "study/datasets/splits/10k/train.pt"
+# Import centralized constants
+from study.data import (
+    DEFAULT_STATS_PATH,
+    EMBEDDING_DIM,
+    EPSILON,
+    SPLITS_DIR,
+)
 
-# Numerical stability
-EPSILON = 1e-8
+# Default training path for computing stats
+DEFAULT_TRAIN_PATH = f"{SPLITS_DIR}/10k/train.pt"
 
 
 def compute_stats(embeddings: Tensor) -> dict:
@@ -267,9 +271,9 @@ def main():
         stats = load_stats(args.output)
 
         # Check 1: Stats file has correct shape
-        assert stats["mean"].shape == torch.Size([1024]), f"Mean shape wrong: {stats['mean'].shape}"
-        assert stats["std"].shape == torch.Size([1024]), f"Std shape wrong: {stats['std'].shape}"
-        logger.info("[PASS] Stats have correct shape [1024]")
+        assert stats["mean"].shape == torch.Size([EMBEDDING_DIM]), f"Mean shape wrong: {stats['mean'].shape}"
+        assert stats["std"].shape == torch.Size([EMBEDDING_DIM]), f"Std shape wrong: {stats['std'].shape}"
+        logger.info(f"[PASS] Stats have correct shape [{EMBEDDING_DIM}]")
 
         # Check 2: No zero std
         assert (stats["std"] > 0).all(), "Some dimensions have zero std"

@@ -14,7 +14,7 @@ Note: Concatenative skip connections increase params vs original 2.5M estimate.
 import torch
 import torch.nn as nn
 
-from study.flow_matching.models.mlp import timestep_embedding
+from study.flow_matching.models.mlp import normalize_timestep, timestep_embedding
 
 
 class FiLMLayer(nn.Module):
@@ -193,15 +193,8 @@ class UNetMLP(nn.Module):
         Returns:
             Velocity tensor [B, 1024].
         """
-        # Handle t shape variations
-        if t.dim() == 2:
-            t = t.squeeze(-1)
-        if t.dim() == 0:
-            t = t.unsqueeze(0).expand(x.shape[0])
-
-        # Time embedding
-        t_emb = timestep_embedding(t, self.time_embed_dim)
-        cond = self.time_mlp(t_emb)
+        t = normalize_timestep(t, x.shape[0])
+        cond = self.time_mlp(timestep_embedding(t, self.time_embed_dim))
 
         # Encoder with skip storage
         skips = [x]  # Store input as first skip

@@ -25,7 +25,7 @@ import warnings
 import numpy as np
 import torch
 
-from study.data.dataset import load_all_splits
+from study.data import load_all_splits
 from study.flow_matching.config import TrainingConfig
 from study.flow_matching.models import create_model
 from study.flow_matching.trainer import FlowTrainer

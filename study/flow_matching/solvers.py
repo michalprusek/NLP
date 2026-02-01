@@ -164,13 +164,12 @@ def rk4_integrate(
         t = i / n_steps
 
         t1 = torch.full((x.shape[0],), t, device=device, dtype=x.dtype)
-        t2 = torch.full((x.shape[0],), t + 0.5 * dt, device=device, dtype=x.dtype)
-        t3 = t2
+        t_mid = torch.full((x.shape[0],), t + 0.5 * dt, device=device, dtype=x.dtype)
         t4 = torch.full((x.shape[0],), t + dt, device=device, dtype=x.dtype)
 
         k1 = model(x, t1)
-        k2 = model(x + 0.5 * dt * k1, t2)
-        k3 = model(x + 0.5 * dt * k2, t3)
+        k2 = model(x + 0.5 * dt * k1, t_mid)
+        k3 = model(x + 0.5 * dt * k2, t_mid)
         k4 = model(x + dt * k3, t4)
 
         x = x + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)

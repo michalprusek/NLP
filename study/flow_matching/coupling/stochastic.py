@@ -7,23 +7,22 @@ velocity x1-x0, SI computes velocity as the derivative of the interpolation.
 Key difference from I-CFM:
 - I-CFM: u_t = x1 - x0 (constant velocity)
 - SI: u_t = alpha_dot*x0 + sigma_dot*x1 (time-varying velocity)
-
-This allows for variance-preserving schedules (GVP) that can improve
-sample quality, especially for high-dimensional data.
-
-Loss normalization (from code review):
-For GVP schedule, the velocity coefficient (pi/2) results in ~1.23x larger target
-variance compared to I-CFM. To make validation losses comparable across methods,
-we normalize the velocity target by pi/(2*sqrt(2)) ≈ 1.11 so E[||u_t||^2] matches I-CFM.
 """
 
 import math
-
 from typing import Tuple
 
 import torch
 
-from study.flow_matching.schedules import get_schedule, ScheduleFunction
+from study.flow_matching.schedules import ScheduleFunction, get_schedule
+
+
+# Velocity normalization factors to match I-CFM loss scale.
+# GVP has (pi/2)^2 velocity variance vs 2 for I-CFM, so we scale by pi/(2*sqrt(2)).
+_VELOCITY_SCALE = {
+    "linear": 1.0,
+    "gvp": math.pi / (2 * math.sqrt(2)),
+}
 
 
 class StochasticInterpolantCoupling:
@@ -33,113 +32,66 @@ class StochasticInterpolantCoupling:
     - x_t = alpha_t * x0 + sigma_t * x1 (interpolation)
     - u_t = alpha_dot * x0 + sigma_dot * x1 (velocity target)
 
-    The velocity target is the time derivative of the interpolation,
-    NOT the constant x1-x0 used in I-CFM.
-
     Supported schedules:
     - 'linear': Standard CFM (alpha=1-t, sigma=t) - equivalent to I-CFM
-    - 'gvp': Variance-preserving (alpha=cos, sigma=sin) - better for some tasks
-
-    Loss normalization:
-    For GVP schedule, the velocity variance is ~1.23x larger than I-CFM due to
-    the (pi/2) coefficient in alpha_dot and sigma_dot. We normalize by
-    pi/(2*sqrt(2)) ≈ 1.11 so validation losses are comparable across methods.
-    This is a training convenience and doesn't affect the learned dynamics
-    (the model learns the normalized velocity, and we un-normalize at inference).
+    - 'gvp': Variance-preserving (alpha=cos, sigma=sin)
 
     Attributes:
         schedule_name: Name of the interpolation schedule.
         schedule_fn: Schedule function that returns coefficients.
         velocity_scale: Normalization factor for velocity target.
-
-    Example:
-        >>> coupling = StochasticInterpolantCoupling(schedule='gvp')
-        >>> t, x_t, u_t = coupling.sample(x0, x1)
     """
 
-    # Normalization factors for each schedule (to match I-CFM loss scale)
-    # I-CFM target variance: E[||x1-x0||^2] = 2D (when x0, x1 ~ N(0,I))
-    # GVP: alpha_dot^2 + sigma_dot^2 = (pi/2)^2 (cos^2 + sin^2) = (pi/2)^2 ≈ 2.47
-    # GVP target variance: E[||u_t||^2] ≈ (pi/2)^2 / 2 * 2D ≈ 2.47D (averaged over t)
-    # To match I-CFM: scale = sqrt(2.47D / 2D) = pi / (2*sqrt(2)) ≈ 1.11
-    # Linear: alpha_dot=-1, sigma_dot=1, variance = 2D (same as I-CFM)
-    VELOCITY_SCALE = {
-        "linear": 1.0,
-        "gvp": math.pi / (2 * math.sqrt(2)),  # ~1.11
-    }
-
-    def __init__(self, schedule: str = "gvp", normalize_loss: bool = True):
+    def __init__(self, schedule: str = "gvp", normalize_loss: bool = True, **kwargs):
         """Initialize Stochastic Interpolant coupling.
 
         Args:
             schedule: Interpolation schedule name ('linear' or 'gvp').
-                     Default is 'gvp' (variance-preserving).
             normalize_loss: If True, normalize velocity target so losses are
                            comparable to I-CFM. Default True.
+            **kwargs: Ignored (for API compatibility).
         """
         self.schedule_name = schedule
         self.schedule_fn: ScheduleFunction = get_schedule(schedule)
         self.normalize_loss = normalize_loss
-        self.velocity_scale = self.VELOCITY_SCALE.get(schedule, 1.0) if normalize_loss else 1.0
+        self.velocity_scale = _VELOCITY_SCALE.get(schedule, 1.0) if normalize_loss else 1.0
 
     def sample(
         self, x0: torch.Tensor, x1: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample t, x_t, u_t for velocity matching.
 
-        Stochastic Interpolant formulation:
-        - x_t = alpha_t * x0 + sigma_t * x1
-        - u_t = alpha_dot * x0 + sigma_dot * x1
-
-        CRITICAL: The velocity target u_t is the derivative of the interpolation,
+        The velocity target u_t is the derivative of the interpolation,
         NOT x1 - x0. This is the key difference from I-CFM.
 
-        For GVP schedule:
-        - alpha_t = cos(pi*t/2), sigma_t = sin(pi*t/2)
-        - alpha_dot = -pi/2*sin(pi*t/2), sigma_dot = pi/2*cos(pi*t/2)
-
         Args:
-            x0: Source samples (noise) of shape [B, D].
-            x1: Target samples (data) of shape [B, D].
+            x0: Source samples (noise) [B, D].
+            x1: Target samples (data) [B, D].
 
         Returns:
-            Tuple of (t, x_t, u_t):
-            - t: Uniformly sampled timesteps of shape [B].
-            - x_t: Interpolated samples of shape [B, D].
-            - u_t: Target velocity of shape [B, D].
+            t: Uniformly sampled timesteps [B].
+            x_t: Interpolated samples [B, D].
+            u_t: Target velocity [B, D].
         """
-        batch_size = x1.shape[0]
-        device = x1.device
-
-        # Sample time uniformly in [0, 1]
-        t = torch.rand(batch_size, device=device)
-
-        # Get schedule coefficients
+        t = torch.rand(x0.shape[0], device=x0.device, dtype=x0.dtype)
         alpha_t, sigma_t, alpha_dot, sigma_dot = self.schedule_fn(t)
 
-        # Reshape for broadcasting: [B] -> [B, 1]
+        # Expand for broadcasting: [B] -> [B, 1]
         alpha_t = alpha_t.unsqueeze(-1)
         sigma_t = sigma_t.unsqueeze(-1)
         alpha_dot = alpha_dot.unsqueeze(-1)
         sigma_dot = sigma_dot.unsqueeze(-1)
 
-        # Interpolate: x_t = alpha_t * x0 + sigma_t * x1
         x_t = alpha_t * x0 + sigma_t * x1
-
-        # Velocity target: u_t = alpha_dot * x0 + sigma_dot * x1
-        # NOTE: This is NOT x1 - x0!
         u_t = alpha_dot * x0 + sigma_dot * x1
 
-        # Normalize velocity target for comparable loss across methods
-        # For GVP, this divides by pi/2 so loss scale matches I-CFM
         if self.velocity_scale != 1.0:
             u_t = u_t / self.velocity_scale
 
         return t, x_t, u_t
 
     def __repr__(self) -> str:
-        norm_str = f", normalize_loss={self.normalize_loss}" if self.normalize_loss else ""
-        return f"StochasticInterpolantCoupling(schedule='{self.schedule_name}'{norm_str})"
+        return f"StochasticInterpolantCoupling(schedule='{self.schedule_name}')"
 
 
 __all__ = ["StochasticInterpolantCoupling"]

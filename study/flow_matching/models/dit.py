@@ -14,14 +14,13 @@ Improvements (NeurIPS 2026):
 Target: ~9.3M parameters with default configuration (hidden_dim=384, num_layers=3, num_heads=6).
 """
 
-import math
 from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from study.flow_matching.models.mlp import timestep_embedding
+from study.flow_matching.models.mlp import normalize_timestep, timestep_embedding
 
 
 class QKNormAttention(nn.Module):
@@ -246,7 +245,6 @@ class DiTVelocityNetwork(nn.Module):
         self.time_embed_dim = time_embed_dim
         self.num_tokens = num_tokens
         self.token_dim = input_dim // num_tokens
-        self.use_qk_norm = use_qk_norm
 
         assert input_dim % num_tokens == 0, f"input_dim ({input_dim}) must be divisible by num_tokens ({num_tokens})"
 
@@ -296,16 +294,8 @@ class DiTVelocityNetwork(nn.Module):
             Velocity tensor [B, input_dim].
         """
         batch_size = x.shape[0]
-
-        # Handle t shape
-        if t.dim() == 2:
-            t = t.squeeze(-1)
-        if t.dim() == 0:
-            t = t.unsqueeze(0).expand(batch_size)
-
-        # Time embedding
-        t_emb = timestep_embedding(t, self.time_embed_dim)  # [B, time_embed_dim]
-        c = self.time_embed(t_emb)  # [B, hidden_dim]
+        t = normalize_timestep(t, batch_size)
+        c = self.time_embed(timestep_embedding(t, self.time_embed_dim))
 
         # Chunk input into tokens: [B, input_dim] -> [B, num_tokens, token_dim]
         h = x.view(batch_size, self.num_tokens, self.token_dim)

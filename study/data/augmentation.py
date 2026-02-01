@@ -151,6 +151,16 @@ def augment_batch(
     return result
 
 
+_AUG_PRESETS: dict[str, AugmentationConfig] = {
+    "none": AugmentationConfig(),
+    "mixup": AugmentationConfig(mixup_alpha=0.2),
+    "noise": AugmentationConfig(noise_std=0.1),
+    "dropout": AugmentationConfig(dropout_rate=0.1),
+    "mixup+noise": AugmentationConfig(mixup_alpha=0.2, noise_std=0.1),
+    "all": AugmentationConfig(mixup_alpha=0.2, noise_std=0.1, dropout_rate=0.1),
+}
+
+
 def parse_aug_string(aug: str) -> AugmentationConfig:
     """Parse augmentation string to config.
 
@@ -164,17 +174,4 @@ def parse_aug_string(aug: str) -> AugmentationConfig:
     Returns:
         AugmentationConfig with appropriate parameter values.
     """
-    if aug == "none":
-        return AugmentationConfig()
-    elif aug == "mixup":
-        return AugmentationConfig(mixup_alpha=0.2)
-    elif aug == "noise":
-        return AugmentationConfig(noise_std=0.1)
-    elif aug == "dropout":
-        return AugmentationConfig(dropout_rate=0.1)
-    elif aug == "mixup+noise":
-        return AugmentationConfig(mixup_alpha=0.2, noise_std=0.1)
-    elif aug == "all":
-        return AugmentationConfig(mixup_alpha=0.2, noise_std=0.1, dropout_rate=0.1)
-    else:
-        return AugmentationConfig()  # Unknown, return no augmentation
+    return _AUG_PRESETS.get(aug, AugmentationConfig())
