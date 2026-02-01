@@ -8,6 +8,20 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# Valid values for enum-like fields
+VALID_METHODS = {
+    "standard_msr", "turbo", "saasbo", "baxus", "riemannian",
+    "turbo_grad", "gebo", "lamcts", "latent_bo", "bayesian_flow_bo",
+    "curriculum_bo", "geodesic_turbo"
+}
+VALID_KERNELS = {
+    "matern52", "matern32", "rbf", "arccosine",
+    "geodesic_matern52", "geodesic_matern32"
+}
+VALID_ACQUISITIONS = {"log_ei", "ucb", "lcb", "thompson"}
+VALID_FIDELITY_SCHEDULES = {"linear", "exponential", "step"}
+
+
 @dataclass
 class GPConfig:
     """Configuration for GP surrogate ablation experiments.
@@ -122,6 +136,57 @@ class GPConfig:
     # Wandb settings
     wandb_project: str = "gp-ablation-study"
     wandb_group: str = "gp-ablation"
+
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        # Validate method
+        if self.method not in VALID_METHODS:
+            raise ValueError(
+                f"Unknown GP method: '{self.method}'. "
+                f"Valid methods: {sorted(VALID_METHODS)}"
+            )
+
+        # Validate kernel
+        if self.kernel not in VALID_KERNELS:
+            raise ValueError(
+                f"Unknown kernel: '{self.kernel}'. "
+                f"Valid kernels: {sorted(VALID_KERNELS)}"
+            )
+
+        # Validate acquisition
+        if self.acquisition not in VALID_ACQUISITIONS:
+            raise ValueError(
+                f"Unknown acquisition: '{self.acquisition}'. "
+                f"Valid acquisitions: {sorted(VALID_ACQUISITIONS)}"
+            )
+
+        # Validate TuRBO bounds
+        if not (self.length_min <= self.length_init <= self.length_max):
+            raise ValueError(
+                f"TuRBO length bounds violated: "
+                f"length_min ({self.length_min}) <= length_init ({self.length_init}) "
+                f"<= length_max ({self.length_max}) must hold"
+            )
+
+        # Validate projection dimensionality for BAxUS
+        if self.method == "baxus" and self.target_dim >= self.input_dim:
+            raise ValueError(
+                f"For BAxUS, target_dim ({self.target_dim}) must be < "
+                f"input_dim ({self.input_dim})"
+            )
+
+        # Validate fidelity schedule
+        if self.fidelity_schedule not in VALID_FIDELITY_SCHEDULES:
+            raise ValueError(
+                f"Unknown fidelity_schedule: '{self.fidelity_schedule}'. "
+                f"Valid schedules: {sorted(VALID_FIDELITY_SCHEDULES)}"
+            )
+
+        # Validate fidelity_start
+        if not (0 < self.fidelity_start <= 1):
+            raise ValueError(
+                f"fidelity_start must be in (0, 1], got {self.fidelity_start}"
+            )
 
     @property
     def run_name(self) -> str:

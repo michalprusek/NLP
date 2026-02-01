@@ -33,14 +33,22 @@ from ecoflow.flow_model import FlowMatchingModel
 from ecoflow.gp_surrogate import SonarGPSurrogate
 
 # Import new GP surrogates if available
+import logging as _logging
+_gp_logger = _logging.getLogger(__name__)
+
 try:
     from study.gp_ablation.surrogates.base import BaseGPSurrogate
     from study.gp_ablation.surrogates.riemannian_gp import RiemannianGP
     NEW_GP_AVAILABLE = True
-except ImportError:
+except ImportError as _import_err:
     NEW_GP_AVAILABLE = False
     BaseGPSurrogate = None
     RiemannianGP = None
+    _gp_logger.warning(
+        f"Could not import new GP surrogates: {_import_err}. "
+        "Riemannian GP features will not be available. "
+        "Falling back to legacy SonarGPSurrogate interface."
+    )
 
 
 class GuidedFlowSampler:
@@ -110,11 +118,7 @@ class GuidedFlowSampler:
             self.flow_relative_scaling = True
 
         # Detect GP interface type
-        self._use_new_interface = (
-            NEW_GP_AVAILABLE
-            and BaseGPSurrogate is not None
-            and isinstance(gp_surrogate, BaseGPSurrogate)
-        )
+        self._use_new_interface = self._is_new_gp_interface(gp_surrogate)
 
         if norm_stats is not None:
             self.norm_stats = norm_stats
@@ -123,67 +127,51 @@ class GuidedFlowSampler:
         else:
             self.norm_stats = None
 
-    def _get_guidance_lambda(self, step: int, total_steps: int) -> float:
-        """Get base guidance strength using configured schedule.
+    def _is_new_gp_interface(self, gp_surrogate) -> bool:
+        """Check if GP uses new BaseGPSurrogate interface."""
+        return (
+            NEW_GP_AVAILABLE
+            and BaseGPSurrogate is not None
+            and isinstance(gp_surrogate, BaseGPSurrogate)
+        )
 
-        Schedules:
-        - STEP: CFG-Zero* - zero for first 4%, then constant (original)
-        - LINEAR: Linear ramp from 0 to guidance_strength after zero-init
-        - COSINE: Cosine ramp (smoother transition) after zero-init
-        - ADAPTIVE: Same as COSINE base, but modulated by uncertainty in _guided_velocity
-        """
+    def _get_guidance_lambda(self, step: int, total_steps: int) -> float:
+        """Get base guidance strength using configured schedule."""
         zero_init_steps = max(1, int(self.zero_init_fraction * total_steps))
 
-        # Zero guidance during initial phase (all schedules)
         if step < zero_init_steps:
             return 0.0
 
-        # Progress after zero-init period (0 to 1)
         remaining_steps = total_steps - zero_init_steps
         if remaining_steps <= 0:
             return self.guidance_strength
 
         progress = (step - zero_init_steps) / remaining_steps
+        schedule = self.guidance_schedule
 
-        if self.guidance_schedule == GuidanceSchedule.STEP:
-            # Original CFG-Zero*: constant after zero-init
+        if schedule == GuidanceSchedule.STEP:
             return self.guidance_strength
 
-        elif self.guidance_schedule == GuidanceSchedule.LINEAR:
-            # Linear ramp-up
+        if schedule == GuidanceSchedule.LINEAR:
             return self.guidance_strength * progress
 
-        elif self.guidance_schedule in (GuidanceSchedule.COSINE, GuidanceSchedule.ADAPTIVE):
-            # Cosine ramp-up: smooth acceleration
-            # cos goes from 1 to -1 as progress goes 0 to 1
-            # (1 - cos(π * progress)) / 2 goes from 0 to 1 smoothly
-            return self.guidance_strength * (1 - math.cos(math.pi * progress)) / 2
+        if schedule in (GuidanceSchedule.COSINE, GuidanceSchedule.ADAPTIVE, GuidanceSchedule.RIEMANNIAN):
+            cosine_factor = (1 - math.cos(math.pi * progress)) / 2
+            return self.guidance_strength * cosine_factor
 
-        else:
-            return self.guidance_strength
+        return self.guidance_strength
 
     def _get_uncertainty_factor(self, z_sonar: torch.Tensor) -> torch.Tensor:
         """Compute exploitation factor based on GP uncertainty.
 
-        Returns factor in [0, 1] where:
-        - High σ(z) → low factor → less guidance (explore freely)
-        - Low σ(z) → high factor → more guidance (exploit confidently)
-
-        Factor = 1 / (1 + β * σ(z))
+        Returns factor in [0, 1] where high sigma leads to less guidance
+        (explore freely) and low sigma leads to more guidance (exploit confidently).
         """
         if not self._is_gp_fitted():
             return torch.ones(z_sonar.shape[0], device=z_sonar.device)
 
-        # Get GP prediction uncertainty
-        if self._use_new_interface:
-            _, std = self.gp.predict(z_sonar)
-        else:
-            _, std = self.gp.predict(z_sonar)
-
-        # Exploitation factor: more guidance where GP is confident (low std)
-        factor = 1.0 / (1.0 + self.uncertainty_beta * std)
-
-        return factor
+        _, std = self.gp.predict(z_sonar)
+        return 1.0 / (1.0 + self.uncertainty_beta * std)
 
     def _project_to_tangent_plane(
         self, grad: torch.Tensor, x: torch.Tensor
@@ -332,6 +320,12 @@ class GuidedFlowSampler:
             else:
                 v = v + lambda_t * grad_ucb
 
+        # 4. Spherical correction: project entire velocity to tangent plane
+        # This ensures ODE integration stays on the sphere (not just gradient direction)
+        if self.spherical_projection:
+            z_sonar_for_proj = self._denormalize(z)
+            v = self._project_to_tangent_plane(v, z_sonar_for_proj)
+
         return v
 
     def _integrate_ode(
@@ -404,6 +398,7 @@ class GuidedFlowSampler:
         num_steps: int = 50,
         method: str = "heun",
         return_trajectory: bool = False,
+        start_on_sphere: bool = True,
     ) -> torch.Tensor:
         """
         Generate guided samples from noise.
@@ -414,6 +409,8 @@ class GuidedFlowSampler:
             num_steps: Number of ODE integration steps
             method: "heun" or "euler"
             return_trajectory: If True, return full trajectory [steps+1, B, 1024]
+            start_on_sphere: If True, normalize initial noise to unit sphere.
+                            Recommended for spherical flow models (spherical-ot).
 
         Returns:
             Samples in SONAR space [n_samples, 1024]
@@ -422,10 +419,19 @@ class GuidedFlowSampler:
         self.flow_model.velocity_net.eval()
 
         z = torch.randn(n_samples, self.flow_model.input_dim, device=device)
+
+        # For spherical flow: start on unit sphere in NORMALIZED flow space
+        # (normalized Gaussian = uniform on S^{d-1})
+        # This is correct because flow training normalizes data to ~unit variance
+        if start_on_sphere:
+            z = z / (z.norm(dim=-1, keepdim=True) + 1e-8)
+
         z = self._integrate_ode(z, num_steps, method, with_guidance=True,
                                 return_trajectory=return_trajectory)
 
         # Denormalize to SONAR space
+        # Note: SONAR embeddings have norm ~0.2, NOT unit norm
+        # Do NOT renormalize here - it would break the decoder
         if return_trajectory:
             if self.norm_stats is not None:
                 mean = self.norm_stats["mean"].to(device)
@@ -553,12 +559,7 @@ class GuidedFlowSampler:
             gp_surrogate: New GP surrogate (SonarGPSurrogate or BaseGPSurrogate)
         """
         self.gp = gp_surrogate
-        # Update interface detection
-        self._use_new_interface = (
-            NEW_GP_AVAILABLE
-            and BaseGPSurrogate is not None
-            and isinstance(gp_surrogate, BaseGPSurrogate)
-        )
+        self._use_new_interface = self._is_new_gp_interface(gp_surrogate)
 
 
 def create_optimal_gp_for_guided_flow(

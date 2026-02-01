@@ -30,8 +30,9 @@ echo "=========================================="
 echo ""
 
 # Start BO with spherical flow model
-echo "Starting EcoFlow BO with Spherical-OT flow model + Riemannian guidance..."
-CUDA_VISIBLE_DEVICES=1 PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
+GPU=${GPU:-1}  # Default to GPU 1, configurable via environment
+echo "Starting EcoFlow BO with Spherical-OT flow model + Riemannian guidance on GPU $GPU..."
+CUDA_VISIBLE_DEVICES=$GPU PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
     --warm-start-k 10 \
     --gp-kernel arccosine \
     --llm-budget 50000 \

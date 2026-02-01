@@ -260,12 +260,20 @@ class BOOptimizationLoop:
             if not isinstance(re_embeddings, torch.Tensor):
                 re_embeddings = torch.tensor(re_embeddings, device=embeddings.device)
             re_embeddings = re_embeddings.to(embeddings.device)
+        except torch.cuda.OutOfMemoryError:
+            # Let OOM errors bubble up - user needs to reduce batch size
+            raise
+        except (ValueError, TypeError) as e:
+            logger.error(
+                f"SONAR re-encoding failed due to input error: {e}. "
+                "Rejecting this batch (returning inf for L2-r)."
+            )
+            return torch.full((embeddings.shape[0],), float('inf'), device=embeddings.device)
         except Exception as e:
             logger.error(
-                f"SONAR re-encoding failed: {e}. "
-                "L2-r filtering is DISABLED for this batch - returning inf to reject."
+                f"Unexpected error in SONAR re-encoding: {type(e).__name__}: {e}. "
+                "Rejecting this batch. Consider investigating if this persists."
             )
-            # Return high L2-r values to REJECT these embeddings rather than silently accept
             return torch.full((embeddings.shape[0],), float('inf'), device=embeddings.device)
 
         return (embeddings - re_embeddings).norm(dim=-1)
@@ -311,8 +319,16 @@ class BOOptimizationLoop:
                 max_new_tokens=512,
                 temperature=0.0,
             )
+        except KeyboardInterrupt:
+            raise  # Let user interrupt propagate
+        except torch.cuda.OutOfMemoryError:
+            logger.error("CUDA out of memory during LLM generation. Consider reducing batch size.")
+            raise  # Fatal, user needs to intervene
         except Exception as e:
-            logger.error(f"LLM generation failed: {e}")
+            logger.error(
+                f"LLM generation failed: {type(e).__name__}: {e}. "
+                "Returning 0.0 score. If this persists, check LLM service status."
+            )
             return 0.0
 
         result = self.evaluator.evaluate_batch(outputs, self.eval_indices)

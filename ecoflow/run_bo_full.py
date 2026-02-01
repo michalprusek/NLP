@@ -37,9 +37,25 @@ def load_top_instructions(json_path: str, top_k: int = 10) -> tuple:
     """
     logger.info(f"Loading top {top_k} instructions from {json_path}...")
 
-    with open(json_path) as f:
-        data = json.load(f)
+    try:
+        with open(json_path) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Warm start file not found: {json_path}. "
+            "Please provide a valid path to pre-evaluated instructions."
+        )
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Failed to parse warm start JSON at {json_path}: {e}. "
+            "Ensure the file contains valid JSON."
+        )
 
+    if "results" not in data:
+        raise KeyError(
+            f"Warm start file at {json_path} missing 'results' key. "
+            f"Available keys: {list(data.keys())}"
+        )
     results = data["results"]
 
     # Sort by accuracy descending
@@ -115,7 +131,23 @@ def main():
     from ecoflow.flow_model import FlowMatchingModel
 
     ckpt = torch.load(args.flow_checkpoint, map_location=device)
+
+    # Validate checkpoint structure
+    required_keys = ["config", "model_state_dict"]
+    missing_keys = [k for k in required_keys if k not in ckpt]
+    if missing_keys:
+        raise ValueError(
+            f"Invalid checkpoint at {args.flow_checkpoint}. "
+            f"Missing required keys: {missing_keys}. "
+            f"Available keys: {list(ckpt.keys())}"
+        )
+
     flow_config = ckpt["config"]
+    if "arch" not in flow_config:
+        raise ValueError(
+            f"Checkpoint config missing 'arch' key. "
+            f"Config contains: {list(flow_config.keys())}"
+        )
 
     velocity_net = create_model(
         arch=flow_config["arch"],

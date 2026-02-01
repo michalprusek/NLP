@@ -26,7 +26,6 @@ from botorch.models import SingleTaskGP
 from botorch.models.transforms import Normalize, Standardize
 from gpytorch.kernels import Kernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from torch.quasirandom import SobolEngine
 
 from study.gp_ablation.config import GPConfig
 from study.gp_ablation.surrogates.base import BaseGPSurrogate
@@ -93,26 +92,20 @@ class GeodesicMaternKernel(Kernel):
         cos_sim = torch.clamp(cos_sim, -1 + 1e-6, 1 - 1e-6)
         return torch.acos(cos_sim)
 
-    def _matern52(self, dist):
-        """Matern-5/2 kernel formula."""
-        sqrt5 = math.sqrt(5)
-        return (1 + sqrt5 * dist + 5 * dist ** 2 / 3) * torch.exp(-sqrt5 * dist)
-
-    def _matern32(self, dist):
-        """Matern-3/2 kernel formula."""
-        sqrt3 = math.sqrt(3)
-        return (1 + sqrt3 * dist) * torch.exp(-sqrt3 * dist)
+    def _matern_kernel(self, dist: torch.Tensor, nu: float) -> torch.Tensor:
+        """Compute Matern kernel for nu in {1.5, 2.5}."""
+        if nu == 2.5:
+            sqrt5 = math.sqrt(5)
+            return (1 + sqrt5 * dist + 5 * dist ** 2 / 3) * torch.exp(-sqrt5 * dist)
+        if nu == 1.5:
+            sqrt3 = math.sqrt(3)
+            return (1 + sqrt3 * dist) * torch.exp(-sqrt3 * dist)
+        raise ValueError(f"Unsupported nu: {nu}. Use 1.5 or 2.5.")
 
     def forward(self, x1, x2, diag=False, **kwargs):
         geo_dist = self._geodesic_distance(x1, x2, diag)
         scaled_dist = geo_dist / self.lengthscale
-
-        if self.nu == 2.5:
-            return self._matern52(scaled_dist)
-        elif self.nu == 1.5:
-            return self._matern32(scaled_dist)
-        else:
-            raise ValueError(f"Unsupported nu: {self.nu}")
+        return self._matern_kernel(scaled_dist, self.nu)
 
 
 class RiemannianGP(BaseGPSurrogate):
@@ -139,6 +132,8 @@ class RiemannianGP(BaseGPSurrogate):
             return F.normalize(X, p=2, dim=-1)
         return X
 
+    GEODESIC_KERNELS = {"arccosine", "geodesic_matern52", "geodesic_matern32"}
+
     def _create_kernel(self):
         """Create geodesic kernel based on config."""
         if self.kernel_type == "arccosine":
@@ -151,8 +146,17 @@ class RiemannianGP(BaseGPSurrogate):
             return ScaleKernel(kernel)
         else:
             # Fall back to standard kernels with normalization
+            logger.warning(
+                f"RiemannianGP: Unknown geodesic kernel '{self.kernel_type}'. "
+                f"Falling back to standard kernel. "
+                f"Valid geodesic kernels: {self.GEODESIC_KERNELS}"
+            )
             from study.gp_ablation.surrogates.standard_gp import create_kernel
             return create_kernel(self.kernel_type, self.D, self.device, use_msr_prior=False)
+
+    def _transform_for_posterior(self, X: torch.Tensor) -> torch.Tensor:
+        """Apply spherical normalization for posterior computation."""
+        return self._normalize(X)
 
     def _create_model(
         self, train_X: torch.Tensor, train_Y: torch.Tensor
@@ -222,27 +226,20 @@ class RiemannianGP(BaseGPSurrogate):
         """
         self._ensure_fitted("getting hyperparameters")
 
-        params = {}
+        params = {"lengthscale_mean": None, "lengthscale_std": None}
 
-        # Get lengthscale if kernel has one
-        base_kernel = None
-        if hasattr(self.model.covar_module, "base_kernel"):
-            base_kernel = self.model.covar_module.base_kernel
-
-        if base_kernel is not None and hasattr(base_kernel, "lengthscale") and base_kernel.lengthscale is not None:
+        # Extract lengthscale from base kernel if available
+        base_kernel = getattr(self.model.covar_module, "base_kernel", None)
+        if base_kernel is not None and getattr(base_kernel, "has_lengthscale", False):
             ls = base_kernel.lengthscale
             params["lengthscale_mean"] = ls.mean().item()
             params["lengthscale_std"] = ls.std().item() if ls.numel() > 1 else 0.0
-        else:
-            # Kernel without lengthscale (e.g., ArcCosine)
-            params["lengthscale_mean"] = None
-            params["lengthscale_std"] = None
 
-        # Get outputscale
-        if hasattr(self.model.covar_module, "outputscale"):
-            params["outputscale"] = self.model.covar_module.outputscale.item()
+        # Extract outputscale and noise
+        covar = self.model.covar_module
+        if hasattr(covar, "outputscale"):
+            params["outputscale"] = covar.outputscale.item()
 
-        # Get noise
         if hasattr(self.model.likelihood, "noise"):
             params["noise_variance"] = self.model.likelihood.noise.item()
 
