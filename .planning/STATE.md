@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-31)
 ## Current Position
 
 Phase: 7 of 11 (Data Augmentation)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-01 -- Completed 07-01-PLAN.md
+Last activity: 2026-02-01 -- Completed 07-02-PLAN.md
 
-Progress: [████████████░] 62%
+Progress: [█████████████░] 65%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 16
-- Average duration: 13 min
-- Total execution time: 3.65 hours
+- Total plans completed: 17
+- Average duration: 12 min
+- Total execution time: 3.77 hours
 
 **By Phase:**
 
@@ -33,10 +33,10 @@ Progress: [████████████░] 62%
 | 04-flow-matching-baselines | 3 | 12min | 4min |
 | 05-advanced-flow-methods | 2 | 10min | 5min |
 | 06-advanced-architectures | 3 | 9min | 3min |
-| 07-data-augmentation | 1 | 3min | 3min |
+| 07-data-augmentation | 2 | 9min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 05-02 (5min), 06-01 (3min), 06-02 (4min), 06-03 (2min), 07-01 (3min)
+- Last 5 plans: 06-01 (3min), 06-02 (4min), 06-03 (2min), 07-01 (3min), 07-02 (6min)
 - Trend: Fast execution continues
 
 *Updated after each plan completion*
@@ -92,8 +92,10 @@ Recent decisions affecting current work:
 - Configuration overlay pattern: defaults <- scale config <- kwargs (06-03)
 - Beta(alpha, alpha) for mixup with U-shaped distribution for diverse mixing (07-01)
 - Augment x1 only (data), never x0 (noise), before coupling.sample() (07-01)
-- Order: mixup -> noise as per research (07-01)
-- aug string parses defaults: "mixup" -> alpha=0.2, "noise" -> std=0.1 (07-01)
+- Order: mixup -> noise -> dropout as per research (07-01, 07-02)
+- aug string parses defaults: "mixup" -> alpha=0.2, "noise" -> std=0.1, "dropout" -> rate=0.1 (07-01, 07-02)
+- F.dropout IS dimension masking - satisfies DATA-07 dropout/masking requirement (07-02)
+- Augmentation has marginal impact (~0.2%) in short training runs (07-02 ablation)
 
 ### Pending Todos
 
@@ -110,8 +112,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 13:20 UTC
-Stopped at: Completed 07-01-PLAN.md (mixup and noise augmentation)
+Last session: 2026-02-01 13:29 UTC
+Stopped at: Completed 07-02-PLAN.md (dimension dropout and ablation)
 Resume file: None
 
 ## Phase 5 Summary (COMPLETE)
@@ -205,9 +207,25 @@ Delivered (07-01):
 
 **Research finding:** Beta(0.2, 0.2) produces U-shaped distribution (~35% < 0.1, ~33% > 0.9), resulting in cosine similarity ~0.55-0.60 between original and mixed. Statistics (mean ~0, std ~1) are preserved.
 
+Delivered (07-02):
+- dimension_dropout() using F.dropout with automatic scaling
+- Updated augment_batch() order: mixup -> noise -> dropout
+- parse_aug_string() helper for config shorthand parsing
+- CLI arg --dropout-rate for dimension dropout control
+- Ablation comparing baseline vs augmented training (30 epochs)
+
+**Ablation Results (30 epochs, 1k dataset):**
+| Aug Method | Best Val Loss | Delta |
+|------------|---------------|-------|
+| none       | 1.992204      | baseline |
+| mixup      | 1.996063      | +0.19% |
+| noise      | 1.995363      | +0.16% |
+| mixup+noise| 1.996343      | +0.21% |
+
+**Research finding:** Augmentation has marginal impact (~0.2%) in short training runs. May help more with longer training or larger models.
+
 Remaining:
-- 07-02: Dimension dropout augmentation
-- 07-03: Ablation experiments
+- 07-03: Extended ablation experiments (optional)
 
 ## Phase 4 Summary (COMPLETE)
 
