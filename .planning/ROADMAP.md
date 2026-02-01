@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Data Pipeline** - Dataset generation, splits, normalization, SONAR decoder verification
 - [x] **Phase 2: Training Infrastructure** - Training loop, checkpointing, experiment tracking, GPU config
 - [x] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
-- [ ] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
+- [x] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
 - [ ] **Phase 5: Advanced Flow Methods** - Rectified Flow and Stochastic Interpolants
 - [ ] **Phase 6: Advanced Architectures** - U-Net MLP, Mamba, and scaled variants
 - [ ] **Phase 7: Data Augmentation** - Mixup, noise injection, dimension dropout
@@ -87,9 +87,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md - Coupling abstraction and OT-CFM implementation
-- [ ] 04-02-PLAN.md - OT-CFM training and path straightness evaluation
-- [ ] 04-03-PLAN.md - CFG-Zero* guidance integration and phase verification
+- [x] 04-01-PLAN.md - Coupling abstraction and OT-CFM implementation
+- [x] 04-02-PLAN.md - OT-CFM training and path straightness evaluation
+- [x] 04-03-PLAN.md - CFG-Zero* guidance integration and phase verification
 
 ### Phase 5: Advanced Flow Methods
 **Goal**: Rectified Flow and Stochastic Interpolants implemented and compared
@@ -219,7 +219,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 | 1. Data Pipeline | 2/2 | Complete | 2026-02-01 |
 | 2. Training Infrastructure | 2/2 | Complete | 2026-02-01 |
 | 3. Baseline Architectures | 3/3 | Complete | 2026-02-01 |
-| 4. Flow Matching Baselines | 0/3 | Not started | - |
+| 4. Flow Matching Baselines | 3/3 | Complete | 2026-02-01 |
 | 5. Advanced Flow Methods | 0/2 | Not started | - |
 | 6. Advanced Architectures | 0/3 | Not started | - |
 | 7. Data Augmentation | 0/2 | Not started | - |
@@ -230,4 +230,4 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 ---
 *Roadmap created: 2026-01-31*
-*Last updated: 2026-02-01*
+*Last updated: 2026-02-01 (Phase 4 complete)*
