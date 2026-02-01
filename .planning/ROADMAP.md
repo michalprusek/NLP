@@ -52,11 +52,11 @@ Plans:
   3. Wandb logs training metrics, hyperparameters, and artifacts
   4. All experiments run on GPU 1 (A5000) with CUDA_VISIBLE_DEVICES=1
   5. Training can resume from checkpoint
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: Core training loop with EMA and early stopping
-- [ ] 02-02: Checkpoint management and Wandb integration
+- [ ] 02-01-PLAN.md - Core training loop with EMA, early stopping, and FlowTrainer class
+- [ ] 02-02-PLAN.md - Checkpoint management and Wandb integration
 
 ### Phase 3: Baseline Architectures
 **Goal**: Two baseline velocity networks trained and evaluated for comparison
@@ -215,7 +215,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Pipeline | 2/2 | ✓ Complete | 2026-02-01 |
+| 1. Data Pipeline | 2/2 | Complete | 2026-02-01 |
 | 2. Training Infrastructure | 0/2 | Not started | - |
 | 3. Baseline Architectures | 0/2 | Not started | - |
 | 4. Flow Matching Baselines | 0/3 | Not started | - |
