@@ -164,6 +164,87 @@ compute_reconstruction_mse = compute_distribution_mse
 
 
 @torch.no_grad()
+def compute_path_straightness(
+    model: torch.nn.Module,
+    test_embeddings: Tensor,
+    n_samples: int,
+    n_steps: int,
+    device: str | torch.device,
+) -> dict:
+    """
+    Measure how straight the flow trajectories are.
+
+    Compares actual ODE trajectories to ideal straight lines from noise to
+    generated samples. OT-CFM should produce straighter paths than I-CFM.
+
+    Process:
+    1. Sample noise x0 ~ N(0, I)
+    2. Integrate ODE to get trajectory [x_0, x_1, ..., x_T]
+    3. Compute ideal straight line from x0 to x_T (final generated sample)
+    4. Measure deviation from ideal at each step
+
+    Args:
+        model: Velocity network in eval mode.
+        test_embeddings: Normalized test embeddings [N, D] (unused, for consistency).
+        n_samples: Number of trajectories to evaluate.
+        n_steps: Number of ODE integration steps.
+        device: Computation device.
+
+    Returns:
+        Dictionary with:
+            - mean_path_deviation: Average L2 deviation from straight line
+            - max_path_deviation: Maximum deviation across all samples/steps
+            - path_variance: Variance of deviation along trajectories
+            - n_samples: Number of samples evaluated
+    """
+    device = torch.device(device) if isinstance(device, str) else device
+    model.eval()
+
+    # Sample noise starting points
+    x0 = torch.randn(n_samples, 1024, device=device)
+
+    dt = 1.0 / n_steps
+    x = x0.clone()
+    trajectory = [x.clone()]
+
+    # Integrate ODE and record trajectory
+    logger.info(f"Computing path straightness for {n_samples} samples, {n_steps} steps...")
+    for i in tqdm(range(n_steps), desc="ODE integration", leave=False):
+        t = i / n_steps
+        t_batch = torch.full((x.shape[0],), t, device=device, dtype=x.dtype)
+        v = model(x, t_batch)
+        x = x + dt * v
+        trajectory.append(x.clone())
+
+    trajectory = torch.stack(trajectory)  # [n_steps+1, n_samples, 1024]
+    x_T = trajectory[-1]  # Final generated samples
+
+    # Compute ideal straight path from x0 to x_T
+    ts = torch.linspace(0, 1, n_steps + 1, device=device).view(-1, 1, 1)
+    ideal_path = (1 - ts) * x0.unsqueeze(0) + ts * x_T.unsqueeze(0)
+
+    # Compute deviation from ideal straight line
+    # L2 distance at each step
+    deviation = ((trajectory - ideal_path) ** 2).sum(dim=-1).sqrt()  # [steps+1, n_samples]
+
+    # Skip t=0 and t=1 (always zero deviation by construction)
+    deviation_interior = deviation[1:-1]  # [steps-1, n_samples]
+
+    mean_deviation = deviation_interior.mean().item()
+    max_deviation = deviation_interior.max().item()
+    path_variance = deviation_interior.var(dim=0).mean().item()  # avg variance along paths
+
+    logger.info(f"Path straightness: mean={mean_deviation:.4f}, max={max_deviation:.4f}, var={path_variance:.6f}")
+
+    return {
+        "mean_path_deviation": mean_deviation,
+        "max_path_deviation": max_deviation,
+        "path_variance": path_variance,
+        "n_samples": n_samples,
+    }
+
+
+@torch.no_grad()
 def generate_and_decode(
     model: torch.nn.Module,
     stats: dict,
@@ -367,6 +448,25 @@ Examples:
     print(f"MSE: {mse_results['mse']:.6f} +/- {mse_results['std']:.6f}")
     print(f"Samples: {mse_results['n_samples']}")
     print(f"Steps: {mse_results['n_steps']}")
+
+    # Compute path straightness
+    print("\n" + "=" * 50)
+    print("=== Path Straightness ===")
+    print("=" * 50)
+    print("(Lower values = straighter paths = better ODE integration)")
+
+    straightness_results = compute_path_straightness(
+        model=model,
+        test_embeddings=test_embeddings,
+        n_samples=args.n_mse_samples,
+        n_steps=args.n_steps,
+        device=args.device,
+    )
+
+    print(f"Mean deviation: {straightness_results['mean_path_deviation']:.4f}")
+    print(f"Max deviation: {straightness_results['max_path_deviation']:.4f}")
+    print(f"Path variance: {straightness_results['path_variance']:.6f}")
+    print(f"Samples: {straightness_results['n_samples']}")
 
     # Generate and decode text
     print("\n" + "=" * 50)
