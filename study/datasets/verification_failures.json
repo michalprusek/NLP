@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-02-01T02:25:28.589237",
+  "mean_similarity": 0.991223931312561,
+  "pass_rate": 0.9959999918937683,
+  "threshold": 0.9,
+  "n_tested": 500,
+  "n_failures": 2,
+  "failures": [
+    {
+      "index": 107,
+      "local_index": 146,
+      "similarity": 0.7056677341461182,
+      "original_text": "Think about drawing a diagram or using\u5b9e\u7269\u6a21\u578b\u6765\u5e2e\u52a9\u7406\u89e3\u95ee\u9898\u4e2d\u7684\u5173\u7cfb\u3002",
+      "decoded_text": "Think about drawing a diagram or using real object model to help understand relationships in the problem."
+    },
+    {
+      "index": 656,
+      "local_index": 300,
+      "similarity": 0.8039016723632812,
+      "original_text": "Reflect on whether your solution makes sense in the context of the problem after you have calculated an answer.",
+      "decoded_text": "After you have calculated whether your solution makes sense in the context of the problem after calculating an answer."
+    }
+  ]
+}
