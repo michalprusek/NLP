@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 6 - Advanced Architectures (ready to start)
+**Current focus:** Phase 6 - Advanced Architectures (in progress)
 
 ## Current Position
 
-Phase: 5 of 11 (Advanced Flow Methods) - COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed Phase 5 execution
+Phase: 6 of 11 (Advanced Architectures)
+Plan: 2 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 06-02-PLAN.md
 
-Progress: [█████████░] 50%
+Progress: [██████████░] 55%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
-- Average duration: 17 min
-- Total execution time: 3.3 hours
+- Total plans completed: 14
+- Average duration: 15 min
+- Total execution time: 3.5 hours
 
 **By Phase:**
 
@@ -32,9 +32,10 @@ Progress: [█████████░] 50%
 | 03-baseline-architectures | 3 | 10min | 3min |
 | 04-flow-matching-baselines | 3 | 12min | 4min |
 | 05-advanced-flow-methods | 2 | 10min | 5min |
+| 06-advanced-architectures | 2 | 7min | 4min |
 
 **Recent Trend:**
-- Last 5 plans: 04-02 (4min), 04-03 (3min), 05-01 (5min), 05-02 (5min)
+- Last 5 plans: 04-03 (3min), 05-01 (5min), 05-02 (5min), 06-01 (3min), 06-02 (4min)
 - Trend: Fast execution continues
 
 *Updated after each plan completion*
@@ -81,6 +82,11 @@ Recent decisions affecting current work:
 - GVP schedule (cos/sin) is variance-preserving: alpha^2 + sigma^2 = 1 (05-02)
 - SI velocity target is alpha_dot*x0 + sigma_dot*x1, NOT x1-x0 (05-02)
 - Reflow produces 3x straighter paths than other methods (0.0005 vs 0.0015) (05-02)
+- FiLMLayer uses zero-init for identity transform at start (06-01)
+- UNetMLP uses hidden_dims=(512, 256) for ~6.9M params (06-01)
+- mamba-ssm installation failed due to CUDA 13.1 vs PyTorch CUDA 12.8 mismatch (06-02)
+- Graceful fallback: MAMBA_AVAILABLE=False, ImportError on instantiation (06-02)
+- Bidirectional Mamba with chunk_size=64 (16 chunks of 64 dims) (06-02)
 
 ### Pending Todos
 
@@ -93,11 +99,12 @@ None.
 - 2 samples (0.4%) failed round-trip verification - acceptable edge cases (mixed language, grammar reconstruction)
 - WANDB authentication missing - using WANDB_MODE=offline for training runs
 - GPU 1 memory pressure from other processes - use GPU 0 for SONAR decoder when needed
+- mamba-ssm requires matching CUDA versions - currently blocked by version mismatch (06-02)
 
 ## Session Continuity
 
-Last session: 2026-02-01 12:35 UTC
-Stopped at: Completed Phase 5 (Advanced Flow Methods)
+Last session: 2026-02-01 12:32 UTC
+Stopped at: Completed 06-02-PLAN.md (Mamba velocity network)
 Resume file: None
 
 ## Phase 5 Summary (COMPLETE)
@@ -138,6 +145,32 @@ Delivered (05-02):
 4. All methods generate coherent text
 
 Ready for: Phase 6 (Advanced Architectures), Phase 7 (Data Augmentation), Phase 8 (GP-Guided Sampling)
+
+## Phase 6 Summary (IN PROGRESS)
+
+**Phase 6 in progress.** Advanced architectures being implemented.
+
+Delivered (06-01):
+- FiLMLayer for feature-wise linear modulation
+- UNetMLP velocity network with skip connections
+- Extended model factory: create_model("unet")
+- ~6.9M params with default config
+
+Delivered (06-02):
+- MambaVelocityNetwork (experimental, blocked by mamba-ssm installation)
+- MAMBA_AVAILABLE flag for graceful fallback
+- Extended model factory: create_model("mamba") with ImportError handling
+- Bidirectional SSM treating embedding as 16 chunks of 64 dims
+
+**Architectures implemented:**
+| Arch | Params | Status |
+|------|--------|--------|
+| MLP | ~920K | Available |
+| DiT | ~9.3M | Available |
+| UNet | ~6.9M | Available |
+| Mamba | ~2M | Blocked (mamba-ssm) |
+
+Remaining: 06-03 (architecture scaling variants)
 
 ## Phase 4 Summary (COMPLETE)
 
