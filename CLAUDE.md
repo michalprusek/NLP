@@ -37,13 +37,14 @@ CRITICAL: before each new implementation proposal retrieve more information from
 
 **Reference Papers**: `papers/` contains 40 PDFs covering flow matching, high-D BO, prompt optimization (OPRO, ProTeGi, MIPRO), TuRBO, SONAR, CFG-Zero*, and related SOTA methods. Read these before proposing new techniques.
 
-This repository contains five prompt optimization methods, each in its own directory:
+This repository contains six prompt optimization methods:
 
 1. **OPRO** (`opro/`) - Optimization by PROmpting for meta-optimization
 2. **ProTeGi** (`protegi/`) - Prompt Optimization with Textual Gradients
-3. **GEPA** (`gepa/`) - Genetic-Pareto Prompt Adaptation
+3. **GEPA** (`gepa_gsm8k/`) - Genetic-Pareto Prompt Adaptation (GSM8K-specific)
 4. **EcoFlow** (`ecoflow/`) - Guided flow matching in SONAR embedding space
-5. **NFBO** (`nfbo/`) - Normalizing Flow Bayesian Optimization
+5. **NFBO** (`nfbo_gsm8k/`) - Normalizing Flow Bayesian Optimization (GSM8K-specific)
+6. **InstructZero** (`instructzero/`, `instructzero_gsm8k/`) - Soft prompt optimization with GP
 
 ## Repository Structure
 
@@ -61,11 +62,8 @@ NLP/
 │   ├── prompts/             # gradient.txt, edit.txt, etc.
 │   └── results/
 │
-├── gepa/                    # GEPA optimization method
-│   ├── gepa.py              # GEPAOptimizer class
-│   ├── run.py               # CLI entry point
-│   ├── prompts/             # gepa_mutate.txt, gepa_reflect.txt
-│   └── results/
+├── gepa_gsm8k/              # GEPA for GSM8K task
+│   └── run.py               # CLI entry point with integrated optimizer
 │
 ├── ecoflow/                 # Flow matching + BO
 │   ├── velocity_network.py  # DiT-style velocity network
@@ -77,18 +75,33 @@ NLP/
 │   ├── run.py               # CLI entry point
 │   └── results/
 │
-├── nfbo/                    # Normalizing Flow BO
-│   ├── model.py             # RealNVP flow model
-│   ├── sampler.py           # NFBoSampler
-│   ├── loop.py              # NFBoLoop
+├── nfbo_gsm8k/              # NFBO for GSM8K task
 │   ├── run.py               # CLI entry point
-│   └── results/
+│   ├── train_textflow.py    # TextFlow model training
+│   └── textflow/            # Discrete normalizing flow implementation
+│
+├── nfbo_original/           # Reference NFBO implementation from paper
+│
+├── instructzero/            # InstructZero core implementation
+│   ├── gp_optimizer.py      # Gaussian Process optimizer
+│   ├── loop.py              # Optimization loop
+│   ├── soft_prompt.py       # Soft prompt handling
+│   └── run.py               # CLI entry point
+│
+├── instructzero_gsm8k/      # InstructZero for GSM8K task
+│   └── run.py               # CLI entry point
+│
+├── study/                   # Flow matching architecture study
+│   ├── data/                # Data pipeline utilities
+│   ├── flow_matching/       # Training, models, evaluation
+│   └── run_all_experiments.py
 │
 ├── shared/                  # Shared infrastructure
 │   ├── llm_client.py        # LLMClient ABC + implementations
 │   └── gsm8k_evaluator.py   # GSM8K evaluation utilities
 │
 ├── datasets/                # Data files (read-only)
+├── papers/                  # Reference papers (40 PDFs)
 ├── tests/                   # Test suite
 ├── CLAUDE.md                # This file
 └── pyproject.toml           # Project configuration
@@ -121,16 +134,16 @@ uv run python -m protegi.run --model qwen --steps 6
 uv run python -m protegi.run --model qwen --meta-model sonnet --steps 10
 ```
 
-### GEPA
+### GEPA (GSM8K)
 
 ```bash
 # Quick run
-uv run python -m gepa.run --model qwen --budget 10000
+uv run python -m gepa_gsm8k.run --model qwen --budget 10000
 
 # Production run
 tmux new-session -d -s gepa_run \
-  "uv run python -m gepa.run --model qwen --budget 150000 \
-  2>&1 | tee gepa/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
+  "uv run python -m gepa_gsm8k.run --model qwen --budget 150000 \
+  2>&1 | tee gepa_gsm8k/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
 ### EcoFlow
@@ -147,11 +160,26 @@ uv run python -m ecoflow.run \
   --iterations 100
 ```
 
-### NFBO
+### NFBO (GSM8K)
 
 ```bash
-# Run NF-BO
-uv run python -m nfbo.run --iterations 50 --n-initial 20
+# Train TextFlow model first
+uv run python -m nfbo_gsm8k.train_textflow --data datasets/gsm8k
+
+# Run NF-BO optimization
+uv run python -m nfbo_gsm8k.run --iterations 50 --n-initial 20
+```
+
+### InstructZero
+
+```bash
+# Quick run (GSM8K)
+uv run python -m instructzero_gsm8k.run --model qwen --iterations 20
+
+# Production run
+tmux new-session -d -s instructzero_run \
+  "uv run python -m instructzero_gsm8k.run --model qwen --iterations 100 \
+  2>&1 | tee instructzero_gsm8k/results/iz_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
 ---
@@ -200,6 +228,7 @@ A:
 | **GEPA** | Evolutionary | Pareto diversity, reflection | Complex, slower convergence |
 | **EcoFlow** | Flow + BO | Continuous space, GP-guided | Requires pretrained flow |
 | **NFBO** | Normalizing Flow | Adaptive density modeling | Training overhead per step |
+| **InstructZero** | GP + Soft Prompts | Sample-efficient, continuous | Requires soft prompt support |
 
 ---
 
@@ -222,7 +251,7 @@ A:
 - `--gradients`: Gradients per error group (default: 4)
 - `--mc-samples`: Monte Carlo paraphrases (default: 2)
 
-### GEPA
+### GEPA (GSM8K)
 - `--budget`: Total task LLM call budget (default: 150000)
 - `--pareto-size`: Max Pareto front size (default: 10)
 - `--mutations`: Mutations per iteration (default: 4)
@@ -231,6 +260,11 @@ A:
 - `--guidance-strength`: LCB guidance λ (default: 1.0)
 - `--alpha`: LCB exploration weight (default: 1.0)
 - `--n-candidates`: Candidates to generate (default: 64)
+
+### InstructZero
+- `--iterations`: Optimization iterations (default: 100)
+- `--n-initial`: Initial random samples (default: 5)
+- `--prompt-length`: Soft prompt token length (default: 10)
 
 ---
 
