@@ -84,12 +84,12 @@ Plans:
   3. OT-CFM produces straighter paths than I-CFM (lower path variance)
   4. CFG-Zero* schedule zeros guidance for first 4% of steps
   5. Both methods generate valid SONAR embeddings
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: I-CFM implementation and training
-- [ ] 04-02: OT-CFM with Sinkhorn coupling
-- [ ] 04-03: CFG-Zero* guidance schedule integration
+- [ ] 04-01-PLAN.md - Coupling abstraction and OT-CFM implementation
+- [ ] 04-02-PLAN.md - OT-CFM training and path straightness evaluation
+- [ ] 04-03-PLAN.md - CFG-Zero* guidance integration and phase verification
 
 ### Phase 5: Advanced Flow Methods
 **Goal**: Rectified Flow and Stochastic Interpolants implemented and compared
