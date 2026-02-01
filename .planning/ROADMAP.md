@@ -100,11 +100,11 @@ Plans:
   2. Reflow produces straighter paths (fewer ODE steps needed)
   3. Stochastic Interpolants with learnable interpolation trains
   4. All flow methods produce comparable sample quality
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: Rectified Flow with reflow procedure
-- [ ] 05-02: Stochastic Interpolants implementation
+- [ ] 05-01-PLAN.md - Rectified Flow with reflow pair generation and training
+- [ ] 05-02-PLAN.md - Stochastic Interpolants with GVP schedule and phase comparison
 
 ### Phase 6: Advanced Architectures
 **Goal**: U-Net MLP, Mamba, and scaled variants implemented for ablation
