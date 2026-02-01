@@ -16,6 +16,27 @@ Always optimize for this hardware:
 
 CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
 
+## Research Context (NeurIPS Submission)
+
+**Core Problem**: Sample-efficient optimization in high-dimensional latent spaces.
+
+**Key Constraints**:
+- **Extremely limited evaluation budget**: 6-25 full-fidelity evaluations (e.g., 25 prompts, 6 protein samples)
+- **High-dimensional search space**: 1024D+ from pretrained autoencoders (SONAR, vec2text, ESM-C)
+- **Expensive oracle**: Each evaluation costs significant compute (LLM inference, wet lab, simulation)
+
+**Goal**: Outperform SOTA methods (ZeroInstruct, NFBO, GEPA, TuRBO) in low-sample regimes.
+
+**Design Principles**:
+- Every method must work with n < 30 observations
+- Leverage pretrained encoder structure (manifold, semantics)
+- Prioritize sample efficiency over wall-clock time
+- Report results with statistical significance across random seeds
+
+**Domains**: Prompt optimization (GSM8K), protein engineering (ESM-C), text-to-text (vec2text)
+
+**Reference Papers**: `papers/` contains 40 PDFs covering flow matching, high-D BO, prompt optimization (OPRO, ProTeGi, MIPRO), TuRBO, SONAR, CFG-Zero*, and related SOTA methods. Read these before proposing new techniques.
+
 This repository contains five prompt optimization methods, each in its own directory:
 
 1. **OPRO** (`opro/`) - Optimization by PROmpting for meta-optimization

@@ -1,177 +1,167 @@
 # External Integrations
 
-**Analysis Date:** 2026-01-28
+**Analysis Date:** 2026-01-31
 
 ## APIs & External Services
 
-**LLM Inference Backends:**
-- **vLLM** (Local CUDA)
-  - What it's used for: Fast batch inference for task evaluation and meta-optimization
-  - SDK/Client: `vllm` package
-  - Models supported: Qwen, Llama, SaulLM (HuggingFace Instruct models)
-  - Auto-detection: Preferred for models not starting with "gpt-" or "google/"
-  - Implementation: `src/llm_client.py` - `VLLMClient` class
+**LLM Backends:**
+- **Claude (Anthropic)** - Meta-optimization and task evaluation
+  - SDK/Client: `anthropic>=0.71.0`
+  - Auth: `ANTHROPIC_API_KEY`
+  - Models supported: claude-haiku-4-5-20251001, claude-sonnet-4-5-20251022
+  - Implementation: `shared/llm_client.py::AnthropicClient` (if available) or generic OpenAI client
 
-- **OpenAI API (GPT)**
-  - What it's used for: Meta-optimization (Claude alternative) or task evaluation with GPT models
-  - SDK/Client: `openai>=2.5.0` package
-  - Models supported: gpt-3.5-turbo (alias "gpt-3.5"), gpt-4 (auto-detected by "gpt" prefix)
-  - Auth: `OPENAI_API_KEY` environment variable
-  - Implementation: `src/llm_client.py` - `OpenAIClient` class
+- **OpenAI** - GPT-3.5, GPT-4 task evaluation
+  - SDK/Client: `openai>=2.5.0`
+  - Auth: `OPENAI_API_KEY`
+  - Implementation: `shared/llm_client.py::OpenAIClient`
+  - Endpoint: Chat completions API
 
-- **Anthropic API (Claude)**
-  - What it's used for: Meta-optimization (textual gradients, reflection, prompt editing)
-  - SDK/Client: `anthropic>=0.71.0` package
-  - Models supported: "haiku" → claude-haiku-4-5-20251001, "sonnet" → claude-sonnet-4-5-20251022
-  - Auth: `ANTHROPIC_API_KEY` environment variable
-  - Implementation: Integrated via OpenAI-compatible wrapper in `src/llm_client.py`
-  - Usage: `--model sonnet` or `--meta-model haiku` in run scripts
-
-- **DeepInfra API (Gemma, OpenAI-compatible)**
-  - What it's used for: Alternative LLM provider for Gemma and other models
-  - SDK/Client: `openai>=2.5.0` package with custom base_url
+- **DeepInfra** - Gemma, Llama inference (OpenAI-compatible)
+  - SDK/Client: `openai>=2.5.0` (reused client)
+  - Auth: `DEEPINFRA_API_KEY`
   - Base URL: `https://api.deepinfra.com/v1/openai`
-  - Models supported: google/gemma-3-4b-it (auto-detected by "google/" prefix)
-  - Auth: `DEEPINFRA_API_KEY` environment variable
-  - Implementation: `src/llm_client.py` - `DeepInfraClient` class
+  - Implementation: `shared/llm_client.py::DeepInfraClient`
 
-**Embedding Services:**
-- **HuggingFace Sentence Transformers (GTR)**
-  - What it's used for: 768D embedding generation for EcoFlow-BO encoder
-  - SDK/Client: `sentence-transformers>=2.3.0` package
-  - Model: GTR (General Text Representation) - loaded locally
-  - Implementation: `ecoflow_bo/encoder.py` - `MatryoshkaEncoder` uses GTR embeddings
-  - Data source: Pre-computed embeddings in `datasets/gtr_embeddings_full.pt` (4.7GB)
+- **HuggingFace Models (Local/vLLM)** - Qwen, Llama, SaulLM
+  - SDK/Client: `transformers>=4.57.1`, `vllm>=0.10.0,<0.11.0`
+  - Auth: None (uses HuggingFace token from `~/.cache/huggingface/`)
+  - Implementation: `shared/llm_client.py::VLLMClient`
+  - Models: Qwen/Qwen2.5-7B-Instruct, meta-llama/Llama-3.1-8B-Instruct, Equall/Saul-7B-Instruct-v1
 
-- **Sonar API (sonar-space)**
-  - What it's used for: Text embedding and reranking
-  - SDK/Client: `sonar-space>=0.5.0` package
-  - Implementation: Available as integration but not actively used in current optimization runs
-  - Potential use: Prompt representation for semantic search
+**Embedding Models:**
+- **SONAR (Meta)** - 1024D embedding space for optimization
+  - SDK/Client: `sonar-space>=0.5.0`, `sentence-transformers>=2.3.0`
+  - Auth: None (HuggingFace token)
+  - Models: text_sonar_basic_encoder (embedding), text_sonar_basic_decoder (decoding)
+  - Implementation: `ecoflow/decoder.py::SonarDecoder`, `ecoflow/data.py`
+  - Pipeline: `sonar.inference_pipelines.text.EmbeddingToTextModelPipeline`
 
 ## Data Storage
 
-**Databases:**
-- Not applicable - No persistent database used
+**Datasets:**
+- **HuggingFace Datasets Hub** - GSM8K loading
+  - Client: `datasets>=4.2.0` with `load_from_disk()`
+  - Location: `datasets/gsm8k/` (local arrow format)
+  - Format: Arrow (.arrow files with metadata)
+  - Reference: `shared/gsm8k_evaluator.py::GSM8KEvaluator`
 
-**File Storage:**
-- **Local filesystem only**
-  - Training/test data: `datasets/gsm8k/` (Arrow format, HuggingFace datasets)
-  - Additional data: `datasets/hbbops/` (JSON, TXT instruction sets)
-  - Embeddings: `datasets/gtr_embeddings_full.pt` (PyTorch tensor, 4.7GB)
-  - Text corpus: `datasets/combined_texts.json` (1.7GB JSON)
-  - Optimization results: `results/` (JSON, TXT outputs, timestamps)
-  - EcoFlow checkpoints: `results/ecoflow_checkpoints/` (PyTorch `.pt` files)
-  - Detailed eval JSONs: `results/eval_*_YYYYMMDD_HHMMSS/` (optional, see `--save-eval-json`)
+**Local File Storage:**
+- **PyTorch Checkpoints** - Model weights and embeddings
+  - Location: `datasets/sonar_embeddings.pt` (1.5M pre-computed embeddings)
+  - Location: `ecoflow/results/` (flow model checkpoints)
+  - Format: PyTorch `.pt` (torch.save/load)
+
+- **Results Output** - Optimization trajectories and prompts
+  - Location: `{opro,protegi,gepa,ecoflow,nfbo}/results/`
+  - Format: JSON files with scored prompts, timestamps
 
 **Caching:**
-- PyTorch in-memory caching during runs
-- vLLM prefix caching (`enable_prefix_caching=True` in `src/llm_client.py:77`)
-- HuggingFace model cache: Standard `~/.cache/huggingface/` location
+- HuggingFace transformers cache: `~/.cache/huggingface/hub/`
+- vLLM KV-cache: On-GPU (managed by vLLM)
+- No explicit caching service (Redis, Memcached) detected
 
 ## Authentication & Identity
 
-**Auth Providers:**
-- **Environment variables** (custom implementation)
-  - No OAuth or session-based auth
-  - Direct API key passing: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPINFRA_API_KEY`
-  - Loaded via `python-dotenv` in `src/llm_client.py:7`
-  - Implementation: `load_dotenv()` reads `.env` file at startup
+**Auth Provider:**
+- Custom API key management via environment variables
+- Implementation: `shared/llm_client.py` loads keys from `.env` via `python-dotenv>=1.0.0`
+- No OAuth, JWT, or service-to-service auth detected
 
-**Auth Pattern:**
-- Each API client validates key presence at initialization
-- OpenAI/DeepInfra: Keys passed to OpenAI() client initialization
-- Anthropic: Key managed by anthropic package (via environment or passed)
-- No token refresh or expiration handling (delegated to SDK)
+**Per-Backend Auth:**
+- **vLLM**: HuggingFace token (auto-loaded from `~/.cache/`)
+- **OpenAI**: `OPENAI_API_KEY` env var
+- **DeepInfra**: `DEEPINFRA_API_KEY` env var
+- **Anthropic**: `ANTHROPIC_API_KEY` env var
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- Not detected - No external error tracking service (Sentry, Rollbar, etc.)
-- Local error handling via try-catch with console logging
+- None detected (no Sentry, DataDog, etc.)
+- Errors logged to stdout/stderr via print statements and logging module
 
-**Logs:**
-- Console output (stdout/stderr)
-- File logging (optional):
-  - tmux sessions with `tee` for long-running processes
-  - Pattern: `tmux new-session -d -s <name> "... 2>&1 | tee results/<descriptive>_$(date +%Y%m%d_%H%M%S).log"`
-  - TensorBoard logs: `tensorboard>=2.20.0` for training visualization
+**Logging:**
+- **Built-in Python logging** - Used in `ecoflow/train_flow.py`
+  - Format: `%(asctime)s - %(levelname)s - %(message)s`
+  - Level: INFO by default
+- **stdout/print statements** - Throughout `shared/llm_client.py` and optimization modules
+- **TQDM progress bars** - For iteration progress visualization
+
+**TensorBoard:**
+- Optional integration via `tensorboard>=2.20.0`
+- Used in soft-prompt VAE training for loss tracking
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Not applicable - Framework/library, not a deployed service
-- Can be used locally or on custom infrastructure
+- Local GPU workstations (NVIDIA L40S)
+- No detected cloud deployment (AWS, GCP, Azure)
 
 **CI Pipeline:**
-- Pytest configuration exists: `.pytest_cache/` directory, `pytest>=9.0.2` in dev dependencies
-- No external CI service detected (no GitHub Actions, GitLab CI, etc. configs)
-- Tests run locally via: `pytest` (configuration in `pyproject.toml`)
+- Not detected (no GitHub Actions, GitLab CI, Jenkins)
+
+**Testing:**
+- Local pytest execution: `uv run pytest tests/ -x -q`
+- No continuous integration service configured
 
 ## Environment Configuration
 
-**Required env vars:**
-- `ANTHROPIC_API_KEY` - Claude API access (optional if using vLLM only)
-- `OPENAI_API_KEY` - OpenAI API access (optional if using vLLM only)
-- `DEEPINFRA_API_KEY` - DeepInfra API access (optional if using vLLM only)
-- `CUDA_VISIBLE_DEVICES` - GPU selection (set at runtime, e.g., `--gpu-ids 0,1`)
+**Required Environment Variables:**
+- `ANTHROPIC_API_KEY` - Claude model access (CRITICAL if using haiku/sonnet)
+- `DEEPINFRA_API_KEY` - Gemma/Llama access (optional, for alternative models)
+- `OPENAI_API_KEY` - OpenAI GPT access (optional)
+- `CUDA_VISIBLE_DEVICES` - GPU selection (e.g., "0,1" for 2 GPUs)
 
-**Secrets location:**
-- `.env` file (gitignored, not committed)
-- Template: `.env.example` referenced in README (not found in current repo)
-- Keys are loaded at client initialization in `src/llm_client.py`
+**Optional Configuration:**
+- `VLLM_USE_V1` - Should be "0" (v0.10 API)
+- `PYTORCH_CUDA_ALLOC_CONF` - Should be "expandable_segments:True" for flexible memory
+- `VLLM_TARGET_DEVICE` - Should be "cuda"
+
+**Secrets Location:**
+- `.env` file in repository root (VERSION CONTROLLED with dummy keys!)
+- **WARNING**: Actual API keys are committed to `.env` (security risk for production)
+- Proper usage: Copy `.env.example` to `.env` and fill in actual keys locally
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- Not applicable - This is a framework, not a web service
+- None detected
 
 **Outgoing:**
-- Not applicable - No webhook callbacks to external services
+- None detected (no reporting to external services)
 
-## Model Aliases & Routing
+## Model Registry & Package Repositories
 
-**Automatic Backend Detection** (`src/llm_client.py:create_llm_client()`):
-```
-- "gpt" in model_name → OpenAI backend
-- model_name.startswith("google/") → DeepInfra backend
-- Otherwise → vLLM backend (default)
-```
+**HuggingFace Hub:**
+- Qwen/Qwen2.5-7B-Instruct
+- meta-llama/Llama-3.1-8B-Instruct
+- Equall/Saul-7B-Instruct-v1
+- google/gemma-3-4b-it (via DeepInfra)
+- Meta's SONAR encoder/decoder models
 
-**Model Aliases** (defined in run scripts):
-- `qwen` → `Qwen/Qwen2.5-7B-Instruct`
-- `qwen-3b` → `Qwen/Qwen2.5-3B-Instruct`
-- `qwen-7b` → `Qwen/Qwen2.5-7B-Instruct`
-- `llama` → `meta-llama/Llama-3.1-8B-Instruct`
-- `saul` → `Equall/Saul-7B-Instruct-v1`
-- `haiku` → `claude-haiku-4-5-20251001`
-- `sonnet` → `claude-sonnet-4-5-20251022`
-- `gpt-3.5` → `gpt-3.5-turbo`
-- `gemma-3-4b` → `google/gemma-3-4b-it`
+**PyPI:**
+- All dependencies installed from PyPI via uv/pip
 
-## Dataset Loading
+## Network & Connectivity
 
-**GSM8K Math Reasoning:**
-- Source: HuggingFace datasets (pre-downloaded to `datasets/gsm8k/`)
-- Format: Arrow files (`.arrow` binary format)
-- Split: `train/` (7K examples), `test/` (1.3K examples)
-- Loading: `datasets.load_from_disk()` in `src/gsm8k_evaluator.py:134`
-- Answer extraction: Custom logic matching lm-evaluation-harness standard
+**API Endpoints:**
+- `api.anthropic.com` - Anthropic API
+- `api.openai.com` - OpenAI API
+- `api.deepinfra.com/v1/openai` - DeepInfra API
+- `huggingface.co` - Model downloading
 
-**HbBoPs (Hyperband Baseline of Prompts):**
-- Location: `datasets/hbbops/`
-- Files: `ape_instructions_1000.json`, `instructions_*.txt`, `examples_*.txt`, `full_grid_combined.jsonl`
-- Purpose: APE instruction dataset and pre-evaluated prompt results
+**Local Inference:**
+- vLLM runs locally on GPU (no external network calls)
+- SONAR encoder/decoder run locally on GPU
 
-**GTR Embeddings:**
-- Pre-computed: `datasets/gtr_embeddings_full.pt` (4.7GB PyTorch tensor)
-- Used in: EcoFlow-BO encoder (`ecoflow_bo/encoder.py`)
-- Dimension: 768D embeddings for entire prompt space
+## Distributed Computing
 
-**Text Corpus:**
-- `datasets/combined_texts.json` (1.7GB)
-- Used by: Detail retriever for latent space visualization/retrieval
+**Multi-GPU Training:**
+- vLLM: `tensor_parallel_size` parameter for model parallelism
+- PyTorch: `accelerate>=1.10.1` for distributed training setup
+- Training command: `torchrun --nproc_per_node=2` for 2-GPU execution
+- No inter-node communication (single machine only)
 
 ---
 
-*Integration audit: 2026-01-28*
+*Integration audit: 2026-01-31*

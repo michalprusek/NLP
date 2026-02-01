@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 
 # C extensions
-.planning/
 *.so
 
 manuscript/
@@ -198,3 +197,6 @@ vec2text_vae/cache/
 # Large dataset files
 datasets/*.pt
 datasets/*.json
+
+# Weights & Biases
+wandb/

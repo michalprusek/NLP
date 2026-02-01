@@ -1,314 +1,306 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-01-28
+**Analysis Date:** 2026-01-31
 
 ## Test Framework
 
 **Runner:**
-- pytest 9.0.2+ (listed in `pyproject.toml` dev dependencies)
-- Config: `pyproject.toml` (no pytest.ini or pytest.toml found)
+- pytest 9.0.2+
+- Config: `pyproject.toml` with `[dependency-groups] dev = ["pytest>=9.0.2"]`
+- Located in: `/home/prusek/NLP/tests/`
 
 **Assertion Library:**
-- PyTest's built-in assertions (assert statements)
-- torch testing utilities: `torch.allclose()`, `torch.isnan()`
+- Built-in pytest assertions
+- Custom torch assertions: `torch.isclose()`, `torch.allclose(atol=)`, `torch.isnan()`, `torch.isinf()`
 
 **Run Commands:**
 ```bash
-pytest tests/test_ecoflow.py -v              # Run all tests verbose
-pytest tests/test_ecoflow.py::TestClassName  # Run specific test class
-pytest tests/test_ecoflow.py -k test_name    # Run by name pattern
-pytest tests/test_ecoflow.py --tb=short      # Short traceback format
+uv run pytest tests/ -x -q              # Run all tests, stop on first failure
+uv run pytest tests/test_gp_surrogate.py # Run specific test file
+uv run pytest tests/ -v                  # Verbose output with test names
+uv run pytest tests/ --tb=short          # Short traceback format
 ```
 
 ## Test File Organization
 
 **Location:**
-- Tests co-located with source: `tests/` directory at project root
-- Test file: `tests/test_ecoflow.py`
-- One test file per major module (EcoFlow-BO has comprehensive test suite)
+- Separate from implementation: `/home/prusek/NLP/tests/` directory
+- Test discovery: pytest convention `test_*.py` files
 
 **Naming:**
-- Test file: `test_*.py` pattern
-- Test classes: `Test<ComponentName>` (PascalCase)
-- Test methods: `test_<functionality>` (snake_case)
+- Test files: `test_<module_name>.py` (e.g., `test_gp_surrogate.py`, `test_batch_selection.py`)
+- Test classes: `Test<Feature>` (e.g., `TestBinomialVariance`, `TestGPFitting`, `TestBatchDiversity`)
+- Test methods: `test_<specific_behavior>` (e.g., `test_variance_at_p_half`, `test_fit_basic`)
 
 **Structure:**
 ```
 tests/
-└── test_ecoflow.py          # EcoFlow-BO component tests
-    ├── Fixtures             # Reusable test data
-    ├── TestMatryoshkaEncoder
-    ├── TestVelocityNetwork
-    ├── TestRectifiedFlowDecoder
-    ├── TestLosses
-    ├── TestCoarseToFineGP
-    ├── TestDensityAwareAcquisition
-    ├── TestCycleConsistency
-    ├── TestIntegration
-    └── TestPerceiverDecoder
+├── conftest.py                  # Pytest configuration and shared fixtures
+├── test_batch_selection.py      # Tests for batch selection (BO candidate selection)
+├── test_gp_surrogate.py         # Tests for GP surrogates (heteroscedastic & MSR)
+├── test_nfbo_model.py           # Tests for RealNVP flow model
+├── test_nfbo_sampler.py         # Tests for NFBoSampler
+└── test_nfbo_sampler_refined.py # Additional sampler tests
 ```
 
 ## Test Structure
 
-**Suite Organization:**
+**Setup and Configuration (`conftest.py`):**
 ```python
-# Fixtures first (reusable test data)
-@pytest.fixture
-def device():
-    return "cuda" if torch.cuda.is_available() else "cpu"
+"""Pytest configuration for ecoflow tests."""
 
-@pytest.fixture
-def encoder_config():
-    return EncoderConfig(
-        input_dim=768,
-        latent_dim=8,
-        hidden_dims=[256, 128],
-        dropout=0.1,
-        matryoshka_dims=[2, 4, 8],
-    )
+import sys
+from pathlib import Path
 
-# Then test classes, grouped by component
-class TestMatryoshkaEncoder:
-    def test_forward_shape(self, encoder, device):
-        # Arrange
-        x = torch.randn(32, 768, device=device)
-
-        # Act
-        z, mu, log_sigma = encoder(x)
-
-        # Assert
-        assert z.shape == (32, 8)
-        assert mu.shape == (32, 8)
-        assert log_sigma.shape == (32, 8)
+# Add project root to sys.path for imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 ```
 
-**Patterns:**
+**Fixture patterns (`test_batch_selection.py` example):**
+```python
+@pytest.fixture
+def device():
+    """Get CUDA device."""
+    return torch.device("cuda")
 
-1. **Arrange-Act-Assert:** Most tests follow AAA pattern (implicit in structure)
-   ```python
-   def test_deterministic_encode(self, encoder, device):
-       x = torch.randn(32, 768, device=device)               # Arrange
-       encoder.eval()
-       z1 = encoder.encode_deterministic(x)
-       z2 = encoder.encode_deterministic(x)                 # Act
-       assert torch.allclose(z1, z2)                        # Assert
-   ```
+@pytest.fixture
+def fitted_gp(device):
+    """Create and fit a GP surrogate for testing."""
+    from ecoflow.gp_surrogate import create_surrogate
 
-2. **Fixtures:** Heavy use of pytest fixtures for shared setup
-   - Device fixture handles CUDA vs CPU: `device = "cuda" if torch.cuda.is_available() else "cpu"`
-   - Config fixtures create fresh objects for each test
-   - Nested fixture dependencies: `encoder(encoder_config, device)`
+    gp = create_surrogate("msr", D=1024, device=device)
+    X = torch.randn(20, 1024, device=device)
+    Y = torch.rand(20, device=device)
+    gp.fit(X, Y)
+    return gp
+```
 
-3. **Tear-down:** Implicit through Python garbage collection; no explicit cleanup in tests
+**Conditional test skipping:**
+```python
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="CUDA not available"
+)
+```
+
+**Test class organization:**
+```python
+class TestBinomialVariance:
+    """Test variance formula: Var(p) = p(1-p)/n"""
+
+    def test_variance_at_p_half(self):
+        """Variance should be maximal at p=0.5."""
+        gp = HeteroscedasticSonarGP(n_eval=100, device=DEVICE)
+        Y = torch.tensor([0.5], device=DEVICE)
+        var = gp._compute_variance(Y)
+        # Var(0.5) = 0.5 * 0.5 / 100 = 0.0025
+        assert torch.isclose(var[0], torch.tensor(0.0025, device=DEVICE), rtol=1e-4)
+
+    def test_variance_at_p_nine(self):
+        """Variance should be lower at p=0.9."""
+        gp = HeteroscedasticSonarGP(n_eval=100, device=DEVICE)
+        Y = torch.tensor([0.9], device=DEVICE)
+        var = gp._compute_variance(Y)
+        # Var(0.9) = 0.9 * 0.1 / 100 = 0.0009
+        assert torch.isclose(var[0], torch.tensor(0.0009, device=DEVICE), rtol=1e-4)
+```
 
 ## Mocking
 
-**Framework:** No external mocking library detected (no `unittest.mock` imports)
+**Framework:** None explicitly; tests use fixtures for data/models instead
+
+**No external mocking libraries detected** - tests create real objects:
+- Real GP surrogates: `create_surrogate("msr", D=1024, device=device)`
+- Real tensors: `torch.randn(20, 1024, device=device)`
+- Real models: `RealNVP(dim=dim, n_layers=2, hidden_dim=8)`
 
 **Patterns:**
-- Tests use real objects with small dimensions for speed
-- Configuration sizes reduced for test efficiency:
-  ```python
-  @pytest.fixture
-  def velocity_config():
-      return DiTVelocityNetConfig(
-          data_dim=768,
-          condition_dim=8,
-          hidden_dim=128,  # Small for fast tests
-          n_layers=2,
-          n_heads=4,
-      )
-  ```
+- Fixtures provide pre-configured objects instead of mocking
+- Device selection handled dynamically: `device = torch.device("cuda") if torch.cuda.is_available() else "cpu"`
 
 **What to Mock:**
-- (Not practiced in this codebase - tests use real components)
+- External API calls (not tested in current suite)
+- Database queries (not present in codebase)
 
 **What NOT to Mock:**
-- Model components (`encoder`, `decoder`, `velocity_net`) - test with real implementations
-- Losses and metrics - compute real values for numerical correctness
-- Device selection - test on available hardware
+- Core model computations (should be real)
+- Tensor operations (should use real torch)
+- Data flow through optimization loops
 
 ## Fixtures and Factories
 
 **Test Data:**
 ```python
-# Fixtures are the primary factory pattern
-@pytest.fixture
-def encoder(encoder_config, device):
-    return MatryoshkaEncoder(encoder_config).to(device)
+# Synthetic tensors created on-demand
+X = torch.randn(20, 1024, device=device)  # 20 random 1024D points
+Y = torch.rand(20, device=device)          # 20 random scores in [0, 1]
 
+# Fitted surrogates as fixtures
 @pytest.fixture
-def decoder(velocity_net):
-    config = DecoderConfig(euler_steps=10)
-    return RectifiedFlowDecoder(velocity_net, config)
-
-# Usage in tests
-def test_something(self, encoder, decoder, device):
-    x = torch.randn(16, 768, device=device)
-    # encoder and decoder are ready to use
+def fitted_gp(device):
+    gp = create_surrogate("msr", D=1024, device=device)
+    X = torch.randn(20, 1024, device=device)
+    Y = torch.rand(20, device=device)
+    gp.fit(X, Y)
+    return gp
 ```
 
 **Location:**
-- Fixtures defined at top of `tests/test_ecoflow.py`
-- Module-level fixtures (before test classes)
-- Class-level fixtures (defined within test class with `@pytest.fixture`)
-
-**Factory Example:**
+- Local fixtures in `conftest.py` (project-wide)
+- Test-specific fixtures defined in test file (class-local)
+- Device fixture (`test_batch_selection.py`, `test_gp_surrogate.py`):
 ```python
-@pytest.fixture
-def perceiver_config(self):
-    """Create Perceiver config for testing."""
-    return PerceiverDecoderConfig(
-        latent_dim=16,
-        output_dim=768,
-        hidden_size=256,  # Small for fast tests
-        depth=2,
-        num_heads=8,
-        readout_heads=8,
-    )
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+```
+
+**Factory patterns:**
+```python
+def create_surrogate(method: str, D: int, device: str) -> BaseGPSurrogate:
+    """Factory function returning appropriate GP surrogate."""
+    # Creates either SonarGPSurrogate, BAxUSGPSurrogate, or HeteroscedasticSonarGP
 ```
 
 ## Coverage
 
-**Requirements:** Not enforced (no coverage.rc or pytest coverage settings)
+**Requirements:** Not enforced (no coverage configuration in pyproject.toml)
 
 **View Coverage:**
 ```bash
-pytest tests/test_ecoflow.py --cov=ecoflow_bo --cov-report=html
-# Then open htmlcov/index.html
+# Install coverage if needed
+pip install pytest-cov
+
+# Run with coverage
+uv run pytest tests/ --cov=opro --cov=protegi --cov=gepa --cov=ecoflow --cov=nfbo --cov-report=term-missing
 ```
 
 ## Test Types
 
 **Unit Tests:**
-- Scope: Individual component functions and methods
-- Approach: Test shapes, determinism, and basic correctness
-- Examples: `test_forward_shape()`, `test_deterministic_encode()`, `test_kl_loss()`
-- Assertion style: `assert tensor.shape == expected_shape`, `assert loss > 0`, `assert torch.allclose(...)`
+- Scope: Single functions/methods in isolation
+- Approach: Mathematical correctness, edge cases, invariants
+- Examples: `test_variance_at_p_half()`, `test_variance_monotonic_from_half()`, `test_log_prob()`
+- Location: `test_gp_surrogate.py` (variance formulas), `test_nfbo_model.py` (RealNVP operations)
 
 **Integration Tests:**
 - Scope: Multiple components working together
-- Approach: Test encode-decode cycles, cycle consistency, loss computation with multiple modules
-- Example from test suite:
-  ```python
-  class TestIntegration:
-      def test_encode_decode_cycle(self, encoder, decoder, device):
-          """Test full encode-decode cycle."""
-          x = torch.randn(16, 768, device=device)
-          encoder.eval()
-          decoder.velocity_net.eval()
-
-          with torch.no_grad():
-              z = encoder.encode_deterministic(x)
-              x_recon = decoder.decode_deterministic(z)
-
-          assert x_recon.shape == x.shape
-  ```
+- Approach: End-to-end workflow testing
+- Examples: `test_fit_basic()` + `test_predict_after_fit()`, `test_gradient_computable()` with fitting
+- Location: `TestGPFitting` class in `test_gp_surrogate.py`
 
 **E2E Tests:**
-- Not detected in this codebase
-- Run scripts (`run_opro.py`, `run_protegi.py`) serve as manual E2E validation
+- Framework: Not found (would be in CI/CD if present)
+- Full optimization runs tested manually before production
 
 ## Common Patterns
 
+**Assertion patterns:**
+```python
+# Tensor shape verification
+assert z.shape == x.shape
+assert log_det.shape == (10,)
+
+# Numerical correctness with tolerance
+assert torch.isclose(var[0], torch.tensor(0.0025, device=DEVICE), rtol=1e-4)
+assert torch.allclose(x, x_recon, atol=1e-5)
+
+# NaN/Inf checking
+assert not torch.isnan(var[0])
+assert not torch.isinf(var[0])
+assert not torch.any(torch.isnan(mean))
+
+# Logical assertions
+assert lp_min_dist > 0, "LP should not select duplicate points"
+assert len(torch.unique(indices)) == batch_size, "Indices should be unique"
+```
+
 **Async Testing:**
-- Not applicable (codebase is synchronous PyTorch)
+Not used - all operations are synchronous
 
 **Error Testing:**
 ```python
-def test_config_validation(self):
-    """Test that invalid configs raise errors."""
-    # hidden_size not divisible by num_heads
-    with pytest.raises(ValueError, match="divisible by num_heads"):
-        PerceiverDecoderConfig(hidden_size=100, num_heads=16)
-
-    # Invalid dropout
-    with pytest.raises(ValueError, match="dropout"):
-        PerceiverDecoderConfig(dropout=1.5)
+# From test_gp_surrogate.py - error cases with try/except
+def test_fit_basic(self):
+    """GP should fit without error."""
+    gp = HeteroscedasticSonarGP(D=64, n_eval=100, device=DEVICE)
+    X = torch.randn(10, 64, device=DEVICE)
+    Y = torch.rand(10, device=DEVICE)
+    gp.fit(X, Y)  # Should not raise
+    assert gp.model is not None
 ```
 
-**Device-Agnostic Testing:**
+**Data validation in tests:**
 ```python
-@pytest.fixture
-def device():
-    return "cuda" if torch.cuda.is_available() else "cpu"
-
-# All tests accept device fixture and use it
-def test_forward_shape(self, encoder, device):
-    x = torch.randn(32, 768, device=device)  # data on correct device
-    z, mu, log_sigma = encoder(x)
-    assert z.device.type == device or (device == "cpu" and z.device.type in ["cpu"])
+def test_no_nan_in_batch(self):
+    """No NaN values for a batch with extreme values."""
+    gp = HeteroscedasticSonarGP(n_eval=150, device=DEVICE)
+    Y = torch.tensor([0.0, 0.01, 0.5, 0.99, 1.0], device=DEVICE)
+    var = gp._compute_variance(Y)
+    assert not torch.any(torch.isnan(var))  # Critical for numerical stability
+    assert not torch.any(torch.isinf(var))
 ```
 
-**Determinism Testing:**
-```python
-def test_decode_deterministic(self, decoder, device):
-    z = torch.randn(8, 8, device=device)
+## Test Classes and Organization
 
-    x1 = decoder.decode_deterministic(z, seed=42)
-    x2 = decoder.decode_deterministic(z, seed=42)
+**TestBinomialVariance** (`test_gp_surrogate.py`):
+- Tests variance formula: Var(p) = p(1-p)/n
+- Methods: `test_variance_at_p_half()`, `test_variance_monotonic_from_half()`, `test_variance_scales_with_n_eval()`
 
-    assert torch.allclose(x1, x2, atol=1e-5)  # Tight tolerance for determinism
-```
+**TestNumericalStability** (`test_gp_surrogate.py`):
+- Tests extreme values don't cause NaN/Inf
+- Methods: `test_variance_at_zero()`, `test_variance_at_one()`, `test_variance_floor_applied()`, `test_no_nan_in_batch()`
 
-**Numerical Accuracy Testing:**
-```python
-def test_kl_loss(self, device):
-    kl_loss = KLDivergenceLoss()
+**TestGPFitting** (`test_gp_surrogate.py`):
+- Tests GP fitting workflow and predictions
+- Methods: `test_fit_basic()`, `test_predict_after_fit()`, `test_update_incremental()`, `test_gradient_computable()`, `test_uncertainty_reasonable()`
 
-    mu = torch.zeros(32, 8, device=device)
-    log_sigma = torch.zeros(32, 8, device=device)
+**TestCreateSurrogateFactory** (`test_gp_surrogate.py`):
+- Tests factory function for creating different surrogates
+- Methods: `test_heteroscedastic_method()`, `test_msr_method()`, `test_case_insensitive()`, `test_invalid_method_raises()`
 
-    # KL(N(0,1) || N(0,1)) = 0
-    loss = kl_loss(mu, log_sigma)
-    assert loss < 0.01  # Should be very close to 0
+**TestBatchDiversity** (`test_batch_selection.py`):
+- Tests Local Penalization produces diverse batch selections
+- Methods: `test_lp_more_diverse_than_greedy()`, `test_batch_points_are_distinct()`
 
-    # Non-zero mu should increase KL
-    mu = torch.ones(32, 8, device=device)
-    loss = kl_loss(mu, log_sigma)
-    assert loss > 0.1
-```
+**TestSelectBatchCandidates** (`test_batch_selection.py`):
+- Tests batch candidate selection with different methods
+- Methods: vary by configuration and selection method
 
-**Matrix Shape Testing:**
-```python
-def test_matryoshka_embeddings(self, encoder, device):
-    x = torch.randn(32, 768, device=device)
-    z_list, mu, log_sigma = encoder.get_matryoshka_embeddings(x)
+**TestEdgeCases** (`test_batch_selection.py`):
+- Tests boundary conditions and error handling
+- Single candidate, empty batches, etc.
 
-    assert len(z_list) == 3
-    assert z_list[0].shape == (32, 2)
-    assert z_list[1].shape == (32, 4)
-    assert z_list[2].shape == (32, 8)
-```
+## Running Tests Locally
 
-## Test Execution
-
-**Run single test file:**
+**Full suite:**
 ```bash
-pytest tests/test_ecoflow.py -v
+cd /home/prusek/NLP
+uv run pytest tests/ -x -q
 ```
 
-**Run specific test class:**
+**Specific test class:**
 ```bash
-pytest tests/test_ecoflow.py::TestMatryoshkaEncoder -v
+uv run pytest tests/test_gp_surrogate.py::TestBinomialVariance -v
 ```
 
-**Run specific test method:**
+**Specific test method:**
 ```bash
-pytest tests/test_ecoflow.py::TestMatryoshkaEncoder::test_forward_shape -v
+uv run pytest tests/test_gp_surrogate.py::TestBinomialVariance::test_variance_at_p_half -v
 ```
 
-**Run with short output:**
+**With output:**
 ```bash
-pytest tests/test_ecoflow.py --tb=short
+uv run pytest tests/ -s  # Show print statements
 ```
 
-**Run directly from test file:**
-```bash
-python tests/test_ecoflow.py
-```
-(Script includes `if __name__ == "__main__": pytest.main([__file__, "-v"])`)
+## Known Test Dependencies
+
+- PyTorch with CUDA (tests skip if CUDA unavailable)
+- `torch.cuda.is_available()` checked in conftest and individual tests
+- GPyTorch and BoTorch for surrogate models
+- No external data files required (synthetic data generated in tests)
 
 ---
 
-*Testing analysis: 2026-01-28*
+*Testing analysis: 2026-01-31*

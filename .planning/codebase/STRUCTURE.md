@@ -1,271 +1,250 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-01-28
+**Analysis Date:** 2026-01-31
 
 ## Directory Layout
 
 ```
-/home/prusek/NLP/
-├── src/                        # Core prompt optimization algorithms
+NLP/
+├── opro/                        # OPRO: Meta-optimization via LLM feedback
 │   ├── __init__.py
-│   ├── llm_client.py           # LLM client abstraction (vLLM, OpenAI, DeepInfra)
-│   ├── gsm8k_evaluator.py      # GSM8K dataset evaluation with answer extraction
-│   ├── opro.py                 # OPRO: meta-optimizer with bucketed scoring
-│   ├── protegi.py              # ProTeGi: textual gradients + beam search
-│   ├── gepa.py                 # GEPA: genetic-Pareto approach with reflection
-│   └── prompts/
-│       └── gsm8k/              # Prompt templates for meta-optimizers
-│           ├── opro_meta.txt   # OPRO meta-optimizer template
-│           ├── protegi_gradient.txt
-│           ├── protegi_edit.txt
-│           ├── protegi_paraphrase.txt
-│           ├── gepa_reflect.txt
-│           └── gepa_mutate.txt
-├── ecoflow_bo/                 # Embedding-space Bayesian optimization
-│   ├── __init__.py             # Public API exports
-│   ├── config.py               # Configuration dataclasses
-│   ├── encoder.py              # MatryoshkaEncoder: 768D → 48D latent
-│   ├── velocity_network.py     # DiT-based velocity network for flow matching
-│   ├── cfm_decoder.py          # RectifiedFlow decoder: latent → embeddings
-│   ├── perceiver_decoder.py    # Perceiver-based alternative decoder
-│   ├── losses.py               # KL, InfoNCE, MatryoshkaCFM losses
-│   ├── latent_gp.py            # Gaussian Process + CoarseToFineGP
-│   ├── density_acquisition.py  # Density-aware acquisition for exploration
-│   ├── cycle_consistency.py    # Hallucination detection via encode-decode
-│   ├── detail_retriever.py     # Nearest-neighbor z_detail lookup
-│   ├── optimizer.py            # Main EcoFlowBO orchestrator
-│   ├── train_manifold.py       # Training for manifold learning
-│   ├── train_perceiver.py      # Training for Perceiver decoder
-│   ├── pipeline.md             # Comprehensive documentation
-│   └── __pycache__/
-├── tests/
-│   ├── test_ecoflow.py         # Unit tests for EcoFlow-BO components
-│   └── __pycache__/
-├── datasets/
+│   ├── opro.py                  # OPROOptimizer class (meta-prompt looping)
+│   ├── run.py                   # CLI entry point with argparse
+│   ├── prompts/
+│   │   └── opro_meta.txt        # Meta-prompt template for candidate generation
+│   └── results/                 # Output directory for results
+│
+├── protegi/                     # ProTeGi: Textual gradients + beam search
+│   ├── __init__.py
+│   ├── protegi.py               # ProTeGiOptimizer class (beam + UCB selection)
+│   ├── run.py                   # CLI entry point
+│   ├── prompts/
+│   │   ├── protegi_gradient.txt # Generate textual gradients from errors
+│   │   ├── protegi_edit.txt     # Apply edits to prompt
+│   │   └── protegi_paraphrase.txt
+│   └── results/
+│
+├── gepa/                        # GEPA: Genetic-Pareto + LLM reflection
+│   ├── __init__.py
+│   ├── gepa.py                  # GEPAOptimizer class (Pareto selection + reflection)
+│   ├── run.py                   # CLI entry point
+│   ├── prompts/
+│   │   ├── gepa_reflect.txt     # Analyze failures + propose fixes
+│   │   └── gepa_mutate.txt      # Generate mutations from reflection
+│   └── results/
+│
+├── ecoflow/                     # EcoFlow: Flow matching + Bayesian optimization
+│   ├── __init__.py
+│   ├── velocity_network.py      # VelocityNetwork: DiT-style transformer (velocity field)
+│   ├── flow_model.py            # FlowMatchingModel: Conditional flow matching wrapper
+│   ├── train_flow.py            # Training loop with EMA, checkpoint management
+│   ├── guided_flow.py           # GuidedFlowSampler: GP-UCB guided ODE sampling
+│   ├── gp_surrogate.py          # SonarGPSurrogate, BAxUSGPSurrogate, Heteroscedastic GP
+│   ├── decoder.py               # SonarDecoder: Embedding → text conversion
+│   ├── optimization_loop.py     # BOOptimizationLoop: Main orchestrator
+│   ├── validate.py              # Checkpoint loading utilities
+│   ├── batch_selection.py       # Batch selection strategies for BO
+│   ├── data.py                  # SonarEmbeddingDataset: Load SONAR embeddings
+│   ├── run.py                   # CLI entry point with logging setup
+│   └── results/                 # Output: checkpoints, metrics
+│
+├── nfbo/                        # NFBO: Normalizing Flow Bayesian Optimization
+│   ├── __init__.py
+│   ├── model.py                 # RealNVP: Invertible normalizing flow
+│   ├── sampler.py               # NFBoSampler: Latent BO in Z-space
+│   ├── loop.py                  # NFBoLoop: Extends BOOptimizationLoop
+│   ├── run.py                   # CLI entry point
+│   └── results/
+│
+├── shared/                      # Shared infrastructure (all methods depend on this)
+│   ├── __init__.py
+│   ├── llm_client.py            # LLMClient ABC + implementations (vLLM, OpenAI, DeepInfra, Transformers)
+│   └── gsm8k_evaluator.py       # GSM8KEvaluator: Load dataset, score prompts
+│
+├── datasets/                    # Data files (read-only)
 │   ├── gsm8k/
-│   │   ├── train/              # GSM8K training set (Arrow format)
-│   │   │   ├── data-00000-of-00001.arrow
-│   │   │   └── state.json
-│   │   ├── test/               # GSM8K test set (Arrow format)
-│   │   │   ├── data-00000-of-00001.arrow
-│   │   │   └── state.json
-│   │   └── dataset_dict.json
-│   ├── hbbops/                 # HuggingFace Baseline of Prompts dataset
-│   │   ├── ape_instructions_1000.json
-│   │   ├── instructions_*.txt
-│   │   ├── examples_*.txt
-│   │   └── full_grid_combined.jsonl
-│   └── tos_local/              # Additional dataset variants
-├── results/                    # Experiment outputs (gitignored)
-│   ├── baseline_results/       # Reference experiment results
-│   ├── ecoflow_checkpoints/    # Trained model checkpoints
-│   └── [experiments_*.json]    # Timestamped optimization results
-├── papers/                     # Reference papers (PDFs)
-├── run_opro.py                 # Entry point: OPRO optimization
-├── run_protegi.py              # Entry point: ProTeGi optimization
-├── run_gepa.py                 # Entry point: GEPA optimization
-├── pyproject.toml              # Project metadata, dependencies
-├── uv.lock                     # Lock file for deterministic installs
-├── .env                        # API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc)
-├── .env.example                # Example .env template
-├── .gitignore                  # Excludes results/, .venv/, __pycache__
-├── CLAUDE.md                   # Instructions for Claude Code
-├── README.md                   # Project overview
-├── TODO.md                     # Issue tracking and roadmap
-├── .planning/
-│   └── codebase/               # GSD codebase analysis documents
-└── .venv/                      # Python virtual environment
+│   │   ├── train/               # GSM8K training examples
+│   │   └── test/                # GSM8K test examples
+│   ├── sonar_embeddings.pt      # Pretrained SONAR embeddings (1.5M × 1024D)
+│   ├── evaluated_instructions/  # Previously evaluated prompts
+│   ├── hbbops/                  # Hyperband baseline prompts
+│   └── tos_local/               # ToS/local evaluation data
+│
+├── tests/                       # Test suite
+│   ├── conftest.py              # Pytest fixtures
+│   ├── test_batch_selection.py  # Batch selection strategies
+│   ├── test_gp_surrogate.py     # GP surrogate models
+│   ├── test_nfbo_model.py       # NF-BO flow model
+│   ├── test_nfbo_sampler.py     # NF-BO sampler
+│   └── test_nfbo_sampler_refined.py
+│
+├── papers/                      # Paper PDFs and references
+├── pyproject.toml               # Project metadata, dependencies
+├── CLAUDE.md                    # Development guidelines for Claude
+└── .planning/codebase/          # This directory: generated codebase docs
+    ├── ARCHITECTURE.md
+    ├── STRUCTURE.md
+    ├── CONVENTIONS.md
+    ├── TESTING.md
+    ├── STACK.md
+    ├── INTEGRATIONS.md
+    └── CONCERNS.md
 ```
 
 ## Directory Purposes
 
-**src/:**
-- Purpose: Core optimization algorithms and utilities
-- Contains: LLM client abstractions, evaluators, algorithm implementations
-- Key files: `llm_client.py` (all backends), `gsm8k_evaluator.py` (scoring)
-- Each algorithm has dedicated file (OPRO, ProTeGi, GEPA)
+**opro/:**
+- Purpose: OPRO optimizer implementation
+- Contains: Optimizer class, prompt templates, CLI runner
+- Key files: `opro/opro.py` (OPROOptimizer), `opro/run.py` (entry point)
 
-**ecoflow_bo/:**
-- Purpose: Embedding-space Bayesian optimization system
-- Contains: Neural networks (encoder, decoder, velocity net), GP, acquisition, utilities
-- Modular design: Each component in separate file (config, encoder, decoder, etc.)
-- Self-contained with comprehensive documentation in `pipeline.md`
+**protegi/:**
+- Purpose: ProTeGi optimizer implementation
+- Contains: Optimizer with beam search, textual gradients, paraphrasing
+- Key files: `protegi/protegi.py` (ProTeGiOptimizer with ScoredPrompt + UCB), `protegi/run.py`
+
+**gepa/:**
+- Purpose: GEPA optimizer implementation
+- Contains: Optimizer with Pareto selection, reflection-based mutations
+- Key files: `gepa/gepa.py` (GEPAOptimizer, ScoredCandidate, ReasoningTrace), `gepa/run.py`
+
+**ecoflow/:**
+- Purpose: Flow matching + Bayesian optimization for prompt discovery
+- Contains: Velocity network, flow model, GP surrogate, decoder, optimization loop, training script
+- Key files:
+  - Core: `ecoflow/optimization_loop.py` (BOOptimizationLoop), `ecoflow/flow_model.py`
+  - Models: `ecoflow/velocity_network.py` (VelocityNetwork), `ecoflow/gp_surrogate.py` (SonarGPSurrogate)
+  - Utilities: `ecoflow/decoder.py` (SonarDecoder), `ecoflow/guided_flow.py` (GuidedFlowSampler)
+
+**nfbo/:**
+- Purpose: Normalizing Flow Bayesian Optimization
+- Contains: RealNVP flow model, latent-space BO sampler, loop extending EcoFlow
+- Key files: `nfbo/model.py` (RealNVP), `nfbo/sampler.py` (NFBoSampler), `nfbo/loop.py` (NFBoLoop)
+
+**shared/:**
+- Purpose: Shared infrastructure used by all optimizer methods
+- Contains: LLM client abstraction, GSM8K evaluation harness
+- Key files: `shared/llm_client.py` (create_llm_client factory), `shared/gsm8k_evaluator.py`
+
+**datasets/:**
+- Purpose: Data files for training and evaluation
+- Contains: GSM8K splits, SONAR embeddings, baseline prompts
+- Generated: No (static, committed)
 
 **tests/:**
 - Purpose: Unit and integration tests
-- Contains: Pytest test file (`test_ecoflow.py`) with fixtures for all EcoFlow components
-- Coverage: Encoder, decoder, velocity network, losses, GP, acquisition, cycle consistency, Perceiver
-
-**datasets/:**
-- Purpose: Training and evaluation data (read-only, version controlled)
-- Contents: GSM8K (Arrow format), HbBoPs instructions, local variants
-- Format: Hugging Face datasets with train/test splits
-- NOT gitignored: Static reference data
-
-**results/:**
-- Purpose: Experiment outputs and artifacts (gitignored)
-- Contents: Optimization history, best prompts, model checkpoints, logs
-- Naming: Timestamped JSON files (e.g., `opro_20260128_205902.json`)
-- Subdirs: `baseline_results/`, `ecoflow_checkpoints/`
-
-**src/prompts/gsm8k/:**
-- Purpose: Prompt templates for meta-optimizers
-- Format: Plain text templates with placeholders for examples/scores
-- Usage: Loaded at module init in optimizer files
-- Files correspond to algorithms: `opro_meta.txt`, `protegi_*.txt`, `gepa_*.txt`
+- Contains: Tests for EcoFlow components, NFBO components
+- Key patterns: Pytest fixtures in `conftest.py`, individual test modules
 
 ## Key File Locations
 
 **Entry Points:**
-- `run_opro.py`: OPRO command-line interface (model aliasing, training, test evaluation)
-- `run_protegi.py`: ProTeGi command-line interface
-- `run_gepa.py`: GEPA command-line interface
-- All use argparse with sensible defaults; results saved to `results/` with timestamps
+- `opro/run.py`: OPRO CLI, resolves model aliases, initializes LLMClient and GSM8KEvaluator, runs optimization
+- `protegi/run.py`: ProTeGi CLI, similar pattern
+- `gepa/run.py`: GEPA CLI
+- `ecoflow/run.py`: EcoFlow CLI with logging setup and checkpoint save/resume
+- `nfbo/run.py`: NFBO CLI
+- `ecoflow/train_flow.py`: Flow model training (not a `-m` module, run via `python -m ecoflow.train_flow`)
 
 **Configuration:**
-- `.env`: API keys (required: ANTHROPIC_API_KEY or OPENAI_API_KEY or DEEPINFRA_API_KEY)
-- `pyproject.toml`: Dependencies via uv (all Python packages)
-- `ecoflow_bo/config.py`: Dataclass configurations for all EcoFlow-BO hyperparameters
+- `pyproject.toml`: Project metadata, all dependencies
+- `.env` (optional): API keys loaded via `dotenv.load_dotenv()` in `shared/llm_client.py`
+- CLAUDE.md (project instructions): Hardware targets, model aliases, running guidelines
 
 **Core Logic:**
-- `src/llm_client.py`: Backend abstraction, model loading, generation
-- `src/gsm8k_evaluator.py`: Answer extraction, ground truth comparison, batch evaluation
-- `src/opro.py`: OPRO optimizer with bucketed scoring
-- `src/protegi.py`: ProTeGi optimizer with UCB beam search
-- `src/gepa.py`: GEPA optimizer with Pareto frontier
-- `ecoflow_bo/optimizer.py`: EcoFlowBO main class
+- `opro/opro.py`: OPROOptimizer class, meta-prompt looping, scoring
+- `protegi/protegi.py`: ProTeGiOptimizer, textual gradients, beam search with UCB
+- `gepa/gepa.py`: GEPAOptimizer, Pareto selection, reflection
+- `ecoflow/optimization_loop.py`: BOOptimizationLoop orchestrator
+- `ecoflow/flow_model.py`: FlowMatchingModel training and sampling
+- `ecoflow/gp_surrogate.py`: GP surrogates (SonarGPSurrogate, BAxUSGPSurrogate, Heteroscedastic)
+- `nfbo/loop.py`: NFBoLoop with flow fitting
+- `shared/llm_client.py`: LLMClient ABC and implementations
+- `shared/gsm8k_evaluator.py`: GSM8KEvaluator with answer extraction
 
 **Testing:**
-- `tests/test_ecoflow.py`: All EcoFlow component tests with fixtures
-- Commands: `pytest tests/test_ecoflow.py -v` for full suite
-
-**Documentation:**
-- `CLAUDE.md`: Claude Code instructions (hardware, workflows, constraints)
-- `README.md`: Project overview and setup
-- `TODO.md`: Known issues and roadmap
-- `ecoflow_bo/pipeline.md`: Comprehensive EcoFlow-BO documentation
+- `tests/conftest.py`: Pytest fixtures
+- `tests/test_*.py`: Individual test modules for EcoFlow and NFBO
 
 ## Naming Conventions
 
 **Files:**
-- Algorithm implementations: lowercase with underscores (`opro.py`, `protegi.py`, `gepa.py`)
-- Entry points: `run_*.py` for command-line scripts
-- Tests: `test_*.py` for pytest discovery
-- Configs: `config.py` for dataclass definitions
-- Prompts: `{algorithm}_{component}.txt` (e.g., `opro_meta.txt`, `protegi_gradient.txt`)
+- Optimizer classes: `{method}.py` in method directory (e.g., `opro/opro.py`, `protegi/protegi.py`)
+- Entry points: `run.py` in method directory
+- Prompt templates: `{method}_{template_type}.txt` in `prompts/` subdirectory
+- CLI scripts: `python -m {package}.run` (e.g., `python -m opro.run`)
 
 **Directories:**
-- Core algorithms: lowercase plural or singular based on scope (`src/`, `ecoflow_bo/`)
-- Data: lowercase descriptive (`datasets/`, `results/`, `papers/`)
-- Splits: `train/`, `test/` for dataset organization
-- Checkpoints: `ecoflow_checkpoints/` (descriptive)
+- Method directories: lowercase (opro, protegi, gepa, ecoflow, nfbo)
+- Subdirectories: `prompts/` for templates, `results/` for output
+- Shared: `shared/` for cross-cutting code
 
 **Classes:**
-- Pascal case: `OPRO`, `ProTeGi`, `GEPA`, `EcoFlowBO`, `MatryoshkaEncoder`, `VelocityNetwork`
-- Interfaces/ABCs: `LLMClient`, `GSM8KEvaluator`
-- Config dataclasses: `EcoFlowConfig`, `EncoderConfig`, `DecoderConfig`
+- Optimizers: `{METHOD}Optimizer` (OPROOptimizer, ProTeGiOptimizer, GEPAOptimizer, NFBoLoop)
+- Scoring: `ScoredPrompt` or `ScoredCandidate` (dataclass with score + metadata)
+- Models: `{Model}Network` or `{Model}Model` (VelocityNetwork, FlowMatchingModel, RealNVP)
+- Utilities: `{Name}` (SonarDecoder, GSM8KEvaluator, GuidedFlowSampler)
 
 **Functions:**
-- Private helpers: `_format_prompt()`, `_patch_vllm_platform()`, `_load_template()`
-- Public API: `create_llm_client()`, `optimize()`, `generate()`, `evaluate_batch()`
-
-**Variables:**
-- Lowercase with underscores: `max_tokens`, `minibatch_size`, `tensor_parallel_size`
-- Single letters for tensors: `z` (latent), `x` (data), `t` (time), `v` (velocity)
-- Scores: `accuracy`, `best_score`, `ucb_score`
+- Entry: `main()` in `run.py` files
+- Factories: `create_{type}()` (create_llm_client, create_surrogate)
+- Utilities: `{verb}_{noun}()` (extract_answer, normalize_answer)
 
 ## Where to Add New Code
 
-**New Optimization Algorithm:**
-- Implementation: `src/{algorithm_name}.py` (create ABC-inheriting class for consistency)
-- Entry point: `run_{algorithm_name}.py` in root (copy structure from `run_opro.py`)
-- Prompts: Create subdirectory `src/prompts/gsm8k/{algorithm_name}_*.txt` as needed
-- Tests: Add test class to `tests/test_ecoflow.py` or create `tests/test_{algorithm_name}.py`
+**New Optimization Method:**
+- Create directory: `/home/prusek/NLP/{method_name}/`
+- Create files:
+  - `{method_name}.py`: Core optimizer class
+  - `run.py`: CLI entry point
+  - `prompts/`: Directory for template files
+  - `__init__.py`: Package exports
+- Depend on: `shared.llm_client`, `shared.gsm8k_evaluator`
+- Pattern: Follow existing methods (OPRO/ProTeGi/GEPA) for initialization and main loop
 
-**New LLM Backend:**
-- Implementation: Add new class inheriting `LLMClient` in `src/llm_client.py`
-- Factory: Update `create_llm_client()` factory to recognize backend type
-- Env vars: Document required env var in CLAUDE.md
-- Models: Add aliases to `MODEL_ALIASES` in respective `run_*.py` files
+**New Feature for Existing Method:**
+- Implementation: In method's main module (`opro/opro.py`, `ecoflow/optimization_loop.py`, etc.)
+- Tests: Add to `tests/test_{method_name}.py` or create new test file
+- Templates: Add `.txt` file to `{method_name}/prompts/`
 
-**New EcoFlow-BO Component:**
-- Module file: Create `ecoflow_bo/{component}.py` (e.g., `custom_decoder.py`)
-- Config: Add new `@dataclass` to `ecoflow_bo/config.py`
-- Export: Add to `ecoflow_bo/__init__.py` `__all__` list
-- Tests: Add test class to `tests/test_ecoflow.py`
+**Shared Utility:**
+- Location: `shared/`
+- Pattern: Follow LLMClient and GSM8KEvaluator; ABC with factory function
+- Usage: Import via `from shared.{module} import {class}`
 
-**New Evaluation Dataset:**
-- Location: Create `datasets/{dataset_name}/train/` and `datasets/{dataset_name}/test/` directories
-- Format: Use Hugging Face Arrow format (load_from_disk compatible)
-- Evaluator: Create `src/{dataset_name}_evaluator.py` inheriting standard interface
-- Entry points: Update relevant `run_*.py` to support `--dataset` parameter
+**New Dataset or Benchmark:**
+- Location: `datasets/{name}/`
+- Evaluator: Add to `shared/gsm8k_evaluator.py` if following GSM8K pattern, else create `shared/{name}_evaluator.py`
 
-**Utilities/Helpers:**
-- Shared functions: `src/utils.py` (if > 1 algorithm needs it)
-- EcoFlow utilities: Keep in relevant module file (no separate utils)
-- Avoid circular imports by careful placement in layer hierarchy
+**Tests:**
+- Location: `tests/test_{module_name}.py`
+- Pattern: Use `conftest.py` fixtures, pytest assertions
+- Coverage: Unit tests for core classes, integration tests for optimization loops
 
 ## Special Directories
 
-**datasets/gsm8k/:**
-- Purpose: GSM8K (Grade School Math 8K) dataset
-- Generated: No (pre-downloaded and committed)
-- Committed: Yes (static reference data)
-- Format: Hugging Face datasets Arrow format (binary-safe, efficient)
-- Structure: `train/` and `test/` splits with state.json and data files
+**results/ (per method):**
+- Purpose: Store optimization outputs (best prompts, scores, metrics)
+- Generated: Yes (created by run.py)
+- Committed: No (gitignored)
+- Contents: JSON results, TXT prompts, checkpoint files
 
-**results/:**
-- Purpose: All experiment outputs (optimization history, checkpoints, logs)
-- Generated: Yes (created by run scripts)
-- Committed: No (gitignored via `.gitignore`)
-- Naming: Timestamped per CLAUDE.md (e.g., `opro_20260128_205902.json`)
-- Subdirectories: `baseline_results/` (reference), `ecoflow_checkpoints/` (trained models)
+**datasets/:**
+- Purpose: Static data (GSM8K splits, SONAR embeddings, baselines)
+- Generated: No (pre-computed, committed)
+- Committed: Yes (necessary for reproducibility)
+
+**prompts/ (per method):**
+- Purpose: Prompt templates for meta-optimization
+- Generated: No (hand-written)
+- Committed: Yes
+- Pattern: Jinja-like templates with `{placeholder}` or simple string formatting
 
 **.planning/codebase/:**
-- Purpose: GSD codebase analysis documents
-- Generated: Yes (by GSD mapping commands)
-- Committed: Yes (documentation, not code)
-- Contents: ARCHITECTURE.md, STRUCTURE.md, CONVENTIONS.md, TESTING.md, CONCERNS.md, STACK.md, INTEGRATIONS.md
-
-**.venv/:**
-- Purpose: Python virtual environment (uv managed)
-- Generated: Yes (by `uv sync`)
-- Committed: No (gitignored)
-- Management: Use `uv sync` to install/update, never manually
-
-## Import Patterns
-
-**Algorithm files import hierarchy:**
-```
-src/{algorithm}.py
-├── imports from llm_client.py (LLMClient)
-├── imports from gsm8k_evaluator.py (GSM8KEvaluator)
-├── imports from prompts/gsm8k/ (template files)
-└── root run_{algorithm}.py imports from src/
-```
-
-**EcoFlow-BO import hierarchy:**
-```
-ecoflow_bo/optimizer.py (main orchestrator)
-├── from .config import EcoFlowConfig
-├── from .encoder import MatryoshkaEncoder
-├── from .decoder import RectifiedFlowDecoder
-├── from .latent_gp import CoarseToFineGP
-├── from .density_acquisition import DensityAwareAcquisition
-├── from .cycle_consistency import CycleConsistencyChecker
-└── from .detail_retriever import DetailRetriever
-
-ecoflow_bo/__init__.py (public API)
-└── imports all major classes for external access
-```
-
-**Backend detection:**
-```python
-# In run_opro.py and src/llm_client.py
-create_llm_client(model_name, backend="auto")
-# Auto-detects: "gpt" → OpenAI, "google/" → DeepInfra, else vLLM
-```
+- Purpose: Generated architecture documentation (this directory)
+- Generated: Yes (by /gsd:map-codebase)
+- Committed: Yes (for reference)
 
 ---
 
-*Structure analysis: 2026-01-28*
+*Structure analysis: 2026-01-31*
