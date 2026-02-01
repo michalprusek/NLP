@@ -118,7 +118,14 @@ def parse_args() -> argparse.Namespace:
         "--flow",
         type=str,
         required=True,
-        help="Flow matching method (e.g., icfm, otcfm)",
+        help="Flow matching method (icfm, otcfm, reflow, si, si-gvp, si-linear)",
+    )
+    parser.add_argument(
+        "--schedule",
+        type=str,
+        default="gvp",
+        choices=["linear", "gvp"],
+        help="SI schedule type (only used with --flow=si)",
     )
     parser.add_argument(
         "--dataset",
@@ -209,10 +216,18 @@ def main() -> None:
         # Verify GPU
         device = verify_gpu()
 
+        # Map flow method for SI variants
+        # 'si' with schedule='gvp' -> 'si-gvp' for checkpoint naming
+        # 'si' with schedule='linear' -> 'si-linear' for checkpoint naming
+        flow_method = args.flow
+        if args.flow == "si":
+            flow_method = f"si-{args.schedule}"
+            logger.info(f"SI with {args.schedule} schedule -> flow method: {flow_method}")
+
         # Create config
         config = TrainingConfig(
             arch=args.arch,
-            flow=args.flow,
+            flow=flow_method,
             dataset=args.dataset,
             aug=args.aug,
             group=args.group,
@@ -220,6 +235,7 @@ def main() -> None:
             batch_size=args.batch_size,
             lr=args.lr,
             warmup_steps=args.warmup_steps,
+            si_schedule=args.schedule if args.flow.startswith("si") else "gvp",
         )
 
         logger.info(f"Run name: {config.run_name}")

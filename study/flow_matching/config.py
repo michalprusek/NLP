@@ -62,6 +62,9 @@ class TrainingConfig:
     otcfm_reg: float = field(default=0.5, repr=False)
     otcfm_normalize_cost: bool = field(default=True, repr=False)
 
+    # Stochastic Interpolant parameters (only used when flow='si*')
+    si_schedule: str = field(default="gvp", repr=False)
+
     # Paths
     checkpoint_dir: str = "study/checkpoints"
     stats_path: str = "study/datasets/normalization_stats.pt"
@@ -91,6 +94,7 @@ class TrainingConfig:
             "otcfm_sigma": self.otcfm_sigma,
             "otcfm_reg": self.otcfm_reg,
             "otcfm_normalize_cost": self.otcfm_normalize_cost,
+            "si_schedule": self.si_schedule,
             "checkpoint_dir": self.checkpoint_dir,
             "stats_path": self.stats_path,
             "run_name": self.run_name,
