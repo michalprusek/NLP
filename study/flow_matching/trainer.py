@@ -20,6 +20,7 @@ import torch.nn.functional as F
 import wandb
 from torch.optim import AdamW
 
+from study.data.augmentation import AugmentationConfig, augment_batch
 from study.data.dataset import FlowDataset, create_dataloader
 from study.flow_matching.config import TrainingConfig
 from study.flow_matching.coupling import create_coupling
@@ -97,8 +98,53 @@ class FlowTrainer:
         # Checkpoint path for this run
         self._checkpoint_path = get_checkpoint_path(config.run_name)
 
+        # Setup augmentation config from aug string and explicit parameters
+        self.aug_config = self._create_aug_config()
+
         # Setup training infrastructure (includes Wandb init and checkpoint loading)
         self._setup()
+
+    def _create_aug_config(self) -> Optional[AugmentationConfig]:
+        """Create augmentation config from config parameters.
+
+        Parses config.aug string to set defaults:
+        - "none" -> all 0.0
+        - "mixup" -> mixup_alpha=0.2
+        - "noise" -> noise_std=0.1
+        - "mixup+noise" -> mixup_alpha=0.2, noise_std=0.1
+
+        Explicit config values (mixup_alpha, noise_std) override defaults.
+
+        Returns:
+            AugmentationConfig if any augmentation enabled, None otherwise.
+        """
+        # Parse aug string for defaults
+        aug_str = self.config.aug.lower() if self.config.aug else "none"
+
+        # Determine defaults from aug string
+        default_mixup = 0.2 if "mixup" in aug_str else 0.0
+        default_noise = 0.1 if "noise" in aug_str else 0.0
+
+        # Use explicit config values if provided (non-zero), else use defaults
+        mixup_alpha = self.config.mixup_alpha if self.config.mixup_alpha > 0 else default_mixup
+        noise_std = self.config.noise_std if self.config.noise_std > 0 else default_noise
+        dropout_rate = self.config.dropout_rate  # No default from aug string
+
+        # Only create config if some augmentation is enabled
+        if mixup_alpha > 0 or noise_std > 0 or dropout_rate > 0:
+            aug_config = AugmentationConfig(
+                mixup_alpha=mixup_alpha,
+                noise_std=noise_std,
+                dropout_rate=dropout_rate,
+            )
+            logger.info(
+                f"Augmentation enabled: mixup_alpha={mixup_alpha}, "
+                f"noise_std={noise_std}, dropout_rate={dropout_rate}"
+            )
+            return aug_config
+
+        logger.info("Augmentation disabled")
+        return None
 
     def _setup(self) -> None:
         """Initialize optimizer, scheduler, EMA, coupling, early stopping, data loaders, and Wandb."""
@@ -209,6 +255,10 @@ class FlowTrainer:
 
         for batch_idx, x1 in enumerate(self.train_loader):
             x1 = x1.to(self.device)
+
+            # Apply augmentation (only during training, before coupling.sample())
+            if self.aug_config is not None:
+                x1 = augment_batch(x1, self.aug_config, training=True)
 
             # Sample noise (source distribution)
             x0 = torch.randn_like(x1)

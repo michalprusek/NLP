@@ -172,7 +172,19 @@ def parse_args() -> argparse.Namespace:
         "--aug",
         type=str,
         default="none",
-        help="Augmentation method (e.g., none, mixup)",
+        help="Augmentation method (e.g., none, mixup, noise, mixup+noise)",
+    )
+    parser.add_argument(
+        "--mixup-alpha",
+        type=float,
+        default=0.0,
+        help="Mixup alpha parameter (overrides --aug default, 0=disabled)",
+    )
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.0,
+        help="Gaussian noise std (overrides --aug default, 0=disabled)",
     )
 
     # Resume training
@@ -236,6 +248,8 @@ def main() -> None:
             lr=args.lr,
             warmup_steps=args.warmup_steps,
             si_schedule=args.schedule if args.flow.startswith("si") else "gvp",
+            mixup_alpha=args.mixup_alpha,
+            noise_std=args.noise_std,
         )
 
         logger.info(f"Run name: {config.run_name}")
