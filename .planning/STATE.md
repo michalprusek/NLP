@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 6 - Advanced Architectures (COMPLETE)
+**Current focus:** Phase 7 - Data Augmentation (In progress)
 
 ## Current Position
 
-Phase: 6 of 11 (Advanced Architectures) - COMPLETE
-Plan: 3 of 3 in current phase - COMPLETE
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed 06-03-PLAN.md
+Phase: 7 of 11 (Data Augmentation)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 07-01-PLAN.md
 
-Progress: [███████████░] 58%
+Progress: [████████████░] 62%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
-- Average duration: 14 min
-- Total execution time: 3.6 hours
+- Total plans completed: 16
+- Average duration: 13 min
+- Total execution time: 3.65 hours
 
 **By Phase:**
 
@@ -33,9 +33,10 @@ Progress: [███████████░] 58%
 | 04-flow-matching-baselines | 3 | 12min | 4min |
 | 05-advanced-flow-methods | 2 | 10min | 5min |
 | 06-advanced-architectures | 3 | 9min | 3min |
+| 07-data-augmentation | 1 | 3min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (5min), 05-02 (5min), 06-01 (3min), 06-02 (4min), 06-03 (2min)
+- Last 5 plans: 05-02 (5min), 06-01 (3min), 06-02 (4min), 06-03 (2min), 07-01 (3min)
 - Trend: Fast execution continues
 
 *Updated after each plan completion*
@@ -89,6 +90,10 @@ Recent decisions affecting current work:
 - Bidirectional Mamba with chunk_size=64 (16 chunks of 64 dims) (06-02)
 - Scaling configs define only architecture-specific params, factory adds defaults (06-03)
 - Configuration overlay pattern: defaults <- scale config <- kwargs (06-03)
+- Beta(alpha, alpha) for mixup with U-shaped distribution for diverse mixing (07-01)
+- Augment x1 only (data), never x0 (noise), before coupling.sample() (07-01)
+- Order: mixup -> noise as per research (07-01)
+- aug string parses defaults: "mixup" -> alpha=0.2, "noise" -> std=0.1 (07-01)
 
 ### Pending Todos
 
@@ -105,8 +110,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 12:38 UTC
-Stopped at: Completed 06-03-PLAN.md (architecture scaling variants)
+Last session: 2026-02-01 13:20 UTC
+Stopped at: Completed 07-01-PLAN.md (mixup and noise augmentation)
 Resume file: None
 
 ## Phase 5 Summary (COMPLETE)
@@ -185,6 +190,24 @@ Delivered (06-03):
 4. [x] create_model(arch, scale) works for all combinations
 
 Ready for: Phase 7 (Data Augmentation), Phase 8 (GP-Guided Sampling), Phase 9 (Experimental Matrix)
+
+## Phase 7 Summary (In Progress)
+
+**Phase 7 in progress.** Data augmentation for flow matching training.
+
+Delivered (07-01):
+- AugmentationConfig dataclass with mixup_alpha, noise_std, dropout_rate
+- mixup_embeddings() using Beta(alpha, alpha) sampling
+- add_gaussian_noise() for controlled perturbation
+- augment_batch() combining augmentations with training flag
+- FlowTrainer integration: augment x1 before coupling.sample()
+- CLI args --mixup-alpha and --noise-std for fine-grained control
+
+**Research finding:** Beta(0.2, 0.2) produces U-shaped distribution (~35% < 0.1, ~33% > 0.9), resulting in cosine similarity ~0.55-0.60 between original and mixed. Statistics (mean ~0, std ~1) are preserved.
+
+Remaining:
+- 07-02: Dimension dropout augmentation
+- 07-03: Ablation experiments
 
 ## Phase 4 Summary (COMPLETE)
 
