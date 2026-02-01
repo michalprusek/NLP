@@ -77,7 +77,7 @@ def compare_methods(
     except KeyError as e:
         logger.error(f"Test data missing required key {e}. Check data format in {test_path}")
         raise
-    except (RuntimeError, pickle.UnpicklingError) as e:
+    except (RuntimeError, pickle.UnpicklingError, EOFError, ValueError) as e:
         logger.error(f"Failed to load test data (corrupted or incompatible): {e}")
         raise
     logger.info(f"Loaded {len(test_embeddings)} test embeddings")
