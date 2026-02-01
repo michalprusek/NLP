@@ -5,6 +5,12 @@ Usage:
         --arch mlp --flow icfm --dataset 5k --group ablation-flow \
         --epochs 100 --batch-size 256 --lr 1e-4
 
+Resume from checkpoint:
+    CUDA_VISIBLE_DEVICES=1 uv run python -m study.flow_matching.train \
+        --arch mlp --flow icfm --dataset 5k --group ablation-flow \
+        --epochs 200 --batch-size 256 --lr 1e-4 \
+        --resume study/checkpoints/mlp-icfm-5k-none/best.pt
+
 All training runs on GPU 1 (A5000) with CUDA_VISIBLE_DEVICES=1.
 """
 
@@ -13,6 +19,7 @@ import logging
 import os
 import random
 import sys
+import time
 import warnings
 
 import numpy as np
@@ -215,12 +222,20 @@ def parse_args() -> argparse.Namespace:
         help="Augmentation method (e.g., none, mixup)",
     )
 
-    # Resume training (placeholder - implemented in Plan 02)
+    # Resume training
     parser.add_argument(
         "--resume",
         type=str,
         default=None,
-        help="Path to checkpoint to resume from (not yet implemented)",
+        help="Path to checkpoint to resume from",
+    )
+
+    # Wandb configuration
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="flow-matching-study",
+        help="Wandb project name",
     )
 
     # Reproducibility
@@ -236,72 +251,99 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Main training entry point."""
-    args = parse_args()
+    start_time = time.time()
 
-    # Set random seeds
-    set_seed(args.seed)
-    logger.info(f"Random seed: {args.seed}")
+    try:
+        args = parse_args()
 
-    # Verify GPU
-    device = verify_gpu()
+        # Set random seeds
+        set_seed(args.seed)
+        logger.info(f"Random seed: {args.seed}")
 
-    # Create config
-    config = TrainingConfig(
-        arch=args.arch,
-        flow=args.flow,
-        dataset=args.dataset,
-        aug=args.aug,
-        group=args.group,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        lr=args.lr,
-        warmup_steps=args.warmup_steps,
-    )
+        # Verify GPU
+        device = verify_gpu()
 
-    logger.info(f"Run name: {config.run_name}")
-    logger.info(f"Config: {config.to_dict()}")
-
-    # Validate stats path
-    config.validate_stats_path()
-    logger.info(f"Stats path validated: {config.stats_path}")
-
-    # Load datasets
-    train_ds, val_ds, test_ds = load_all_splits(
-        size=args.dataset,
-        stats_path=config.stats_path,
-        return_normalized=True,
-    )
-    logger.info(
-        f"Loaded datasets: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}"
-    )
-
-    # Create model (placeholder - real models in Phase 3)
-    model = SimpleVelocityNet(dim=1024, hidden=512, num_layers=3)
-    param_count = sum(p.numel() for p in model.parameters())
-    logger.info(f"Model parameters: {param_count:,}")
-
-    # Check for resume (placeholder)
-    if args.resume:
-        logger.warning(
-            "--resume not yet implemented. "
-            "Will be added in Plan 02 with Wandb integration."
+        # Create config
+        config = TrainingConfig(
+            arch=args.arch,
+            flow=args.flow,
+            dataset=args.dataset,
+            aug=args.aug,
+            group=args.group,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            lr=args.lr,
+            warmup_steps=args.warmup_steps,
         )
 
-    # Create trainer and run
-    trainer = FlowTrainer(model, config, train_ds, val_ds, device)
-    result = trainer.train()
+        logger.info(f"Run name: {config.run_name}")
+        logger.info(f"Config: {config.to_dict()}")
 
-    # Print summary
-    print("\n" + "=" * 60)
-    print("TRAINING COMPLETE")
-    print("=" * 60)
-    print(f"Run name: {config.run_name}")
-    print(f"Epochs run: {result['epochs_run']}")
-    print(f"Best val loss: {result['best_val_loss']:.6f}")
-    print(f"Final train loss: {result['final_train_loss']:.6f}")
-    print(f"Final val loss: {result['final_val_loss']:.6f}")
-    print(f"Early stopped: {result['early_stopped']}")
-    print("=" * 60)
+        # Validate stats path
+        config.validate_stats_path()
+        logger.info(f"Stats path validated: {config.stats_path}")
+
+        # Check resume path if provided
+        resume_path = None
+        if args.resume:
+            if not os.path.exists(args.resume):
+                raise FileNotFoundError(f"Resume checkpoint not found: {args.resume}")
+            resume_path = args.resume
+            logger.info(f"Will resume from: {resume_path}")
+
+        # Load datasets
+        train_ds, val_ds, test_ds = load_all_splits(
+            size=args.dataset,
+            stats_path=config.stats_path,
+            return_normalized=True,
+        )
+        logger.info(
+            f"Loaded datasets: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}"
+        )
+
+        # Create model (placeholder - real models in Phase 3)
+        model = SimpleVelocityNet(dim=1024, hidden=512, num_layers=3)
+        param_count = sum(p.numel() for p in model.parameters())
+        logger.info(f"Model parameters: {param_count:,}")
+
+        # Create trainer and run
+        trainer = FlowTrainer(
+            model=model,
+            config=config,
+            train_dataset=train_ds,
+            val_dataset=val_ds,
+            device=device,
+            wandb_project=args.wandb_project,
+            resume_path=resume_path,
+        )
+        result = trainer.train()
+
+        # Calculate training time
+        training_time = time.time() - start_time
+        hours = int(training_time // 3600)
+        minutes = int((training_time % 3600) // 60)
+        seconds = int(training_time % 60)
+
+        # Print summary
+        print("\n" + "=" * 60)
+        print("TRAINING COMPLETE")
+        print("=" * 60)
+        print(f"Run name: {config.run_name}")
+        print(f"Epochs run: {result['epochs_run']}")
+        print(f"Best val loss: {result['best_val_loss']:.6f}")
+        print(f"Final train loss: {result['final_train_loss']:.6f}")
+        print(f"Final val loss: {result['final_val_loss']:.6f}")
+        print(f"Early stopped: {result['early_stopped']}")
+        print(f"Checkpoint: {result['checkpoint_path']}")
+        print(f"Training time: {hours:02d}:{minutes:02d}:{seconds:02d}")
+        print("=" * 60)
+
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
