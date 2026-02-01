@@ -57,6 +57,7 @@ def guided_euler_ode_integrate(
     zero_init_fraction: float = 0.04,
     grad_clip_norm: float = 10.0,
     show_progress: bool = True,
+    velocity_scale: float = 1.0,
 ) -> Tensor:
     """
     Integrate ODE from t=0 to t=1 with optional CFG-Zero* guidance.
@@ -76,6 +77,8 @@ def guided_euler_ode_integrate(
         zero_init_fraction: Fraction of steps with zero guidance.
         grad_clip_norm: Maximum norm for guidance gradient clipping.
         show_progress: Whether to show tqdm progress bar.
+        velocity_scale: Scale factor for model output (for SI-GVP trained with
+                       normalized loss, use pi/2 ≈ 1.57 to un-normalize).
 
     Returns:
         x1: Points at t=1, shape [N, D].
@@ -92,8 +95,8 @@ def guided_euler_ode_integrate(
         t = i / n_steps
         t_batch = torch.full((x.shape[0],), t, device=device, dtype=x.dtype)
 
-        # Base velocity
-        v = model(x, t_batch)
+        # Base velocity (un-normalize if model was trained with normalized loss)
+        v = model(x, t_batch) * velocity_scale
 
         # Add guidance (with CFG-Zero* schedule)
         if guidance_fn is not None:
@@ -119,6 +122,31 @@ def guided_euler_ode_integrate(
     return x
 
 
+import math as _math  # For SI velocity scale constant
+
+
+def get_velocity_scale(flow_method: str) -> float:
+    """Get velocity scale factor for un-normalizing model output.
+
+    Models trained with SI-GVP (normalized loss) learn velocity / scale.
+    At inference, multiply by scale to recover true velocity.
+
+    The scale is chosen so that the target variance matches I-CFM:
+    - I-CFM: E[||x1-x0||^2] = 2D
+    - SI-GVP: E[||alpha_dot*x0 + sigma_dot*x1||^2] = (pi/2)^2 * D ≈ 2.47D
+    - Scale = sqrt(2.47D / 2D) = pi / (2*sqrt(2)) ≈ 1.11
+
+    Args:
+        flow_method: Flow method name (e.g., 'icfm', 'si-gvp').
+
+    Returns:
+        Scale factor (1.0 for I-CFM/OT-CFM, ~1.11 for SI-GVP).
+    """
+    if flow_method in ("si-gvp", "si"):
+        return _math.pi / (2 * _math.sqrt(2))  # ~1.11
+    return 1.0
+
+
 @torch.no_grad()
 def sample_with_guidance(
     model: torch.nn.Module,
@@ -128,6 +156,8 @@ def sample_with_guidance(
     guidance_fn: Optional[Callable[[Tensor], Tensor]] = None,
     guidance_strength: float = 1.0,
     zero_init_fraction: float = 0.04,
+    velocity_scale: float = 1.0,
+    input_dim: int = 1024,
 ) -> Tensor:
     """
     Generate samples from flow model with optional CFG-Zero* guidance.
@@ -140,14 +170,16 @@ def sample_with_guidance(
         guidance_fn: Optional guidance gradient function.
         guidance_strength: Maximum guidance strength.
         zero_init_fraction: Fraction of steps with zero guidance.
+        velocity_scale: Scale factor for model output (use get_velocity_scale(flow_method)).
+        input_dim: Input dimension (default 1024 for SONAR).
 
     Returns:
-        Generated samples [n_samples, 1024] in normalized space.
+        Generated samples [n_samples, input_dim] in normalized space.
     """
     device = torch.device(device) if isinstance(device, str) else device
 
     # Start from noise
-    x0 = torch.randn(n_samples, 1024, device=device)
+    x0 = torch.randn(n_samples, input_dim, device=device)
 
     # Integrate with guidance
     x1 = guided_euler_ode_integrate(
@@ -159,6 +191,7 @@ def sample_with_guidance(
         guidance_strength=guidance_strength,
         zero_init_fraction=zero_init_fraction,
         show_progress=True,
+        velocity_scale=velocity_scale,
     )
 
     return x1

@@ -4,6 +4,10 @@ This module provides DiTVelocityNetwork, a Diffusion Transformer (DiT) velocity 
 ported from ecoflow/velocity_network.py with scaled-down configuration for the baseline
 architecture study.
 
+Key fix (from code review): The 1024-dim embedding is now chunked into 16 tokens of 64 dims
+each, so attention can actually learn cross-chunk dependencies (unlike single-token which
+trivially returns q@k^T@v = v).
+
 Target: ~9.3M parameters with default configuration (hidden_dim=384, num_layers=3, num_heads=6).
 """
 
@@ -90,8 +94,9 @@ class DiTVelocityNetwork(nn.Module):
     Ported from ecoflow/velocity_network.py with scaled-down configuration for baseline study.
 
     Architecture:
+    - Chunk 1024-dim embedding into 16 tokens of 64 dims each (enables meaningful attention)
     - Sinusoidal time embedding -> time MLP -> hidden_dim
-    - Input projection to hidden dim
+    - Per-token projection to hidden dim
     - N transformer blocks with AdaLN-Zero conditioning
     - Final AdaLN layer norm and output projection
     - Zero-init on output layers for stable training start
@@ -104,6 +109,8 @@ class DiTVelocityNetwork(nn.Module):
         num_layers: Number of transformer blocks.
         num_heads: Number of attention heads.
         time_embed_dim: Dimension for sinusoidal time embeddings.
+        num_tokens: Number of tokens to chunk embedding into (16 for 1024/64).
+        token_dim: Dimension per token (64 for 1024/16).
     """
 
     def __init__(
@@ -113,6 +120,7 @@ class DiTVelocityNetwork(nn.Module):
         num_layers: int = 3,
         num_heads: int = 6,
         time_embed_dim: int = 256,
+        num_tokens: int = 16,  # Chunk 1024 into 16 tokens of 64 dims
     ):
         """Initialize DiTVelocityNetwork.
 
@@ -122,11 +130,16 @@ class DiTVelocityNetwork(nn.Module):
             num_layers: Number of transformer blocks (3 for ~9.3M params).
             num_heads: Number of attention heads (6 for 64 dim per head).
             time_embed_dim: Dimension for sinusoidal time embeddings.
+            num_tokens: Number of tokens to split input into (default 16).
         """
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.time_embed_dim = time_embed_dim
+        self.num_tokens = num_tokens
+        self.token_dim = input_dim // num_tokens
+
+        assert input_dim % num_tokens == 0, f"input_dim ({input_dim}) must be divisible by num_tokens ({num_tokens})"
 
         # Time embedding MLP
         self.time_embed = nn.Sequential(
@@ -135,8 +148,12 @@ class DiTVelocityNetwork(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # Input projection
-        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        # Per-token input projection (from token_dim to hidden_dim)
+        self.input_proj = nn.Linear(self.token_dim, hidden_dim)
+
+        # Learnable position embedding for tokens
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_tokens, hidden_dim))
+        nn.init.normal_(self.pos_embed, std=0.02)
 
         # AdaLN transformer blocks
         self.blocks = nn.ModuleList([
@@ -149,7 +166,8 @@ class DiTVelocityNetwork(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, 2 * hidden_dim),  # shift and scale only
         )
-        self.output_proj = nn.Linear(hidden_dim, input_dim)
+        # Per-token output projection (from hidden_dim back to token_dim)
+        self.output_proj = nn.Linear(hidden_dim, self.token_dim)
 
         # Zero-init final layers for stable training
         nn.init.zeros_(self.final_adaLN[-1].weight)
@@ -167,32 +185,42 @@ class DiTVelocityNetwork(nn.Module):
         Returns:
             Velocity tensor [B, input_dim].
         """
+        batch_size = x.shape[0]
+
         # Handle t shape
         if t.dim() == 2:
             t = t.squeeze(-1)
         if t.dim() == 0:
-            t = t.unsqueeze(0).expand(x.shape[0])
+            t = t.unsqueeze(0).expand(batch_size)
 
         # Time embedding
         t_emb = timestep_embedding(t, self.time_embed_dim)  # [B, time_embed_dim]
         c = self.time_embed(t_emb)  # [B, hidden_dim]
 
-        # Project input to hidden dim and add sequence dimension
-        h = self.input_proj(x)  # [B, hidden_dim]
-        h = h.unsqueeze(1)  # [B, 1, hidden_dim]
+        # Chunk input into tokens: [B, input_dim] -> [B, num_tokens, token_dim]
+        h = x.view(batch_size, self.num_tokens, self.token_dim)
 
-        # Apply transformer blocks
+        # Project each token to hidden dim: [B, num_tokens, token_dim] -> [B, num_tokens, hidden_dim]
+        h = self.input_proj(h)
+
+        # Add position embeddings
+        h = h + self.pos_embed
+
+        # Apply transformer blocks (now attention across 16 tokens is meaningful!)
         for block in self.blocks:
             h = block(h, c)
 
-        # Remove sequence dimension
-        h = h.squeeze(1)  # [B, hidden_dim]
-
-        # Final norm with AdaLN and output projection
-        h = self.final_norm(h)
-        mod = self.final_adaLN(c)
+        # Final norm with AdaLN (applied per token)
+        h = self.final_norm(h)  # [B, num_tokens, hidden_dim]
+        mod = self.final_adaLN(c)  # [B, 2*hidden_dim]
         shift, scale = mod.chunk(2, dim=-1)
-        h = h * (1 + scale) + shift
-        v = self.output_proj(h)
+        # Broadcast to all tokens
+        h = h * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+
+        # Project back to token_dim: [B, num_tokens, hidden_dim] -> [B, num_tokens, token_dim]
+        h = self.output_proj(h)
+
+        # Reassemble: [B, num_tokens, token_dim] -> [B, input_dim]
+        v = h.view(batch_size, self.input_dim)
 
         return v

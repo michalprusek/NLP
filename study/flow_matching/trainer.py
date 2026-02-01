@@ -322,33 +322,47 @@ class FlowTrainer:
         return avg_loss
 
     @torch.no_grad()
-    def validate(self) -> float:
-        """Compute validation loss.
+    def validate(self, use_ema: bool = True) -> float:
+        """Compute validation loss using EMA weights.
+
+        Args:
+            use_ema: If True, use EMA weights for validation (default True).
+                     EMA weights typically generalize better.
 
         Returns:
             Average validation loss.
         """
         self.model.eval()
-        total_loss = 0.0
-        n_batches = 0
 
-        for x1 in self.val_loader:
-            x1 = x1.to(self.device)
+        # Apply EMA weights for validation (they generalize better)
+        if use_ema:
+            self.ema.apply(self.model)
 
-            # Sample noise
-            x0 = torch.randn_like(x1)
+        try:
+            total_loss = 0.0
+            n_batches = 0
 
-            # Get interpolated samples and target velocity from coupling
-            t, x_t, v_target = self.coupling.sample(x0, x1)
+            for x1 in self.val_loader:
+                x1 = x1.to(self.device)
 
-            # Forward pass
-            v_pred = self.model(x_t, t)
+                # Sample noise
+                x0 = torch.randn_like(x1)
 
-            # Loss
-            loss = F.mse_loss(v_pred, v_target)
+                # Get interpolated samples and target velocity from coupling
+                t, x_t, v_target = self.coupling.sample(x0, x1)
 
-            total_loss += loss.item()
-            n_batches += 1
+                # Forward pass
+                v_pred = self.model(x_t, t)
+
+                # Loss
+                loss = F.mse_loss(v_pred, v_target)
+
+                total_loss += loss.item()
+                n_batches += 1
+        finally:
+            # Always restore original weights after validation
+            if use_ema:
+                self.ema.restore(self.model)
 
         self.model.train()
         return total_loss / n_batches
