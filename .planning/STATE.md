@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 2 - Training Infrastructure (Complete)
+**Current focus:** Phase 3 - Baseline Architectures (In Progress)
 
 ## Current Position
 
-Phase: 2 of 11 (Training Infrastructure)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-01 -- Completed 02-02-PLAN.md (Experiment tracking)
+Phase: 3 of 11 (Baseline Architectures)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-01 -- Completed 03-01-PLAN.md (SimpleMLP velocity network)
 
-Progress: [████░░░░░░] 20%
+Progress: [█████░░░░░] 25%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 4
-- Average duration: 38 min
+- Total plans completed: 5
+- Average duration: 31 min
 - Total execution time: 2.5 hours
 
 **By Phase:**
@@ -29,10 +29,11 @@ Progress: [████░░░░░░] 20%
 |-------|-------|-------|----------|
 | 01-data-pipeline | 2 | 133min | 67min |
 | 02-training-infrastructure | 2 | 9min | 5min |
+| 03-baseline-architectures | 1 | 2min | 2min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (124min), 01-02 (9min), 02-01 (4min), 02-02 (5min)
-- Trend: Improving (Phase 2 infrastructure plans very fast)
+- Last 5 plans: 01-02 (9min), 02-01 (4min), 02-02 (5min), 03-01 (2min)
+- Trend: Fast execution continues (simple model creation)
 
 *Updated after each plan completion*
 
@@ -59,6 +60,9 @@ Recent decisions affecting current work:
 - Checkpoint save/load order: model -> EMA -> optimizer -> scheduler (02-02)
 - Stats consistency check on resume warns but doesn't fail (02-02)
 - Wandb.log every 10 steps with step parameter for proper alignment (02-02)
+- SimpleMLP uses hidden_dim=256, num_layers=5 for ~920K params (03-01)
+- Output layer initialized near zero (std=0.01) for stable training (03-01)
+- Model factory pattern: create_model(arch_name) for CLI selection (03-01)
 
 ### Pending Todos
 
@@ -72,21 +76,18 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 08:22 UTC
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-02-01 09:11 UTC
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
 
-## Phase 2 Progress
+## Phase 3 Progress
 
-**Phase 2 complete.** Full training infrastructure established.
+**Phase 3 in progress.** First baseline architecture (SimpleMLP) complete.
 
-Delivered:
-- TrainingConfig dataclass with locked EMA/patience/grad_clip defaults
-- EarlyStopping, EMAModel, cosine schedule utilities
-- FlowTrainer class with train/validate methods
-- train.py CLI with GPU verification
-- Wandb experiment tracking with project/group/name organization
-- Checkpoint save/load utilities with stats consistency verification
-- Resume support via --resume CLI flag
+Delivered (03-01):
+- SimpleMLP velocity network (~920K params)
+- Sinusoidal timestep embedding function
+- Model factory create_model() for CLI architecture selection
+- Smoke test verified training stability
 
-Next: Phase 3 - Velocity Networks
+Next: 03-02-PLAN.md (DiT velocity network)
