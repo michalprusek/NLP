@@ -5,34 +5,34 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 2 - Training Infrastructure (In Progress)
+**Current focus:** Phase 2 - Training Infrastructure (Complete)
 
 ## Current Position
 
 Phase: 2 of 11 (Training Infrastructure)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-01 -- Completed 02-01-PLAN.md (Core training infrastructure)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 02-02-PLAN.md (Experiment tracking)
 
-Progress: [███░░░░░░░] 15%
+Progress: [████░░░░░░] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
-- Average duration: 49 min
-- Total execution time: 2.3 hours
+- Total plans completed: 4
+- Average duration: 38 min
+- Total execution time: 2.5 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-data-pipeline | 2 | 133min | 67min |
-| 02-training-infrastructure | 1 | 4min | 4min |
+| 02-training-infrastructure | 2 | 9min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (124min), 01-02 (9min), 02-01 (4min)
-- Trend: Improving (02-01 very fast, straightforward implementation)
+- Last 5 plans: 01-01 (124min), 01-02 (9min), 02-01 (4min), 02-02 (5min)
+- Trend: Improving (Phase 2 infrastructure plans very fast)
 
 *Updated after each plan completion*
 
@@ -56,6 +56,9 @@ Recent decisions affecting current work:
 - Locked EMA decay at 0.9999, grad_clip at 1.0, patience at 20 (02-01)
 - Flow matching uses ICFM formulation: x_t = (1-t)*x0 + t*x1 (02-01)
 - GPU verification at startup warns if not on A5000/L40S or CUDA_VISIBLE_DEVICES!=1 (02-01)
+- Checkpoint save/load order: model -> EMA -> optimizer -> scheduler (02-02)
+- Stats consistency check on resume warns but doesn't fail (02-02)
+- Wandb.log every 10 steps with step parameter for proper alignment (02-02)
 
 ### Pending Todos
 
@@ -69,18 +72,21 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 08:13 UTC
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-02-01 08:22 UTC
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
 
 ## Phase 2 Progress
 
-**Plan 01 complete.** Core training infrastructure established.
+**Phase 2 complete.** Full training infrastructure established.
 
 Delivered:
 - TrainingConfig dataclass with locked EMA/patience/grad_clip defaults
 - EarlyStopping, EMAModel, cosine schedule utilities
 - FlowTrainer class with train/validate methods
 - train.py CLI with GPU verification
+- Wandb experiment tracking with project/group/name organization
+- Checkpoint save/load utilities with stats consistency verification
+- Resume support via --resume CLI flag
 
-Next: Plan 02 - Wandb integration and checkpoint saving
+Next: Phase 3 - Velocity Networks
