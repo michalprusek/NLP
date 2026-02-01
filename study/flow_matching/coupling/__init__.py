@@ -26,6 +26,11 @@ Example:
 from study.flow_matching.coupling.icfm import ICFMCoupling, linear_interpolate
 from study.flow_matching.coupling.otcfm import OTCFMCoupling
 from study.flow_matching.coupling.reflow import ReflowCoupling
+from study.flow_matching.coupling.spherical import (
+    SphericalCoupling,
+    SphericalOTCoupling,
+    slerp_interpolate,
+)
 from study.flow_matching.coupling.stochastic import StochasticInterpolantCoupling
 
 _COUPLING_CLASSES = {
@@ -35,6 +40,8 @@ _COUPLING_CLASSES = {
     "si": StochasticInterpolantCoupling,
     "si-gvp": StochasticInterpolantCoupling,
     "si-linear": StochasticInterpolantCoupling,
+    "spherical": SphericalCoupling,
+    "spherical-ot": SphericalOTCoupling,
 }
 
 
@@ -48,10 +55,13 @@ def create_coupling(method: str, **kwargs):
             - 'reflow': Rectified Flow
             - 'si' or 'si-gvp': Stochastic Interpolant with GVP schedule
             - 'si-linear': Stochastic Interpolant with linear schedule
+            - 'spherical': Spherical (SLERP) interpolation for normalized embeddings
+            - 'spherical-ot': Spherical OT coupling (Sinkhorn + SLERP)
         **kwargs: Passed to coupling constructor.
             - For otcfm: reg (float), normalize_cost (bool)
             - For reflow: pair_tensors (tuple of x0, x1), batch_size (int)
             - For si: schedule (str), normalize_loss (bool)
+            - For spherical/spherical-ot: normalize_inputs (bool)
 
     Returns:
         Coupling instance with sample() method.
@@ -80,8 +90,11 @@ def create_coupling(method: str, **kwargs):
 __all__ = [
     "create_coupling",
     "linear_interpolate",
+    "slerp_interpolate",
     "ICFMCoupling",
     "OTCFMCoupling",
     "ReflowCoupling",
     "StochasticInterpolantCoupling",
+    "SphericalCoupling",
+    "SphericalOTCoupling",
 ]
