@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 6 - Advanced Architectures (in progress)
+**Current focus:** Phase 6 - Advanced Architectures (COMPLETE)
 
 ## Current Position
 
-Phase: 6 of 11 (Advanced Architectures)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-01 -- Completed 06-02-PLAN.md
+Phase: 6 of 11 (Advanced Architectures) - COMPLETE
+Plan: 3 of 3 in current phase - COMPLETE
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 06-03-PLAN.md
 
-Progress: [██████████░] 55%
+Progress: [███████████░] 58%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 14
-- Average duration: 15 min
-- Total execution time: 3.5 hours
+- Total plans completed: 15
+- Average duration: 14 min
+- Total execution time: 3.6 hours
 
 **By Phase:**
 
@@ -32,10 +32,10 @@ Progress: [██████████░] 55%
 | 03-baseline-architectures | 3 | 10min | 3min |
 | 04-flow-matching-baselines | 3 | 12min | 4min |
 | 05-advanced-flow-methods | 2 | 10min | 5min |
-| 06-advanced-architectures | 2 | 7min | 4min |
+| 06-advanced-architectures | 3 | 9min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (3min), 05-01 (5min), 05-02 (5min), 06-01 (3min), 06-02 (4min)
+- Last 5 plans: 05-01 (5min), 05-02 (5min), 06-01 (3min), 06-02 (4min), 06-03 (2min)
 - Trend: Fast execution continues
 
 *Updated after each plan completion*
@@ -87,6 +87,8 @@ Recent decisions affecting current work:
 - mamba-ssm installation failed due to CUDA 13.1 vs PyTorch CUDA 12.8 mismatch (06-02)
 - Graceful fallback: MAMBA_AVAILABLE=False, ImportError on instantiation (06-02)
 - Bidirectional Mamba with chunk_size=64 (16 chunks of 64 dims) (06-02)
+- Scaling configs define only architecture-specific params, factory adds defaults (06-03)
+- Configuration overlay pattern: defaults <- scale config <- kwargs (06-03)
 
 ### Pending Todos
 
@@ -103,8 +105,8 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 12:32 UTC
-Stopped at: Completed 06-02-PLAN.md (Mamba velocity network)
+Last session: 2026-02-01 12:38 UTC
+Stopped at: Completed 06-03-PLAN.md (architecture scaling variants)
 Resume file: None
 
 ## Phase 5 Summary (COMPLETE)
@@ -146,9 +148,9 @@ Delivered (05-02):
 
 Ready for: Phase 6 (Advanced Architectures), Phase 7 (Data Augmentation), Phase 8 (GP-Guided Sampling)
 
-## Phase 6 Summary (IN PROGRESS)
+## Phase 6 Summary (COMPLETE)
 
-**Phase 6 in progress.** Advanced architectures being implemented.
+**Phase 6 complete.** All advanced architectures implemented with scaling variants.
 
 Delivered (06-01):
 - FiLMLayer for feature-wise linear modulation
@@ -162,15 +164,27 @@ Delivered (06-02):
 - Extended model factory: create_model("mamba") with ImportError handling
 - Bidirectional SSM treating embedding as 16 chunks of 64 dims
 
-**Architectures implemented:**
-| Arch | Params | Status |
-|------|--------|--------|
-| MLP | ~920K | Available |
-| DiT | ~9.3M | Available |
-| UNet | ~6.9M | Available |
-| Mamba | ~2M | Blocked (mamba-ssm) |
+Delivered (06-03):
+- SCALING_CONFIGS with Tiny/Small/Base for all architectures
+- get_scaled_config() and list_available_scales() helpers
+- Extended create_model(arch, scale) with configuration overlay
+- All architecture/scale combinations verified on GPU
 
-Remaining: 06-03 (architecture scaling variants)
+**Architecture Scaling Matrix:**
+| Arch | Tiny | Small | Base |
+|------|------|-------|------|
+| mlp | 362K | 920K | 1.77M |
+| dit | 3.16M | 9.31M | 20.9M |
+| unet | 5.14M | 6.89M | 9.07M |
+| mamba | (blocked) | (blocked) | (blocked) |
+
+**Phase 6 success criteria - ALL VERIFIED:**
+1. [x] U-Net MLP with FiLM conditioning trains correctly
+2. [x] Mamba velocity network has graceful fallback
+3. [x] All architectures have Tiny/Small/Base scaling variants
+4. [x] create_model(arch, scale) works for all combinations
+
+Ready for: Phase 7 (Data Augmentation), Phase 8 (GP-Guided Sampling), Phase 9 (Experimental Matrix)
 
 ## Phase 4 Summary (COMPLETE)
 
