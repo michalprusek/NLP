@@ -67,11 +67,11 @@ Plans:
   2. DiT velocity network (ported from ecoflow) trains without NaN loss
   3. Both architectures produce reasonable reconstruction MSE (<0.1)
   4. Generated embeddings decode to coherent text
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: Simple MLP baseline implementation
-- [ ] 03-02: DiT baseline port and verification
+- [ ] 03-01-PLAN.md - Simple MLP implementation with model factory
+- [ ] 03-02-PLAN.md - DiT port from ecoflow and verification
 
 ### Phase 4: Flow Matching Baselines
 **Goal**: I-CFM and OT-CFM flow matching methods working with baseline architectures
