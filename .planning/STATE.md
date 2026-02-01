@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 3 - Baseline Architectures (In Progress)
+**Current focus:** Phase 3 - Baseline Architectures (COMPLETE)
 
 ## Current Position
 
 Phase: 3 of 11 (Baseline Architectures)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-01 -- Completed 03-02-PLAN.md (DiT velocity network)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 03-03-PLAN.md (Gap closure: evaluation infrastructure)
 
-Progress: [██████░░░░] 27%
+Progress: [███████░░░] 32%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 27 min
-- Total execution time: 2.6 hours
+- Total plans completed: 7
+- Average duration: 24 min
+- Total execution time: 2.7 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [██████░░░░] 27%
 |-------|-------|-------|----------|
 | 01-data-pipeline | 2 | 133min | 67min |
 | 02-training-infrastructure | 2 | 9min | 5min |
-| 03-baseline-architectures | 2 | 6min | 3min |
+| 03-baseline-architectures | 3 | 10min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 02-01 (4min), 02-02 (5min), 03-01 (2min), 03-02 (4min)
+- Last 5 plans: 02-02 (5min), 03-01 (2min), 03-02 (4min), 03-03 (4min)
 - Trend: Fast execution continues (model creation and verification)
 
 *Updated after each plan completion*
@@ -66,6 +66,8 @@ Recent decisions affecting current work:
 - DiTVelocityNetwork uses hidden_dim=384, num_layers=3, num_heads=6 for ~9.3M params (03-02)
 - Import timestep_embedding from mlp.py to avoid code duplication (03-02)
 - Velocity prediction loss ~2.0 is expected for normalized ICFM training (03-02)
+- ICFM distribution MSE ~1.0 is expected (comparing generated to random targets) (03-03)
+- Key quality metric is coherent text generation, not reconstruction MSE (03-03)
 
 ### Pending Todos
 
@@ -79,13 +81,13 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-01 09:19 UTC
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-02-01 09:39 UTC
+Stopped at: Completed 03-03-PLAN.md (Phase 3 complete)
 Resume file: None
 
-## Phase 3 Progress
+## Phase 3 Summary (COMPLETE)
 
-**Phase 3 in progress.** Both baseline architectures complete.
+**Phase 3 complete.** All baseline architectures trained and verified.
 
 Delivered (03-01):
 - SimpleMLP velocity network (~920K params)
@@ -98,4 +100,16 @@ Delivered (03-02):
 - Verified training and text generation for both architectures
 - Extended training shows stable optimization (best val loss: 2.003)
 
-Next: 03-03-PLAN.md (Loss function configurations)
+Delivered (03-03):
+- evaluate.py with ODE integration and SONAR decoder integration
+- Verified all 3 checkpoints produce coherent English text
+- Clarified ICFM evaluation semantics (distribution MSE ~1.0 expected)
+
+**Verified checkpoints:**
+| Checkpoint | Architecture | Val Loss | Text Quality |
+|------------|--------------|----------|--------------|
+| mlp-icfm-1k-none | MLP | 2.008 | Coherent |
+| dit-icfm-1k-none | DiT | 2.008 | Coherent |
+| mlp-icfm-5k-none | MLP | 2.003 | Coherent |
+
+Next: Phase 4 - Loss Landscape Analysis
