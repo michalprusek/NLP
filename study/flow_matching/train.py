@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
         "--flow",
         type=str,
         required=True,
-        help="Flow matching method (icfm, otcfm, reflow, si, si-gvp, si-linear)",
+        help="Flow matching method (icfm, otcfm, spherical, spherical-ot, reflow, si, si-gvp, si-linear)",
     )
     parser.add_argument(
         "--schedule",
@@ -264,6 +264,7 @@ def main() -> None:
             aug=args.aug,
             group=args.group,
             scale=args.scale,
+            seed=args.seed,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,

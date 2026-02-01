@@ -200,3 +200,7 @@ datasets/*.json
 
 # Weights & Biases
 wandb/
+
+# Original reference implementations (untracked)
+nfbo_original/
+instructzero_original/

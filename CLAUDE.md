@@ -276,18 +276,78 @@ A:
 
 ---
 
+## Ablation Study Results
+
+### Best Flow Model
+- **U-Net + OT-CFM + 10K** - Val loss ~1.07 (after 1000 epochs)
+- Checkpoint: `study/checkpoints/unet-otcfm-10k-none/best.pt`
+- Continue training: `./scripts/continue_unet_training.sh 500`
+
+### Best GP Configuration
+- **RiemannianGP + arccosine kernel** - Spearman=0.44, ECE=0.012
+- ArcCosine kernel has NO lengthscale parameter - handle in `get_hyperparameters()`
+- Kernel normalizes inputs internally: `k(x,y) = 1 - arccos(x̂·ŷ)/π`
+
+### Riemannian Guided Flow (best for ArcCosine GP)
+- **Spherical projection**: Project gradient onto tangent plane (don't change norm)
+- **Flow-relative scaling**: Gradient ≤ 50% of flow velocity magnitude
+- **Cutoff at 80%**: Stop guidance, let flow smooth last 20%
+- **Uncertainty weighting**: Less guidance where GP is uncertain
+
+```bash
+# Run EcoFlow BO with best configuration (U-Net + arccosine GP + Riemannian guidance)
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
+  --gp-kernel arccosine --warm-start-k 10 --llm-budget 50000 --eval-size 1319
+```
+
+### Flow Matching Methods
+
+| Method | Coupling | Best For |
+|--------|----------|----------|
+| `icfm` | Random pairing | Baseline |
+| `otcfm` | Optimal Transport | Straight paths, best overall |
+| `spherical` | SLERP interpolation | Normalized embeddings |
+| `spherical-ot` | OT + SLERP | Best for hypersphere data |
+| `si-gvp` | Stochastic Interpolant | Alternative schedule |
+
+**Spherical Flow**: Uses geodesic (great circle) paths instead of Euclidean linear interpolation. Ideal for SONAR embeddings which lie on unit hypersphere.
+
+---
+
+## Training → BO Automation
+
+Use monitoring scripts to auto-start BO after training completes:
+
+```bash
+# Pattern: pgrep to detect training, then launch next step
+scripts/run_bo_spherical.sh    # Monitors spherical training, auto-starts BO
+scripts/run_bo_after_training.sh  # Monitors U-Net training, auto-starts BO
+
+# Manual monitoring pattern
+while pgrep -f "study.flow_matching.train.*<model>" > /dev/null; do sleep 30; done
+# Then run BO with the trained checkpoint
+```
+
+---
+
 ## Coding Standards
 
 ### Logging Generated Prompts
-**NEVER truncate prompts in log output.** Always log the full prompt text.
+**NEVER truncate prompts in log output or print statements.** Always output the full prompt text.
 
 ```python
-# BAD
+# BAD - truncated output
 log(f"Generated: {prompt[:80]}...")
+print(f"Prompt: {prompt[:100]}...")
+logger.info(f"  Prompt: {result['prompt'][:200]}...")
 
-# GOOD
+# GOOD - full prompt
 log(f"Generated:\n{prompt}")
+print(f"Prompt:\n{prompt}")
+logger.info(f"Prompt:\n{result['prompt']}")
 ```
+
+This applies to ALL prompt output: logs, prints, debug messages, result summaries.
 
 ### Long-Running Processes
 **Always run processes >30 seconds in tmux** with logging:

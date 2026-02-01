@@ -439,41 +439,75 @@ class BOOptimizationLoop:
         n_restarts: int = 5,
         n_opt_steps: int = 100,
         lr: float = 0.1,
+        n_candidates: int = 512,
+        use_guided_sampling: bool = True,
     ) -> dict:
         """
-        Execute one BO iteration: GP-UCB optimize -> flow project -> decode -> evaluate -> update GP.
+        Execute one BO iteration using guided flow sampling.
 
-        Algorithm:
+        Algorithm (use_guided_sampling=True, recommended):
+        1. Generate candidates via guided flow (stays on manifold)
+        2. Rank candidates using GP-UCB acquisition function
+        3. Select best candidate by UCB score
+        4. Decode to text and evaluate on GSM8K
+        5. Update GP with new observation
+
+        Algorithm (use_guided_sampling=False, legacy):
         1. Find z* = argmax UCB(z) via gradient ascent
         2. Project z* through flow (encode/decode) to stay on-manifold
-        3. Decode projected embedding to text prompt
-        4. Evaluate prompt on GSM8K
-        5. Update GP with new observation
+        3. Decode and evaluate
 
         Args:
             ucb_alpha: UCB exploration weight (default 1.96 for 95% CI)
-            n_restarts: GP optimization restarts
-            n_opt_steps: Gradient steps per restart
-            lr: Learning rate for GP optimization
+            n_restarts: GP optimization restarts (for legacy method)
+            n_opt_steps: Gradient steps per restart (for legacy method)
+            lr: Learning rate (for legacy method)
+            n_candidates: Number of guided flow candidates to generate
+            use_guided_sampling: Use guided sampling (True) or direct UCB opt (False)
 
         Returns:
             Dict with iteration results
         """
         self.iteration += 1
 
-        # 1-2. GP-UCB optimization + flow projection
-        embedding, info = self.sampler.sample_optimal(
-            device=self.device,
-            num_steps=50,
-            method="heun",
-            ucb_alpha=ucb_alpha,
-            n_restarts=n_restarts,
-            n_opt_steps=n_opt_steps,
-            lr=lr,
-        )
+        if use_guided_sampling:
+            # Generate candidates via guided flow (stays on manifold!)
+            with torch.no_grad():
+                candidates = self.sampler.sample(
+                    n_samples=n_candidates,
+                    device=self.device,
+                    num_steps=50,
+                    method="heun",
+                )
 
-        ucb_value = info["ucb_value"]
-        l2_projection = info["l2_projection"]
+            # Rank candidates using GP-UCB
+            ucb_values = self.gp.compute_acquisition(
+                candidates,
+                acquisition="ucb",
+                alpha=ucb_alpha,
+            )
+
+            # Select best candidate
+            best_idx = ucb_values.argmax().item()
+            embedding = candidates[best_idx:best_idx+1]
+            ucb_value = ucb_values[best_idx].item()
+            l2_projection = 0.0  # Already on manifold
+
+            logger.debug(f"Generated {n_candidates} candidates, best UCB={ucb_value:.4f}")
+
+        else:
+            # Legacy: GP-UCB optimization + flow projection
+            embedding, info = self.sampler.sample_optimal(
+                device=self.device,
+                num_steps=50,
+                method="heun",
+                ucb_alpha=ucb_alpha,
+                n_restarts=n_restarts,
+                n_opt_steps=n_opt_steps,
+                lr=lr,
+            )
+            ucb_value = info["ucb_value"]
+            l2_projection = info["l2_projection"]
 
         # Optional L2-r check
         l2r_value = None

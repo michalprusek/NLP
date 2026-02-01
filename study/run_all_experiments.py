@@ -57,7 +57,7 @@ DEFAULT_SEEDS = [42, 123, 456]
 EXTENDED_SEEDS = [42, 123, 456, 789, 1337, 2024, 3141, 4242, 5678, 9999]  # 10 seeds for robust CI
 
 # Experiment matrix
-FLOW_METHODS = ["icfm", "otcfm", "si-gvp"]  # reflow handled separately
+FLOW_METHODS = ["icfm", "otcfm", "spherical", "spherical-ot", "si-gvp"]  # reflow handled separately
 ARCHITECTURES = ["mlp", "dit", "unet"]  # mamba blocked
 ARCHITECTURE_SCALES = ["small"]  # Default scale for ablations
 DATASET_SIZES = ["1k", "5k", "10k"]

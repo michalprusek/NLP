@@ -44,6 +44,7 @@ class TrainingConfig:
     aug: str = ""
     group: str = ""
     scale: str = "small"  # Model scale: tiny, small, base
+    seed: int = 42  # Random seed for reproducibility
 
     # Training parameters (configurable)
     epochs: int = 100
@@ -80,8 +81,13 @@ class TrainingConfig:
         """Generate run name from config fields."""
         # Include scale in name if not default 'small'
         if self.scale != "small":
-            return f"{self.arch}-{self.scale}-{self.flow}-{self.dataset}-{self.aug}"
-        return f"{self.arch}-{self.flow}-{self.dataset}-{self.aug}"
+            base = f"{self.arch}-{self.scale}-{self.flow}-{self.dataset}-{self.aug}"
+        else:
+            base = f"{self.arch}-{self.flow}-{self.dataset}-{self.aug}"
+        # Include seed in name if not default 42
+        if self.seed != 42:
+            base = f"{base}-s{self.seed}"
+        return base
 
     def to_dict(self) -> dict:
         """Convert config to dict for Wandb logging."""
@@ -92,6 +98,7 @@ class TrainingConfig:
             "aug": self.aug,
             "group": self.group,
             "scale": self.scale,
+            "seed": self.seed,
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "lr": self.lr,

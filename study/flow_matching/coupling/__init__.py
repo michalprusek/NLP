@@ -26,6 +26,11 @@ Example:
 from study.flow_matching.coupling.icfm import ICFMCoupling, linear_interpolate
 from study.flow_matching.coupling.otcfm import OTCFMCoupling
 from study.flow_matching.coupling.reflow import ReflowCoupling
+from study.flow_matching.coupling.spherical import (
+    SphericalCoupling,
+    SphericalOTCoupling,
+    slerp_interpolate,
+)
 from study.flow_matching.coupling.stochastic import StochasticInterpolantCoupling
 
 _COUPLING_CLASSES = {
@@ -35,6 +40,8 @@ _COUPLING_CLASSES = {
     "si": StochasticInterpolantCoupling,
     "si-gvp": StochasticInterpolantCoupling,
     "si-linear": StochasticInterpolantCoupling,
+    "spherical": SphericalCoupling,
+    "spherical-ot": SphericalOTCoupling,
 }
 
 
@@ -80,8 +87,11 @@ def create_coupling(method: str, **kwargs):
 __all__ = [
     "create_coupling",
     "linear_interpolate",
+    "slerp_interpolate",
     "ICFMCoupling",
     "OTCFMCoupling",
     "ReflowCoupling",
     "StochasticInterpolantCoupling",
+    "SphericalCoupling",
+    "SphericalOTCoupling",
 ]
