@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-31)
 
 **Core value:** Find the best flow matching architecture for GP-guided prompt generation in SONAR space
-**Current focus:** Phase 4 - Flow Matching Baselines
+**Current focus:** Phase 5 - Advanced Flow Methods (ready to start)
 
 ## Current Position
 
-Phase: 4 of 11 (Flow Matching Baselines)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-01 -- Completed 04-02-PLAN.md (OT-CFM training and path straightness)
+Phase: 4 of 11 (Flow Matching Baselines) - COMPLETE
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-01 -- Completed 04-03-PLAN.md (CFG-Zero* guidance)
 
-Progress: [████████░░] 39%
+Progress: [████████░░] 42%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: 20 min
-- Total execution time: 2.9 hours
+- Total plans completed: 10
+- Average duration: 19 min
+- Total execution time: 3.1 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [████████░░] 39%
 | 01-data-pipeline | 2 | 133min | 67min |
 | 02-training-infrastructure | 2 | 9min | 5min |
 | 03-baseline-architectures | 3 | 10min | 3min |
-| 04-flow-matching-baselines | 2 | 9min | 5min |
+| 04-flow-matching-baselines | 3 | 12min | 4min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (4min), 03-03 (4min), 04-01 (5min), 04-02 (4min)
-- Trend: Fast execution continues (evaluation + training)
+- Last 5 plans: 03-03 (4min), 04-01 (5min), 04-02 (4min), 04-03 (3min)
+- Trend: Fast execution continues (guidance + verification)
 
 *Updated after each plan completion*
 
@@ -72,8 +72,9 @@ Recent decisions affecting current work:
 - OT-CFM uses OTPlanSampler with method='exact', reg=0.5, normalize_cost=True (04-01)
 - Factory pattern for coupling selection: create_coupling(method) (04-01)
 - OT-CFM produces ~8% lower val loss than I-CFM (1.841 vs 2.008) (04-02)
-- Path straightness similar for both methods (~0.0015 deviation) on small MLP (04-02)
-- OT-CFM's main advantage at small scale is training efficiency, not path geometry (04-02)
+- Path straightness similar for both methods (~0.0016 deviation) on small MLP (04-02/04-03)
+- CFG-Zero* uses 4% zero-init fraction matching ecoflow/guided_flow.py (04-03)
+- Gradient clipping at max_grad_norm=10.0 for guidance stability (04-03)
 
 ### Pending Todos
 
@@ -85,16 +86,17 @@ None.
 - 10K generation took longer than estimated (~114 min vs ~67 min) due to deduplication overhead
 - 2 samples (0.4%) failed round-trip verification - acceptable edge cases (mixed language, grammar reconstruction)
 - WANDB authentication missing - using WANDB_MODE=offline for training runs
+- GPU 1 memory pressure from other processes - use GPU 0 for SONAR decoder when needed
 
 ## Session Continuity
 
-Last session: 2026-02-01 10:19 UTC
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-02-01 10:20 UTC
+Stopped at: Completed 04-03-PLAN.md (Phase 4 complete)
 Resume file: None
 
-## Phase 4 Summary (IN PROGRESS)
+## Phase 4 Summary (COMPLETE)
 
-**Phase 4 in progress.** Implementing flow matching baselines.
+**Phase 4 complete.** Flow matching baselines established.
 
 Delivered (04-01):
 - Coupling abstraction module (study/flow_matching/coupling/)
@@ -108,12 +110,26 @@ Delivered (04-02):
 - OT-CFM checkpoint: study/checkpoints/mlp-otcfm-1k-none/best.pt
 - Quantitative comparison: OT-CFM ~8% lower loss, similar path geometry
 
+Delivered (04-03):
+- CFG-Zero* guidance module (study/flow_matching/guidance.py)
+- get_guidance_lambda() with 4% zero-init schedule
+- guided_euler_ode_integrate() with gradient clipping
+- sample_with_guidance() convenience function
+- Phase 4 verification complete
+
 **Full training results (100 epochs, 1k):**
 | Method | Val Loss | Mean Path Dev | Text Quality |
 |--------|----------|---------------|--------------|
-| I-CFM | 2.008 | 0.001560 | Coherent |
-| OT-CFM | 1.841 | 0.001555 | Coherent |
+| I-CFM | 2.008 | 0.0016 | Coherent |
+| OT-CFM | 1.841 | 0.0016 | Coherent |
 
-**Key finding:** OT-CFM's benefit at this scale is training efficiency (lower loss), not straighter paths. Both methods produce very straight paths (~0.0015 deviation).
+**Phase 4 success criteria - ALL VERIFIED:**
+1. [x] I-CFM trains with independent coupling
+2. [x] OT-CFM trains with Sinkhorn coupling
+3. [x] Path straightness measured and compared
+4. [x] CFG-Zero* zeros first 4% of steps
+5. [x] Both methods generate valid SONAR embeddings
 
-Next: 04-03 (Architecture Comparison)
+**Key finding:** OT-CFM's benefit at this scale is training efficiency (lower loss), not straighter paths. Both methods produce very straight paths (~0.0016 deviation).
+
+Ready for: Phase 5 (Advanced Flow Methods) and Phase 8 (GP-Guided Sampling)
