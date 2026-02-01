@@ -4,6 +4,8 @@ ICFM samples x0, x1 independently (random pairing). This is the baseline
 CFM method that produces curved flow paths.
 """
 
+from typing import Tuple
+
 import torch
 
 
@@ -31,7 +33,7 @@ class ICFMCoupling:
 
     def sample(
         self, x0: torch.Tensor, x1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample t, x_t, u_t for velocity matching.
 
         ICFM formulation: x_t = (1-t)*x0 + t*x1, u_t = x1 - x0

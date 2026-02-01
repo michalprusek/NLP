@@ -8,6 +8,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Tuple
 
 import torch
 from torch import Tensor
@@ -202,7 +203,7 @@ def verify_round_trip(stats: dict, embeddings: Tensor, atol: float = 1e-5) -> bo
     return torch.allclose(embeddings, recovered, atol=atol)
 
 
-def verify_normalized_stats(embeddings: Tensor, rtol: float = 0.1) -> tuple[float, float]:
+def verify_normalized_stats(embeddings: Tensor, rtol: float = 0.1) -> Tuple[float, float]:
     """
     Check that normalized embeddings have approximately zero mean and unit std.
 

@@ -30,6 +30,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import List
 
 import torch
 from torch import Tensor
@@ -252,7 +253,7 @@ def generate_and_decode(
     n_samples: int,
     n_steps: int,
     device: str | torch.device,
-) -> list[str]:
+) -> List[str]:
     """
     Generate embeddings from noise and decode to text.
 

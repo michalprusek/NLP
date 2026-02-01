@@ -5,6 +5,8 @@ straighter flow paths than I-CFM. This can improve sampling quality
 and convergence.
 """
 
+from typing import Tuple
+
 import torch
 from torchcfm.optimal_transport import OTPlanSampler
 
@@ -52,7 +54,7 @@ class OTCFMCoupling:
 
     def sample(
         self, x0: torch.Tensor, x1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample t, x_t, u_t with OT-coupled pairs.
 
         Uses mini-batch Sinkhorn to compute optimal transport coupling,

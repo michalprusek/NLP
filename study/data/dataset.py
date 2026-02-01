@@ -8,7 +8,7 @@ import logging
 import random
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -99,7 +99,7 @@ class FlowDataset(Dataset):
         else:
             return self.embeddings[idx]
 
-    def get_original(self, idx: int) -> tuple[Tensor, str]:
+    def get_original(self, idx: int) -> Tuple[Tensor, str]:
         """
         Return original (unnormalized) embedding and instruction text.
 
@@ -212,7 +212,7 @@ def load_all_splits(
     size: str = "5k",
     stats_path: str = DEFAULT_STATS_PATH,
     return_normalized: bool = True,
-) -> tuple[FlowDataset, FlowDataset, FlowDataset]:
+) -> Tuple[FlowDataset, FlowDataset, FlowDataset]:
     """
     Load train, val, and test splits for a given size.
 

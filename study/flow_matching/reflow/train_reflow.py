@@ -18,6 +18,7 @@ import os
 import random
 import time
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -59,7 +60,7 @@ def generate_or_load_pairs(
     cache_path: str,
     device: torch.device,
     force_regenerate: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """Generate or load cached reflow pairs.
 
     Args:

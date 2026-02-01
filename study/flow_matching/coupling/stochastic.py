@@ -12,6 +12,8 @@ This allows for variance-preserving schedules (GVP) that can improve
 sample quality, especially for high-dimensional data.
 """
 
+from typing import Tuple
+
 import torch
 
 from study.flow_matching.schedules import get_schedule, ScheduleFunction
@@ -52,7 +54,7 @@ class StochasticInterpolantCoupling:
 
     def sample(
         self, x0: torch.Tensor, x1: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample t, x_t, u_t for velocity matching.
 
         Stochastic Interpolant formulation:
