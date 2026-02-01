@@ -65,6 +65,11 @@ class TrainingConfig:
     # Stochastic Interpolant parameters (only used when flow='si*')
     si_schedule: str = field(default="gvp", repr=False)
 
+    # Augmentation parameters (07-01)
+    mixup_alpha: float = field(default=0.0, repr=False)
+    noise_std: float = field(default=0.0, repr=False)
+    dropout_rate: float = field(default=0.0, repr=False)  # Placeholder for 07-02
+
     # Paths
     checkpoint_dir: str = "study/checkpoints"
     stats_path: str = "study/datasets/normalization_stats.pt"
@@ -95,6 +100,9 @@ class TrainingConfig:
             "otcfm_reg": self.otcfm_reg,
             "otcfm_normalize_cost": self.otcfm_normalize_cost,
             "si_schedule": self.si_schedule,
+            "mixup_alpha": self.mixup_alpha,
+            "noise_std": self.noise_std,
+            "dropout_rate": self.dropout_rate,
             "checkpoint_dir": self.checkpoint_dir,
             "stats_path": self.stats_path,
             "run_name": self.run_name,
