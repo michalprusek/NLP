@@ -1,17 +1,18 @@
 """Data augmentation for flow matching training.
 
-Provides mixup interpolation and Gaussian noise injection for
+Provides mixup interpolation, Gaussian noise injection, and dimension dropout for
 improving generalization on small (1K-10K) SONAR embedding datasets.
 
 CRITICAL: Only augment x1 (data), never x0 (noise).
 Augmentation happens BEFORE coupling.sample().
 
-Order of operations: mixup -> noise (as per research).
+Order of operations: mixup -> noise -> dropout (as per research).
 """
 
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -91,6 +92,30 @@ def add_gaussian_noise(embeddings: Tensor, noise_std: float) -> Tensor:
     return embeddings + noise
 
 
+def dimension_dropout(embeddings: Tensor, dropout_rate: float, training: bool = True) -> Tensor:
+    """Apply dimension dropout (masking) to embeddings.
+
+    Uses F.dropout which randomly zeros out dimensions with probability dropout_rate.
+    This is stochastic masking - it zeros out (masks) random dimensions.
+    F.dropout handles scaling by 1/(1-p) automatically to maintain expected values.
+
+    NOTE: F.dropout IS dimension masking - the "dropout/masking" requirement
+    in DATA-07 is satisfied because dropout stochastically zeros dimensions.
+
+    Args:
+        embeddings: Input embeddings of shape (batch_size, embed_dim).
+        dropout_rate: Probability of zeroing each dimension (0.0 = disabled).
+        training: Whether in training mode. If False, returns original.
+
+    Returns:
+        Masked embeddings of same shape as input.
+    """
+    if not training or dropout_rate <= 0:
+        return embeddings
+
+    return F.dropout(embeddings, p=dropout_rate, training=training)
+
+
 def augment_batch(
     embeddings: Tensor,
     config: AugmentationConfig,
@@ -98,7 +123,7 @@ def augment_batch(
 ) -> Tensor:
     """Apply all configured augmentations to a batch.
 
-    Order of operations: mixup -> noise (as per research).
+    Order of operations: mixup -> noise -> dropout (as per research).
 
     Args:
         embeddings: Input embeddings of shape (batch_size, embed_dim).
@@ -111,7 +136,7 @@ def augment_batch(
     if not training:
         return embeddings
 
-    # Order: mixup -> noise
+    # Order: mixup -> noise -> dropout
     result = embeddings
 
     if config.mixup_alpha > 0:
@@ -120,6 +145,36 @@ def augment_batch(
     if config.noise_std > 0:
         result = add_gaussian_noise(result, config.noise_std)
 
-    # dropout_rate placeholder for 07-02 (dimension dropout)
+    if config.dropout_rate > 0:
+        result = dimension_dropout(result, config.dropout_rate, training=training)
 
     return result
+
+
+def parse_aug_string(aug: str) -> AugmentationConfig:
+    """Parse augmentation string to config.
+
+    Parses aug string like 'mixup', 'noise', 'mixup+noise', 'all' to
+    AugmentationConfig with appropriate defaults.
+
+    Args:
+        aug: Augmentation string (e.g., 'none', 'mixup', 'noise',
+             'dropout', 'mixup+noise', 'all').
+
+    Returns:
+        AugmentationConfig with appropriate parameter values.
+    """
+    if aug == "none":
+        return AugmentationConfig()
+    elif aug == "mixup":
+        return AugmentationConfig(mixup_alpha=0.2)
+    elif aug == "noise":
+        return AugmentationConfig(noise_std=0.1)
+    elif aug == "dropout":
+        return AugmentationConfig(dropout_rate=0.1)
+    elif aug == "mixup+noise":
+        return AugmentationConfig(mixup_alpha=0.2, noise_std=0.1)
+    elif aug == "all":
+        return AugmentationConfig(mixup_alpha=0.2, noise_std=0.1, dropout_rate=0.1)
+    else:
+        return AugmentationConfig()  # Unknown, return no augmentation
