@@ -12,7 +12,7 @@ This roadmap delivers a comprehensive flow matching architecture study for GP-gu
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Data Pipeline** - Dataset generation, splits, normalization, SONAR decoder verification
+- [x] **Phase 1: Data Pipeline** - Dataset generation, splits, normalization, SONAR decoder verification
 - [ ] **Phase 2: Training Infrastructure** - Training loop, checkpointing, experiment tracking, GPU config
 - [ ] **Phase 3: Baseline Architectures** - Simple MLP and DiT velocity networks
 - [ ] **Phase 4: Flow Matching Baselines** - I-CFM and OT-CFM implementations with CFG-Zero*
@@ -39,8 +39,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md - Generate 10K VS dataset and create nested splits
-- [ ] 01-02-PLAN.md - Normalization pipeline and SONAR decoder verification
+- [x] 01-01-PLAN.md - Generate 10K VS dataset and create nested splits
+- [x] 01-02-PLAN.md - Normalization pipeline and SONAR decoder verification
 
 ### Phase 2: Training Infrastructure
 **Goal**: Training system ready for all experiments with proper tracking and reproducibility
@@ -215,7 +215,7 @@ Note: Phases 5, 6, 7, 8 can partially parallelize after Phase 4 completes.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Data Pipeline | 0/2 | Planned | - |
+| 1. Data Pipeline | 2/2 | ✓ Complete | 2026-02-01 |
 | 2. Training Infrastructure | 0/2 | Not started | - |
 | 3. Baseline Architectures | 0/2 | Not started | - |
 | 4. Flow Matching Baselines | 0/3 | Not started | - |

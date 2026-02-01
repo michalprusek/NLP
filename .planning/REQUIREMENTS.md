@@ -9,10 +9,10 @@ Requirements for NeurIPS paper submission. Each maps to roadmap phases.
 
 ### Data Pipeline
 
-- [ ] **DATA-01**: Generate new 10K verbosed sampling dataset using existing VS pipeline
-- [ ] **DATA-02**: Create train/val/test splits for 1K, 5K, 10K dataset sizes
-- [ ] **DATA-03**: Implement normalization with stored mean/std statistics
-- [ ] **DATA-04**: Verify SONAR decoder works with denormalized embeddings
+- [x] **DATA-01**: Generate new 10K verbosed sampling dataset using existing VS pipeline
+- [x] **DATA-02**: Create train/val/test splits for 1K, 5K, 10K dataset sizes
+- [x] **DATA-03**: Implement normalization with stored mean/std statistics
+- [x] **DATA-04**: Verify SONAR decoder works with denormalized embeddings
 - [ ] **DATA-05**: Implement data augmentation: linear interpolation (mixup)
 - [ ] **DATA-06**: Implement data augmentation: Gaussian noise injection
 - [ ] **DATA-07**: Implement data augmentation: dimension dropout/masking
@@ -102,10 +102,10 @@ Deferred to future work / paper extensions.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DATA-01 | Phase 1 | Pending |
-| DATA-02 | Phase 1 | Pending |
-| DATA-03 | Phase 1 | Pending |
-| DATA-04 | Phase 1 | Pending |
+| DATA-01 | Phase 1 | Complete |
+| DATA-02 | Phase 1 | Complete |
+| DATA-03 | Phase 1 | Complete |
+| DATA-04 | Phase 1 | Complete |
 | DATA-05 | Phase 7 | Pending |
 | DATA-06 | Phase 7 | Pending |
 | DATA-07 | Phase 7 | Pending |
