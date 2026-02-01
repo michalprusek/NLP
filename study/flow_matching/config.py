@@ -43,6 +43,7 @@ class TrainingConfig:
     dataset: str = ""
     aug: str = ""
     group: str = ""
+    scale: str = "small"  # Model scale: tiny, small, base
 
     # Training parameters (configurable)
     epochs: int = 100
@@ -77,6 +78,9 @@ class TrainingConfig:
     @property
     def run_name(self) -> str:
         """Generate run name from config fields."""
+        # Include scale in name if not default 'small'
+        if self.scale != "small":
+            return f"{self.arch}-{self.scale}-{self.flow}-{self.dataset}-{self.aug}"
         return f"{self.arch}-{self.flow}-{self.dataset}-{self.aug}"
 
     def to_dict(self) -> dict:
@@ -87,6 +91,7 @@ class TrainingConfig:
             "dataset": self.dataset,
             "aug": self.aug,
             "group": self.group,
+            "scale": self.scale,
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "lr": self.lr,

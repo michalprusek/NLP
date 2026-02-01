@@ -115,6 +115,13 @@ def parse_args() -> argparse.Namespace:
         help="Architecture name (e.g., mlp, dit, unet)",
     )
     parser.add_argument(
+        "--scale",
+        type=str,
+        default="small",
+        choices=["tiny", "small", "base"],
+        help="Model scale (tiny, small, base)",
+    )
+    parser.add_argument(
         "--flow",
         type=str,
         required=True,
@@ -249,6 +256,7 @@ def main() -> None:
             dataset=args.dataset,
             aug=args.aug,
             group=args.group,
+            scale=args.scale,
             epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
@@ -284,10 +292,10 @@ def main() -> None:
             f"Loaded datasets: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}"
         )
 
-        # Create model via factory
-        model = create_model(args.arch)
+        # Create model via factory with scale
+        model = create_model(args.arch, scale=args.scale)
         param_count = sum(p.numel() for p in model.parameters())
-        logger.info(f"Model: {args.arch}, Parameters: {param_count:,}")
+        logger.info(f"Model: {args.arch} ({args.scale}), Parameters: {param_count:,}")
 
         # Create trainer and run
         trainer = FlowTrainer(

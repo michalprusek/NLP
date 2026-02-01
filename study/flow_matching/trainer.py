@@ -159,6 +159,10 @@ class FlowTrainer:
                 "reg": self.config.otcfm_reg,
                 "normalize_cost": self.config.otcfm_normalize_cost,
             }
+        elif self.config.flow.startswith("si"):
+            # Extract schedule from flow name (e.g., "si-gvp" -> "gvp")
+            if "-" in self.config.flow:
+                coupling_kwargs["schedule"] = self.config.flow.split("-", 1)[1]
         self.coupling = create_coupling(self.config.flow, **coupling_kwargs)
         logger.info(f"Using {self.config.flow} coupling method")
 

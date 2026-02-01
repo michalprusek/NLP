@@ -263,7 +263,7 @@ def train_reflow(
                 {
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
-                    "ema_state_dict": ema.state_dict(),
+                    "ema_shadow": ema.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "scheduler_state_dict": scheduler.state_dict(),
                     "best_loss": best_train_loss,

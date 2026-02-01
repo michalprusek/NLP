@@ -362,7 +362,7 @@ Examples:
         "--arch",
         type=str,
         required=True,
-        choices=["mlp", "dit"],
+        choices=["mlp", "dit", "unet", "mamba"],
         help="Model architecture",
     )
     parser.add_argument(
