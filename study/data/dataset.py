@@ -43,7 +43,7 @@ class FlowDataset(Dataset):
             return_normalized: If True, __getitem__ returns normalized embeddings
         """
         self.split_path = Path(split_path)
-        self.stats_path = Path(stats_path)
+        self.stats_path = Path(stats_path) if stats_path is not None else None
         self.return_normalized = return_normalized
 
         # Load split data
@@ -63,7 +63,7 @@ class FlowDataset(Dataset):
 
         # Load normalization stats if needed
         if self.return_normalized:
-            if not self.stats_path.exists():
+            if self.stats_path is None or not self.stats_path.exists():
                 raise FileNotFoundError(f"Stats file not found: {self.stats_path}")
             self.stats = load_stats(str(self.stats_path))
 
@@ -190,7 +190,7 @@ def create_dataloader(
 
 def load_all_splits(
     size: str = "5k",
-    stats_path: str = DEFAULT_STATS_PATH,
+    stats_path: Optional[str] = DEFAULT_STATS_PATH,
     return_normalized: bool = True,
 ) -> Tuple[FlowDataset, FlowDataset, FlowDataset]:
     """

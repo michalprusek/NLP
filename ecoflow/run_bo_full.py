@@ -156,11 +156,16 @@ def main():
     velocity_net.load_state_dict(ckpt["model_state_dict"])
     velocity_net = velocity_net.to(device).eval()
 
+    # Detect if spherical flow (requires different denormalization)
+    flow_method = flow_config.get("flow", "")
+    is_spherical = "spherical" in flow_method.lower()
+
     flow_model = FlowMatchingModel(
         velocity_net=velocity_net,
         norm_stats=ckpt.get("normalization_stats"),
+        is_spherical=is_spherical,
     )
-    logger.info(f"  Flow model loaded: {flow_config['arch']}")
+    logger.info(f"  Flow model loaded: {flow_config['arch']}, flow={flow_method}, spherical={is_spherical}")
 
     # Create GP surrogate
     logger.info(f"Creating RiemannianGP with {args.gp_kernel} kernel...")
