@@ -112,8 +112,12 @@ class LatentSpaceGP:
             self.model.eval()
             logger.debug(f"GP fitted on {len(X)} points (BoTorch fit)")
 
-        except Exception as e:
-            logger.warning(f"GP fitting failed: {e}. Using fallback with high noise.")
+        except (RuntimeError, gpytorch.utils.errors.NotPSDError) as e:
+            # Catch numerical instability errors, but let CUDA/memory errors propagate
+            if "cuda" in str(e).lower() or "out of memory" in str(e).lower():
+                logger.error(f"GPU/memory error during GP fitting: {e}")
+                raise
+            logger.warning(f"GP fitting failed (numerical instability): {e}. Using fallback with high noise.")
             # Fallback: create simple GP with high observation noise
             self.model = SingleTaskGP(
                 train_X_norm,
@@ -426,11 +430,12 @@ class LatentSpaceBO:
             if self.flow_model.is_spherical:
                 x = F.normalize(x, p=2, dim=-1)
 
-            # Guided integration
-            x = self.guided_sampler._integrate_guided(
+            # Guided integration (uses GP-UCB guidance during ODE)
+            x = self.guided_sampler._integrate_ode(
                 x,
                 num_steps=num_steps,
                 method="heun",
+                with_guidance=True,
             )
             x = self.flow_model.denormalize(x)
 
@@ -542,7 +547,7 @@ class LatentSpaceBO:
             prompt_list.append(prompt)
 
             logger.info(f"  Sample {i}: score={score:.4f}, z_norm={z.norm().item():.2f}")
-            logger.info(f"    Prompt: {prompt[:100]}...")
+            logger.info(f"    Prompt: {prompt}")
 
         # Store state
         self.train_Z = torch.stack(z_list).to(self.device)
