@@ -33,7 +33,7 @@ NLP/
 │   │   └── gepa_mutate.txt      # Generate mutations from reflection
 │   └── results/
 │
-├── ecoflow/                     # EcoFlow: Flow matching + Bayesian optimization
+├── rielbo/                     # RieLBO: Flow matching + Bayesian optimization
 │   ├── __init__.py
 │   ├── velocity_network.py      # VelocityNetwork: DiT-style transformer (velocity field)
 │   ├── flow_model.py            # FlowMatchingModel: Conditional flow matching wrapper
@@ -108,17 +108,17 @@ NLP/
 - Contains: Optimizer with Pareto selection, reflection-based mutations
 - Key files: `gepa/gepa.py` (GEPAOptimizer, ScoredCandidate, ReasoningTrace), `gepa/run.py`
 
-**ecoflow/:**
+**rielbo/:**
 - Purpose: Flow matching + Bayesian optimization for prompt discovery
 - Contains: Velocity network, flow model, GP surrogate, decoder, optimization loop, training script
 - Key files:
-  - Core: `ecoflow/optimization_loop.py` (BOOptimizationLoop), `ecoflow/flow_model.py`
-  - Models: `ecoflow/velocity_network.py` (VelocityNetwork), `ecoflow/gp_surrogate.py` (SonarGPSurrogate)
-  - Utilities: `ecoflow/decoder.py` (SonarDecoder), `ecoflow/guided_flow.py` (GuidedFlowSampler)
+  - Core: `rielbo/optimization_loop.py` (BOOptimizationLoop), `rielbo/flow_model.py`
+  - Models: `rielbo/velocity_network.py` (VelocityNetwork), `rielbo/gp_surrogate.py` (SonarGPSurrogate)
+  - Utilities: `rielbo/decoder.py` (SonarDecoder), `rielbo/guided_flow.py` (GuidedFlowSampler)
 
 **nfbo/:**
 - Purpose: Normalizing Flow Bayesian Optimization
-- Contains: RealNVP flow model, latent-space BO sampler, loop extending EcoFlow
+- Contains: RealNVP flow model, latent-space BO sampler, loop extending RieLBO
 - Key files: `nfbo/model.py` (RealNVP), `nfbo/sampler.py` (NFBoSampler), `nfbo/loop.py` (NFBoLoop)
 
 **shared/:**
@@ -133,7 +133,7 @@ NLP/
 
 **tests/:**
 - Purpose: Unit and integration tests
-- Contains: Tests for EcoFlow components, NFBO components
+- Contains: Tests for RieLBO components, NFBO components
 - Key patterns: Pytest fixtures in `conftest.py`, individual test modules
 
 ## Key File Locations
@@ -142,9 +142,9 @@ NLP/
 - `opro/run.py`: OPRO CLI, resolves model aliases, initializes LLMClient and GSM8KEvaluator, runs optimization
 - `protegi/run.py`: ProTeGi CLI, similar pattern
 - `gepa/run.py`: GEPA CLI
-- `ecoflow/run.py`: EcoFlow CLI with logging setup and checkpoint save/resume
+- `rielbo/run.py`: RieLBO CLI with logging setup and checkpoint save/resume
 - `nfbo/run.py`: NFBO CLI
-- `ecoflow/train_flow.py`: Flow model training (not a `-m` module, run via `python -m ecoflow.train_flow`)
+- `rielbo/train_flow.py`: Flow model training (not a `-m` module, run via `python -m rielbo.train_flow`)
 
 **Configuration:**
 - `pyproject.toml`: Project metadata, all dependencies
@@ -155,16 +155,16 @@ NLP/
 - `opro/opro.py`: OPROOptimizer class, meta-prompt looping, scoring
 - `protegi/protegi.py`: ProTeGiOptimizer, textual gradients, beam search with UCB
 - `gepa/gepa.py`: GEPAOptimizer, Pareto selection, reflection
-- `ecoflow/optimization_loop.py`: BOOptimizationLoop orchestrator
-- `ecoflow/flow_model.py`: FlowMatchingModel training and sampling
-- `ecoflow/gp_surrogate.py`: GP surrogates (SonarGPSurrogate, BAxUSGPSurrogate, Heteroscedastic)
+- `rielbo/optimization_loop.py`: BOOptimizationLoop orchestrator
+- `rielbo/flow_model.py`: FlowMatchingModel training and sampling
+- `rielbo/gp_surrogate.py`: GP surrogates (SonarGPSurrogate, BAxUSGPSurrogate, Heteroscedastic)
 - `nfbo/loop.py`: NFBoLoop with flow fitting
 - `shared/llm_client.py`: LLMClient ABC and implementations
 - `shared/gsm8k_evaluator.py`: GSM8KEvaluator with answer extraction
 
 **Testing:**
 - `tests/conftest.py`: Pytest fixtures
-- `tests/test_*.py`: Individual test modules for EcoFlow and NFBO
+- `tests/test_*.py`: Individual test modules for RieLBO and NFBO
 
 ## Naming Conventions
 
@@ -175,7 +175,7 @@ NLP/
 - CLI scripts: `python -m {package}.run` (e.g., `python -m opro.run`)
 
 **Directories:**
-- Method directories: lowercase (opro, protegi, gepa, ecoflow, nfbo)
+- Method directories: lowercase (opro, protegi, gepa, rielbo, nfbo)
 - Subdirectories: `prompts/` for templates, `results/` for output
 - Shared: `shared/` for cross-cutting code
 
@@ -203,7 +203,7 @@ NLP/
 - Pattern: Follow existing methods (OPRO/ProTeGi/GEPA) for initialization and main loop
 
 **New Feature for Existing Method:**
-- Implementation: In method's main module (`opro/opro.py`, `ecoflow/optimization_loop.py`, etc.)
+- Implementation: In method's main module (`opro/opro.py`, `rielbo/optimization_loop.py`, etc.)
 - Tests: Add to `tests/test_{method_name}.py` or create new test file
 - Templates: Add `.txt` file to `{method_name}/prompts/`
 

@@ -47,7 +47,7 @@ tests/
 
 **Setup and Configuration (`conftest.py`):**
 ```python
-"""Pytest configuration for ecoflow tests."""
+"""Pytest configuration for rielbo tests."""
 
 import sys
 from pathlib import Path
@@ -68,7 +68,7 @@ def device():
 @pytest.fixture
 def fitted_gp(device):
     """Create and fit a GP surrogate for testing."""
-    from ecoflow.gp_surrogate import create_surrogate
+    from rielbo.gp_surrogate import create_surrogate
 
     gp = create_surrogate("msr", D=1024, device=device)
     X = torch.randn(20, 1024, device=device)
@@ -172,7 +172,7 @@ def create_surrogate(method: str, D: int, device: str) -> BaseGPSurrogate:
 pip install pytest-cov
 
 # Run with coverage
-uv run pytest tests/ --cov=opro --cov=protegi --cov=gepa --cov=ecoflow --cov=nfbo --cov-report=term-missing
+uv run pytest tests/ --cov=opro --cov=protegi --cov=gepa --cov=rielbo --cov=nfbo --cov-report=term-missing
 ```
 
 ## Test Types

@@ -54,7 +54,7 @@
 3. Local imports (`from shared.llm_client import`, `from shared.gsm8k_evaluator import`)
 
 **Path Aliases:**
-- Relative imports used: `from ecoflow.velocity_network import VelocityNetwork`
+- Relative imports used: `from rielbo.velocity_network import VelocityNetwork`
 - Absolute imports from shared modules: `from shared.gsm8k_evaluator import extract_answer, extract_ground_truth, compare_answers`
 - No explicit path aliases defined (import paths use package structure directly)
 

@@ -1,0 +1,1689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RieLBO: Embedding-Conditioned Flow Matching for Prompt Optimization</title>
+
+    <!-- KaTeX for math rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            /* Dark theme palette */
+            --bg-deep: #0a0e14;
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #1c2128;
+            --bg-card: #21262d;
+
+            /* Text colors */
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+
+            /* Accent colors - pipeline stages */
+            --accent-cyan: #00d9ff;      /* Encoding */
+            --accent-blue: #58a6ff;      /* Processing */
+            --accent-purple: #a371f7;    /* Latent space */
+            --accent-magenta: #f778ba;   /* Optimization */
+            --accent-green: #3fb950;     /* Success/Output */
+            --accent-orange: #d29922;    /* Warning/Attention */
+            --accent-red: #f85149;       /* Error/Important */
+
+            /* Gradients */
+            --gradient-cyan: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%);
+            --gradient-purple: linear-gradient(135deg, #a371f7 0%, #8957e5 100%);
+            --gradient-green: linear-gradient(135deg, #3fb950 0%, #238636 100%);
+            --gradient-orange: linear-gradient(135deg, #d29922 0%, #bb8009 100%);
+
+            /* Typography */
+            --font-display: 'Outfit', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+
+            /* Spacing - adaptive */
+            --slide-padding: clamp(20px, 4vmin, 60px);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: var(--bg-deep);
+            font-family: var(--font-display);
+            color: var(--text-primary);
+        }
+
+        /* Presentation container */
+        .presentation {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        /* Individual slides */
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            padding: var(--slide-padding);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.5s ease, visibility 0.5s ease;
+            background: var(--bg-primary);
+            overflow: hidden;
+        }
+
+        /* Adaptive content - fill page while preventing overflow */
+        .slide > * {
+            flex-shrink: 1;
+            min-height: 0;
+        }
+
+        .slide .content-split,
+        .slide .content-full,
+        .slide .two-col {
+            flex: 0 1 auto;
+            min-height: 0;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .slide h1, .slide h2, .slide h3, .slide h4 {
+            width: 100%;
+            text-align: center;
+        }
+
+        .slide .content-split > *,
+        .slide .two-col > * {
+            min-height: 0;
+            overflow: auto;
+        }
+
+        /* Diagram containers - centered */
+        .slide .diagram-container {
+            flex: 0 1 auto;
+            min-height: 0;
+            max-height: 70vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* SVG diagrams scale to fill */
+        .slide .diagram-container svg {
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* Tables - larger, fill width */
+        .slide table {
+            font-size: clamp(0.85rem, 2vmin, 1.1rem);
+            width: 100%;
+        }
+
+        /* Lists - larger */
+        .slide ul, .slide ol {
+            font-size: clamp(1rem, 2.5vmin, 1.3rem);
+        }
+
+        /* Paragraphs - larger */
+        .slide p {
+            font-size: clamp(1rem, 2.5vmin, 1.35rem);
+        }
+
+        /* Cards and boxes - more padding */
+        .slide .card,
+        .slide .highlight-box {
+            padding: clamp(0.75rem, 2vmin, 1.5rem);
+            margin: clamp(0.5rem, 1.5vmin, 1rem) 0;
+        }
+
+        /* Math blocks - larger */
+        .slide .math-block {
+            padding: clamp(0.75rem, 2vmin, 1.5rem);
+            font-size: clamp(1rem, 2.5vmin, 1.4rem);
+        }
+
+        /* Feature lists */
+        .slide .feature-list {
+            flex: 0 1 auto;
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Blueprint grid background */
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(0, 217, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 217, 255, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .slide > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Typography */
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            margin-bottom: 1rem;
+            text-align: center;
+            width: 100%;
+        }
+
+        h2 {
+            font-size: clamp(2rem, 5vmin, 3rem);
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            margin-bottom: clamp(0.5rem, 2vmin, 1.5rem);
+            color: var(--accent-cyan);
+            flex-shrink: 0;
+            text-align: center;
+            width: 100%;
+        }
+
+        h3 {
+            font-size: clamp(1rem, 2.5vmin, 1.5rem);
+            font-weight: 500;
+            margin-bottom: clamp(0.3rem, 1vmin, 1rem);
+            color: var(--text-secondary);
+        }
+
+        p {
+            font-size: 1.25rem;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            max-width: 900px;
+        }
+
+        .mono {
+            font-family: var(--font-mono);
+        }
+
+        /* Slide layouts */
+        .slide-center {
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .slide-title {
+            background: radial-gradient(ellipse at center, var(--bg-secondary) 0%, var(--bg-deep) 100%);
+        }
+
+        .slide-title h1 {
+            font-size: 4rem;
+            background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-purple) 50%, var(--accent-magenta) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1.5rem;
+        }
+
+        .slide-title .subtitle {
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+            font-weight: 300;
+            margin-bottom: 3rem;
+        }
+
+        .slide-title .authors {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+        }
+
+        /* Content layouts */
+        .content-split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: clamp(1rem, 3vmin, 3rem);
+            flex: 1;
+            align-items: start;
+            min-height: 0;
+        }
+
+        .content-full {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Cards and boxes */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-glow {
+            box-shadow: 0 0 30px rgba(0, 217, 255, 0.1);
+        }
+
+        /* Lists */
+        ul, ol {
+            font-size: 1.2rem;
+            line-height: 1.8;
+            color: var(--text-secondary);
+            padding-left: 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+        }
+
+        li::marker {
+            color: var(--accent-cyan);
+        }
+
+        /* Code blocks */
+        .code-block {
+            background: var(--bg-deep);
+            border: 1px solid var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 1.25rem;
+            font-family: var(--font-mono);
+            font-size: 0.95rem;
+            line-height: 1.6;
+            overflow-x: auto;
+        }
+
+        .code-block .keyword { color: var(--accent-purple); }
+        .code-block .function { color: var(--accent-cyan); }
+        .code-block .string { color: var(--accent-green); }
+        .code-block .number { color: var(--accent-orange); }
+        .code-block .comment { color: var(--text-muted); font-style: italic; }
+
+        /* Math display */
+        .math-block {
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--accent-purple);
+            padding: 1.5rem 2rem;
+            margin: 1rem 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 1.3rem;
+        }
+
+        /* Dimension badges */
+        .dim-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--accent-cyan);
+            border-radius: 20px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent-cyan);
+            margin: 0 0.25rem;
+        }
+
+        /* Highlight boxes */
+        .highlight-box {
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin: 1rem 0;
+        }
+
+        .highlight-cyan {
+            background: rgba(0, 217, 255, 0.1);
+            border: 1px solid rgba(0, 217, 255, 0.3);
+        }
+
+        .highlight-purple {
+            background: rgba(163, 113, 247, 0.1);
+            border: 1px solid rgba(163, 113, 247, 0.3);
+        }
+
+        .highlight-green {
+            background: rgba(63, 185, 80, 0.1);
+            border: 1px solid rgba(63, 185, 80, 0.3);
+        }
+
+        .highlight-orange {
+            background: rgba(210, 153, 34, 0.1);
+            border: 1px solid rgba(210, 153, 34, 0.3);
+        }
+
+        /* Progress bar */
+        .progress-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: var(--gradient-cyan);
+            transition: width 0.3s ease;
+            z-index: 1000;
+        }
+
+        /* Slide counter */
+        .slide-counter {
+            position: fixed;
+            bottom: 20px;
+            right: 30px;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            z-index: 1000;
+        }
+
+        /* Navigation hints */
+        .nav-hint {
+            position: fixed;
+            bottom: 20px;
+            left: 30px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            z-index: 1000;
+        }
+
+        .nav-hint kbd {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--bg-card);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            margin: 0 0.2rem;
+        }
+
+        /* ===================== */
+        /* SVG DIAGRAM STYLES    */
+        /* ===================== */
+
+        .diagram-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+        }
+
+        .diagram-container svg {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* SVG styling */
+        .svg-node {
+            transition: all 0.3s ease;
+        }
+
+        .svg-node:hover {
+            filter: brightness(1.2);
+        }
+
+        .svg-text {
+            font-family: var(--font-display);
+            fill: var(--text-primary);
+        }
+
+        .svg-text-mono {
+            font-family: var(--font-mono);
+        }
+
+        .svg-text-dim {
+            fill: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Animated flow lines */
+        .flow-line {
+            stroke-dasharray: 8 4;
+            animation: flowDash 1s linear infinite;
+        }
+
+        @keyframes flowDash {
+            to { stroke-dashoffset: -12; }
+        }
+
+        /* Glow effects */
+        .glow-cyan { filter: drop-shadow(0 0 8px rgba(0, 217, 255, 0.5)); }
+        .glow-purple { filter: drop-shadow(0 0 8px rgba(163, 113, 247, 0.5)); }
+        .glow-green { filter: drop-shadow(0 0 8px rgba(63, 185, 80, 0.5)); }
+        .glow-orange { filter: drop-shadow(0 0 8px rgba(210, 153, 34, 0.5)); }
+
+        /* Pulse animation */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        /* Fade in animations for slide content */
+        .slide.active .fade-in {
+            animation: fadeIn 0.6s ease forwards;
+        }
+
+        .slide.active .fade-in-delay-1 { animation-delay: 0.1s; opacity: 0; }
+        .slide.active .fade-in-delay-2 { animation-delay: 0.2s; opacity: 0; }
+        .slide.active .fade-in-delay-3 { animation-delay: 0.3s; opacity: 0; }
+        .slide.active .fade-in-delay-4 { animation-delay: 0.4s; opacity: 0; }
+        .slide.active .fade-in-delay-5 { animation-delay: 0.5s; opacity: 0; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Section divider */
+        .section-badge {
+            display: inline-block;
+            padding: clamp(0.2rem, 0.5vmin, 0.4rem) clamp(0.5rem, 1vmin, 1rem);
+            background: var(--bg-tertiary);
+            border-radius: 20px;
+            font-size: clamp(0.65rem, 1.5vmin, 0.85rem);
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: clamp(0.3rem, 1vmin, 1rem);
+            flex-shrink: 0;
+        }
+
+        /* Two-column layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        /* Architecture boxes */
+        .arch-box {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin: 0.5rem 0;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .arch-box-cyan {
+            background: linear-gradient(135deg, rgba(0, 217, 255, 0.15) 0%, rgba(0, 217, 255, 0.05) 100%);
+            border-left: 3px solid var(--accent-cyan);
+        }
+
+        .arch-box-purple {
+            background: linear-gradient(135deg, rgba(163, 113, 247, 0.15) 0%, rgba(163, 113, 247, 0.05) 100%);
+            border-left: 3px solid var(--accent-purple);
+        }
+
+        .arch-box-green {
+            background: linear-gradient(135deg, rgba(63, 185, 80, 0.15) 0%, rgba(63, 185, 80, 0.05) 100%);
+            border-left: 3px solid var(--accent-green);
+        }
+
+        .arch-box-orange {
+            background: linear-gradient(135deg, rgba(210, 153, 34, 0.15) 0%, rgba(210, 153, 34, 0.05) 100%);
+            border-left: 3px solid var(--accent-orange);
+        }
+
+        /* Feature list with icons */
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .feature-list li {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+        }
+
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+
+        /* Arrow connector */
+        .arrow-down {
+            text-align: center;
+            color: var(--accent-cyan);
+            font-size: 2rem;
+            margin: 0.5rem 0;
+        }
+
+        /* Table styling */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 1rem;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--bg-tertiary);
+        }
+
+        th {
+            background: var(--bg-secondary);
+            color: var(--accent-cyan);
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.05em;
+        }
+
+        tr:hover {
+            background: var(--bg-secondary);
+        }
+
+        td code {
+            font-family: var(--font-mono);
+            background: var(--bg-tertiary);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+
+        /* Winner callout */
+        .winner-callout {
+            background: linear-gradient(135deg, rgba(63, 185, 80, 0.2) 0%, rgba(63, 185, 80, 0.05) 100%);
+            border: 2px solid var(--accent-green);
+            border-radius: 12px;
+            padding: 1rem 1.5rem;
+            margin-top: 1rem;
+            text-align: center;
+        }
+
+        .winner-callout strong {
+            color: var(--accent-green);
+            font-size: 1.1rem;
+        }
+
+        /* Strikethrough for broken entries */
+        .broken {
+            text-decoration: line-through;
+            color: var(--text-muted);
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="presentation">
+
+        <!-- ==================== -->
+        <!-- SLIDE 1: Title       -->
+        <!-- ==================== -->
+        <section class="slide slide-title slide-center active" data-slide="1">
+            <div class="fade-in">
+                <h1>RieLBO</h1>
+                <p class="subtitle">Embedding-Conditioned Flow Matching for Prompt Optimization</p>
+            </div>
+            <p class="authors fade-in fade-in-delay-2">
+                Michal Průšek
+            </p>
+            <div style="margin-top: 3rem;" class="fade-in fade-in-delay-3">
+                <span class="dim-badge">1024D</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-purple); color: var(--accent-purple);">z ~ N(0,I)</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-magenta); color: var(--accent-magenta);">Flow</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-orange); color: var(--accent-orange);">1024D</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-green); color: var(--accent-green);">Text</span>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 2: LIPO Arch   -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="2" style="padding: 30px 40px;">
+            <span class="section-badge fade-in">Midterm Review</span>
+            <h2 class="fade-in fade-in-delay-1" style="margin-bottom: 0.5rem; font-size: 2rem;">LIPO Architecture (Midterm)</h2>
+
+            <div class="diagram-container fade-in fade-in-delay-2" style="flex: 1; padding: 0;">
+                <svg viewBox="0 0 1200 520" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Definitions -->
+                    <defs>
+                        <!-- Gradients -->
+                        <linearGradient id="gradCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#00d9ff;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#0099cc;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradPurple" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#a371f7;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#8957e5;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#3fb950;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#238636;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradOrange" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#d29922;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#bb8009;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradMagenta" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#f778ba;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#db61a2;stop-opacity:1" />
+                        </linearGradient>
+
+                        <!-- Glow filters -->
+                        <filter id="glowCyan" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                        <filter id="glowPurple" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+
+                        <!-- Arrow markers -->
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+                        </marker>
+                        <marker id="arrowheadCyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#00d9ff"/>
+                        </marker>
+                        <marker id="arrowheadPurple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#a371f7"/>
+                        </marker>
+                        <marker id="arrowheadOrange" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+                        </marker>
+                        <marker id="arrowheadGreen" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+                        </marker>
+                        <marker id="arrowheadRed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#f85149"/>
+                        </marker>
+                    </defs>
+
+                    <!-- Centered content wrapper -->
+                    <g transform="translate(115, 0)">
+
+                    <!-- Training Instructions (input) -->
+                    <g class="svg-node">
+                        <rect x="30" y="160" width="160" height="40" rx="6" fill="rgba(142,142,142,0.2)" stroke="#8b949e" stroke-width="2"/>
+                        <text x="110" y="177" text-anchor="middle" fill="#8b949e" font-size="10" font-weight="500" font-family="Outfit">Training Instructions</text>
+                        <text x="110" y="191" text-anchor="middle" fill="#8b949e" font-size="9" font-family="JetBrains Mono">(2000 samples)</text>
+                    </g>
+
+                    <!-- Arrow from Training Instructions to GTR -->
+                    <line x1="110" y1="200" x2="110" y2="260" stroke="#8b949e" stroke-width="2" marker-end="url(#arrowhead)"/>
+
+                    <!-- PHASE 1: GTR -->
+                    <g class="svg-node" filter="url(#glowCyan)">
+                        <rect x="30" y="260" width="160" height="70" rx="8" fill="url(#gradCyan)" opacity="0.9"/>
+                        <text x="110" y="290" text-anchor="middle" fill="#0a0e14" font-size="14" font-weight="600" font-family="Outfit">GTR Encoder</text>
+                        <text x="110" y="310" text-anchor="middle" fill="#0a0e14" font-size="11" font-family="JetBrains Mono">768D embeddings</text>
+                    </g>
+
+                    <!-- Arrow to VAE Encoder -->
+                    <line x1="190" y1="295" x2="300" y2="295" stroke="#00d9ff" stroke-width="2" marker-end="url(#arrowheadCyan)"/>
+
+                    <!-- PHASE 2: VAE - HIGHLIGHTED AS BOTTLENECK -->
+                    <g class="svg-node" filter="url(#glowPurple)">
+                        <rect x="250" y="220" width="180" height="170" rx="8" fill="#161b22" stroke="#f85149" stroke-width="3" stroke-dasharray="8,4"/>
+
+                        <!-- VAE Internal -->
+                        <text x="340" y="245" text-anchor="middle" fill="#f85149" font-size="14" font-weight="600" font-family="Outfit">VAE (Bottleneck)</text>
+
+                        <!-- Encoder block (top left) -->
+                        <rect x="265" y="260" width="70" height="45" rx="4" fill="rgba(163,113,247,0.3)"/>
+                        <text x="300" y="278" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="Outfit">Encoder</text>
+                        <text x="300" y="293" text-anchor="middle" fill="#f85149" font-size="9" font-weight="600" font-family="JetBrains Mono">768→32</text>
+
+                        <!-- Arrow from Encoder down to z -->
+                        <line x1="300" y1="305" x2="300" y2="325" stroke="#a371f7" stroke-width="1.5"/>
+                        <line x1="300" y1="325" x2="320" y2="325" stroke="#a371f7" stroke-width="1.5" marker-end="url(#arrowheadPurple)"/>
+
+                        <!-- Latent z (bottom center) -->
+                        <rect x="320" y="310" width="40" height="30" rx="4" fill="#f85149"/>
+                        <text x="340" y="330" text-anchor="middle" fill="#0a0e14" font-size="10" font-weight="600" font-family="JetBrains Mono">32D</text>
+
+                        <!-- Arrow from z up to Decoder -->
+                        <line x1="360" y1="325" x2="380" y2="325" stroke="#d29922" stroke-width="1.5"/>
+                        <line x1="380" y1="325" x2="380" y2="305" stroke="#d29922" stroke-width="1.5" marker-end="url(#arrowheadOrange)"/>
+
+                        <!-- Decoder block (top right) -->
+                        <rect x="345" y="260" width="70" height="45" rx="4" fill="rgba(163,113,247,0.3)"/>
+                        <text x="380" y="278" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="Outfit">Decoder</text>
+                        <text x="380" y="293" text-anchor="middle" fill="#f85149" font-size="9" font-weight="600" font-family="JetBrains Mono">32→768</text>
+
+                    </g>
+
+                    <!-- Path from Decoder to Vec2Text (above VAE, orange) -->
+                    <path d="M 415 280 L 440 280 L 440 90" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#arrowheadOrange)"/>
+
+                    <!-- OUTPUT (same level as Vec2Text) -->
+                    <g class="svg-node" filter="url(#glowCyan)">
+                        <rect x="30" y="40" width="160" height="60" rx="8" fill="url(#gradGreen)" opacity="0.9"/>
+                        <text x="110" y="65" text-anchor="middle" fill="#0a0e14" font-size="12" font-weight="600" font-family="Outfit">Optimized</text>
+                        <text x="110" y="82" text-anchor="middle" fill="#0a0e14" font-size="12" font-weight="600" font-family="Outfit">Instruction</text>
+                    </g>
+
+                    <!-- Arrow from Vec2Text to Output (horizontal, orange) -->
+                    <line x1="390" y1="70" x2="190" y2="70" stroke="#d29922" stroke-width="2" marker-end="url(#arrowheadOrange)"/>
+
+                    <!-- Vec2Text (right, above VAE) -->
+                    <g class="svg-node">
+                        <rect x="390" y="50" width="100" height="40" rx="6" fill="rgba(210,153,34,0.2)" stroke="#d29922" stroke-width="2"/>
+                        <text x="440" y="75" text-anchor="middle" fill="#d29922" font-size="11" font-weight="500" font-family="Outfit">Vec2Text</text>
+                    </g>
+
+                    <!-- Arrow from z (latent) right-bottom to GP -->
+                    <path d="M 360 335 L 450 335 L 450 380 L 490 380" fill="none" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowheadGreen)"/>
+
+                    <!-- PHASE 3: Hyperband + GP -->
+                    <g class="svg-node">
+                        <rect x="490" y="160" width="200" height="130" rx="8" fill="#161b22" stroke="url(#gradGreen)" stroke-width="2"/>
+                        <text x="590" y="185" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600" font-family="Outfit">Hyperband</text>
+                        <text x="590" y="205" text-anchor="middle" fill="#8b949e" font-size="11" font-family="Outfit">Successive Halving + BO</text>
+
+                        <!-- Mini brackets visualization -->
+                        <rect x="510" y="220" width="30" height="25" rx="3" fill="rgba(63,185,80,0.4)"/>
+                        <rect x="545" y="225" width="25" height="20" rx="3" fill="rgba(63,185,80,0.5)"/>
+                        <rect x="575" y="230" width="20" height="15" rx="3" fill="rgba(63,185,80,0.6)"/>
+                        <rect x="600" y="235" width="15" height="10" rx="2" fill="#3fb950"/>
+
+                        <text x="590" y="270" text-anchor="middle" fill="#8b949e" font-size="10" font-family="JetBrains Mono">η=2, fidelity: 10→1319</text>
+                    </g>
+
+                    <!-- Arrow down to GP -->
+                    <line x1="590" y1="290" x2="590" y2="320" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowheadGreen)"/>
+
+                    <g class="svg-node">
+                        <rect x="490" y="330" width="200" height="100" rx="8" fill="#161b22" stroke="url(#gradGreen)" stroke-width="2"/>
+                        <text x="590" y="360" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600" font-family="Outfit">Gaussian Process</text>
+                        <text x="590" y="380" text-anchor="middle" fill="#8b949e" font-size="11" font-family="Outfit">ARD Matérn 5/2 Kernel</text>
+                        <text x="590" y="400" text-anchor="middle" fill="#f85149" font-size="10" font-family="JetBrains Mono">32 lengthscales</text>
+                        <text x="590" y="418" text-anchor="middle" fill="#d29922" font-size="10" font-family="Outfit">→ UCB acquisition</text>
+                    </g>
+
+                    <!-- Problem annotation -->
+                    <rect x="720" y="280" width="220" height="80" rx="8" fill="rgba(248,81,73,0.15)" stroke="#f85149" stroke-width="2"/>
+                    <text x="830" y="310" text-anchor="middle" fill="#f85149" font-size="12" font-weight="600" font-family="Outfit">VAE Problems:</text>
+                    <text x="830" y="330" text-anchor="middle" fill="#f85149" font-size="10" font-family="Outfit">• 32D bottleneck loses info</text>
+                    <text x="830" y="348" text-anchor="middle" fill="#f85149" font-size="10" font-family="Outfit">• Decoder has "holes"</text>
+
+                    </g><!-- End centered content wrapper -->
+
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 3: LIPO Probs  -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="3">
+            <span class="section-badge fade-in">Problems</span>
+            <h2 class="fade-in fade-in-delay-1">LIPO Limitations</h2>
+
+            <div class="content-split">
+                <div class="fade-in fade-in-delay-2">
+                    <div class="card" style="border-left: 3px solid var(--accent-red);">
+                        <h3 style="color: var(--accent-red); margin-bottom: 0.8rem;">Problem 1: VAE Decoder Holes</h3>
+                        <ul style="font-size: 1rem;">
+                            <li>VAE latent space has <strong>"dead regions"</strong></li>
+                            <li>GP optimizes into <strong>unlearned areas</strong></li>
+                            <li>Decoder produces <strong>poor embeddings</strong> for off-manifold z</li>
+                            <li>32D compression loses <strong>semantic nuance</strong></li>
+                        </ul>
+                    </div>
+
+                    <div class="card" style="border-left: 3px solid var(--accent-orange); margin-top: 1rem;">
+                        <h3 style="color: var(--accent-orange); margin-bottom: 0.8rem;">Problem 2: Reconstruction Quality</h3>
+                        <ul style="font-size: 1rem;">
+                            <li>VAE trained on <strong>limited 2000 samples</strong></li>
+                            <li>32D bottleneck <strong>loses semantic information</strong></li>
+                            <li>Vec2Text struggles with <strong>degraded embeddings</strong></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="fade-in fade-in-delay-3">
+                    <h3 style="margin-bottom: 1rem;">LIPO Quality Metrics (Midterm)</h3>
+                    <table>
+                        <tr>
+                            <td>Q<sub>VAE</sub> (cosine mean)</td>
+                            <td style="color: var(--accent-cyan);">92.3%</td>
+                            <td style="color: var(--text-muted);">Good</td>
+                        </tr>
+                        <tr>
+                            <td>Q<sub>GP</sub> (Spearman ρ)</td>
+                            <td style="color: var(--accent-orange);">0.41</td>
+                            <td style="color: var(--text-muted);">Acceptable</td>
+                        </tr>
+                        <tr>
+                            <td>Q<sub>Sys</sub> (gap mean)</td>
+                            <td style="color: var(--accent-red);">0.74</td>
+                            <td style="color: var(--text-muted);">Poor</td>
+                        </tr>
+                    </table>
+
+                    <div class="highlight-box highlight-orange" style="margin-top: 1.5rem;">
+                        <strong>The Gap Problem</strong>
+                        <p style="margin-top: 0.5rem; font-size: 1rem;">
+                            Distance between z<sub>opt</sub> and z<sub>real</sub> = <strong>0.74</strong><br>
+                            GP optimizes in wrong regions of latent space.
+                        </p>
+                    </div>
+
+                    <div class="diagram-container" style="height: 180px; margin-top: 1rem;">
+                        <svg viewBox="0 0 350 150" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Latent space -->
+                            <ellipse cx="175" cy="75" rx="160" ry="60" fill="none" stroke="#6e7681" stroke-width="1" stroke-dasharray="4,4"/>
+                            <text x="175" y="145" text-anchor="middle" fill="#6e7681" font-size="10" font-family="Outfit">32D VAE Latent Space</text>
+
+                            <!-- Learned region -->
+                            <ellipse cx="120" cy="70" rx="70" ry="40" fill="rgba(63,185,80,0.2)" stroke="#3fb950" stroke-width="1"/>
+                            <text x="120" y="95" text-anchor="middle" fill="#3fb950" font-size="9" font-family="Outfit">Learned</text>
+
+                            <!-- Hole region -->
+                            <ellipse cx="240" cy="65" rx="50" ry="35" fill="rgba(248,81,73,0.2)" stroke="#f85149" stroke-width="1"/>
+                            <text x="240" y="70" text-anchor="middle" fill="#f85149" font-size="9" font-family="Outfit">Hole</text>
+
+                            <!-- z_opt in hole -->
+                            <circle cx="230" cy="55" r="6" fill="#d29922"/>
+                            <text x="230" y="45" text-anchor="middle" fill="#d29922" font-size="8" font-family="Outfit">z_opt</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 4: RieLBO Arch -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="4" style="padding: 30px 40px;">
+            <span class="section-badge fade-in">New Architecture</span>
+            <h2 class="fade-in fade-in-delay-1" style="margin-bottom: 0.5rem; font-size: 2rem;">RieLBO Architecture</h2>
+
+            <div class="diagram-container fade-in fade-in-delay-2" style="flex: 1; padding: 0;">
+                <svg viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Reuse definitions from above -->
+                    <defs>
+                        <linearGradient id="gradCyan2" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#00d9ff;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#0099cc;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradPurple2" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#a371f7;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#8957e5;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradGreen2" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#3fb950;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#238636;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradOrange2" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#d29922;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#bb8009;stop-opacity:1" />
+                        </linearGradient>
+                        <linearGradient id="gradMagenta2" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#f778ba;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#db61a2;stop-opacity:1" />
+                        </linearGradient>
+                        <filter id="glowCyan2" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                        <filter id="glowPurple2" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                        <filter id="glowGreen2" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                        <marker id="arrow2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+                        </marker>
+                        <marker id="arrowCyan2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#00d9ff"/>
+                        </marker>
+                        <marker id="arrowPurple2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#a371f7"/>
+                        </marker>
+                        <marker id="arrowOrange2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+                        </marker>
+                        <marker id="arrowGreen2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+                        </marker>
+                        <marker id="arrowMagenta2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#f778ba"/>
+                        </marker>
+                    </defs>
+
+                    <g transform="translate(50, 20)">
+
+                    <!-- SONAR Encoder (input processing) -->
+                    <g class="svg-node" filter="url(#glowCyan2)">
+                        <rect x="30" y="180" width="180" height="80" rx="8" fill="url(#gradCyan2)" opacity="0.9"/>
+                        <text x="120" y="210" text-anchor="middle" fill="#0a0e14" font-size="14" font-weight="600" font-family="Outfit">SONAR Encoder</text>
+                        <text x="120" y="230" text-anchor="middle" fill="#0a0e14" font-size="11" font-family="JetBrains Mono">1024D embeddings</text>
+                        <text x="120" y="248" text-anchor="middle" fill="#0a0e14" font-size="9" font-family="Outfit">(Pretrained, Multilingual)</text>
+                    </g>
+
+                    <!-- Arrow to Flow Invert -->
+                    <line x1="210" y1="220" x2="280" y2="220" stroke="#00d9ff" stroke-width="2" marker-end="url(#arrowCyan2)"/>
+
+                    <!-- Flow Matching Network -->
+                    <g class="svg-node" filter="url(#glowPurple2)">
+                        <rect x="290" y="120" width="240" height="200" rx="8" fill="#161b22" stroke="url(#gradPurple2)" stroke-width="2"/>
+
+                        <text x="410" y="150" text-anchor="middle" fill="#a371f7" font-size="14" font-weight="600" font-family="Outfit">Flow Matching Network</text>
+                        <text x="410" y="170" text-anchor="middle" fill="#8b949e" font-size="10" font-family="Outfit">OT-CFM + U-Net Architecture</text>
+
+                        <!-- Invert block -->
+                        <rect x="310" y="185" width="85" height="50" rx="4" fill="rgba(163,113,247,0.3)"/>
+                        <text x="352" y="205" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="Outfit">Invert</text>
+                        <text x="352" y="220" text-anchor="middle" fill="#8b949e" font-size="9" font-family="JetBrains Mono">x → z</text>
+
+                        <!-- z space (center) -->
+                        <rect x="380" y="250" width="60" height="45" rx="6" fill="url(#gradPurple2)"/>
+                        <text x="410" y="268" text-anchor="middle" fill="#0a0e14" font-size="10" font-weight="600" font-family="Outfit">z-space</text>
+                        <text x="410" y="283" text-anchor="middle" fill="#0a0e14" font-size="9" font-family="JetBrains Mono">N(0,I)</text>
+
+                        <!-- Flow block -->
+                        <rect x="425" y="185" width="85" height="50" rx="4" fill="rgba(163,113,247,0.3)"/>
+                        <text x="467" y="205" text-anchor="middle" fill="#e6edf3" font-size="10" font-family="Outfit">Flow</text>
+                        <text x="467" y="220" text-anchor="middle" fill="#8b949e" font-size="9" font-family="JetBrains Mono">z → x</text>
+
+                        <!-- Internal arrows -->
+                        <line x1="352" y1="235" x2="380" y2="260" stroke="#a371f7" stroke-width="1.5" marker-end="url(#arrowPurple2)"/>
+                        <line x1="440" y1="260" x2="467" y2="235" stroke="#a371f7" stroke-width="1.5" marker-end="url(#arrowPurple2)"/>
+                    </g>
+
+                    <!-- Arrow from Flow to SONAR Decoder -->
+                    <line x1="530" y1="220" x2="600" y2="220" stroke="#a371f7" stroke-width="2" marker-end="url(#arrowPurple2)"/>
+
+                    <!-- SONAR Decoder -->
+                    <g class="svg-node" filter="url(#glowGreen2)">
+                        <rect x="610" y="180" width="180" height="80" rx="8" fill="url(#gradGreen2)" opacity="0.9"/>
+                        <text x="700" y="210" text-anchor="middle" fill="#0a0e14" font-size="14" font-weight="600" font-family="Outfit">SONAR Decoder</text>
+                        <text x="700" y="230" text-anchor="middle" fill="#0a0e14" font-size="11" font-family="JetBrains Mono">1024D → Text</text>
+                        <text x="700" y="248" text-anchor="middle" fill="#0a0e14" font-size="9" font-family="Outfit">(Pretrained)</text>
+                    </g>
+
+                    <!-- Arrow to Output -->
+                    <line x1="790" y1="220" x2="860" y2="220" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowGreen2)"/>
+
+                    <!-- Output -->
+                    <g class="svg-node">
+                        <rect x="870" y="180" width="180" height="80" rx="8" fill="rgba(63,185,80,0.2)" stroke="#3fb950" stroke-width="2"/>
+                        <text x="960" y="210" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="600" font-family="Outfit">Optimized Prompt</text>
+                        <text x="960" y="230" text-anchor="middle" fill="#8b949e" font-size="10" font-family="Outfit">Coherent text output</text>
+                    </g>
+
+                    <!-- GP Surrogate (below) -->
+                    <g class="svg-node">
+                        <rect x="290" y="350" width="240" height="100" rx="8" fill="#161b22" stroke="url(#gradOrange2)" stroke-width="2"/>
+                        <text x="410" y="380" text-anchor="middle" fill="#d29922" font-size="14" font-weight="600" font-family="Outfit">Riemannian GP</text>
+                        <text x="410" y="400" text-anchor="middle" fill="#8b949e" font-size="11" font-family="Outfit">ArcCosine Kernel (no lengthscale)</text>
+                        <text x="410" y="420" text-anchor="middle" fill="#3fb950" font-size="10" font-family="JetBrains Mono">Operates in z-space</text>
+                        <text x="410" y="438" text-anchor="middle" fill="#d29922" font-size="10" font-family="Outfit">→ LCB acquisition</text>
+                    </g>
+
+                    <!-- Arrow from GP to z-space -->
+                    <path d="M 410 350 L 410 295" fill="none" stroke="#d29922" stroke-width="2" marker-end="url(#arrowOrange2)"/>
+                    <text x="430" y="330" fill="#d29922" font-size="9" font-family="Outfit">z* proposal</text>
+
+                    <!-- Key differences annotation -->
+                    <rect x="870" y="320" width="200" height="130" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="2"/>
+                    <text x="970" y="345" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600" font-family="Outfit">Key Improvements:</text>
+                    <text x="970" y="368" text-anchor="middle" fill="#e6edf3" font-size="9" font-family="Outfit">• No VAE bottleneck</text>
+                    <text x="970" y="386" text-anchor="middle" fill="#e6edf3" font-size="9" font-family="Outfit">• 1024D throughout</text>
+                    <text x="970" y="404" text-anchor="middle" fill="#e6edf3" font-size="9" font-family="Outfit">• Pretrained encoder/decoder</text>
+                    <text x="970" y="422" text-anchor="middle" fill="#e6edf3" font-size="9" font-family="Outfit">• Flow for smooth manifold</text>
+                    <text x="970" y="440" text-anchor="middle" fill="#e6edf3" font-size="9" font-family="Outfit">• GP works in Gaussian z-space</text>
+
+                    </g>
+                </svg>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 5: Flow Theory -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="5">
+            <span class="section-badge fade-in">Theory</span>
+            <h2 class="fade-in fade-in-delay-1">Optimal Transport Conditional Flow Matching</h2>
+
+            <div class="content-split">
+                <div class="fade-in fade-in-delay-2">
+                    <h3 style="margin-bottom: 0.8rem;">Flow ODE</h3>
+                    <div class="math-block" style="text-align: center;">
+                        $$\frac{d\mathbf{x}_t}{dt} = \mathbf{v}_\theta(\mathbf{x}_t, t)$$
+                    </div>
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.5rem;">
+                        where $\mathbf{x}_t \in \mathbb{R}^{1024}$ is the state at time $t \in [0,1]$
+                    </p>
+
+                    <h3 style="margin-top: 1.5rem; margin-bottom: 0.8rem;">OT-CFM Linear Interpolation</h3>
+                    <div class="math-block" style="text-align: center;">
+                        $$\mathbf{x}_t = (1-t) \mathbf{z} + t \mathbf{x}_1, \quad \mathbf{z} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$$
+                    </div>
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0.5rem;">
+                        Optimal transport coupling with straight-line paths
+                    </p>
+
+                    <h3 style="margin-top: 1.5rem; margin-bottom: 0.8rem;">Training Loss (CFM Objective)</h3>
+                    <div class="math-block" style="text-align: center;">
+                        $$\mathcal{L}_{\text{CFM}} = \mathbb{E}_{t \sim U[0,1], \mathbf{z}, \mathbf{x}_1}\left[\left\|\mathbf{v}_\theta(\mathbf{x}_t, t) - (\mathbf{x}_1 - \mathbf{z})\right\|_2^2\right]$$
+                    </div>
+                </div>
+
+                <div class="fade-in fade-in-delay-3">
+                    <div class="highlight-box highlight-purple" style="margin-bottom: 1rem;">
+                        <strong>Key Insight</strong>
+                        <p style="margin-top: 0.5rem; font-size: 1rem;">
+                            GP works in Gaussian z-space where points are well-distributed.<br>
+                            Flow maps z to the embedding manifold smoothly.
+                        </p>
+                    </div>
+
+                    <div class="diagram-container" style="height: 280px;">
+                        <svg viewBox="0 0 400 260" xmlns="http://www.w3.org/2000/svg">
+                            <!-- z-space (Gaussian) -->
+                            <circle cx="100" cy="130" r="80" fill="rgba(163,113,247,0.2)" stroke="#a371f7" stroke-width="2"/>
+                            <text x="100" y="220" text-anchor="middle" fill="#a371f7" font-size="11" font-weight="600" font-family="Outfit">z ~ N(0, I)</text>
+
+                            <!-- Points in z-space -->
+                            <circle cx="85" cy="115" r="4" fill="#a371f7"/>
+                            <circle cx="115" cy="125" r="4" fill="#a371f7"/>
+                            <circle cx="95" cy="145" r="4" fill="#a371f7"/>
+                            <circle cx="110" cy="100" r="4" fill="#a371f7"/>
+                            <circle cx="75" cy="135" r="4" fill="#a371f7"/>
+
+                            <!-- Arrow -->
+                            <path d="M 185 130 L 235 130" fill="none" stroke="#d29922" stroke-width="3" marker-end="url(#arrowOrange2)"/>
+                            <text x="210" y="115" text-anchor="middle" fill="#d29922" font-size="10" font-family="Outfit">Flow(z)</text>
+
+                            <!-- x-space (embedding manifold) -->
+                            <ellipse cx="310" cy="130" rx="70" ry="90" fill="none" stroke="#3fb950" stroke-width="2"/>
+                            <path d="M 265 80 Q 310 70 340 95 Q 360 130 340 165 Q 310 190 270 170" fill="rgba(63,185,80,0.2)" stroke="#3fb950" stroke-width="1"/>
+                            <text x="310" y="235" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="600" font-family="Outfit">x (1024D manifold)</text>
+
+                            <!-- Points on manifold -->
+                            <circle cx="290" cy="95" r="4" fill="#3fb950"/>
+                            <circle cx="330" cy="115" r="4" fill="#3fb950"/>
+                            <circle cx="300" cy="145" r="4" fill="#3fb950"/>
+                            <circle cx="320" cy="160" r="4" fill="#3fb950"/>
+                            <circle cx="280" cy="130" r="4" fill="#3fb950"/>
+                        </svg>
+                    </div>
+
+                    <div class="card" style="padding: 0.8rem; margin-top: 1rem;">
+                        <h4 style="color: var(--accent-cyan); margin-bottom: 0.3rem; font-size: 0.9rem;">U-Net Architecture</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+                            Skip connections preserve fine-grained features during flow transformation.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 6: Flow Ablation -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="6">
+            <span class="section-badge fade-in">Ablation Study</span>
+            <h2 class="fade-in fade-in-delay-1">Flow Model Comparison (108 Experiments)</h2>
+
+            <div class="fade-in fade-in-delay-2" style="width: 100%;">
+                <table style="width: 100%; margin-bottom: 1.5rem;">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th style="text-align: center;">L2-r ↓</th>
+                            <th style="text-align: center;">Cosine to Test ↑</th>
+                            <th style="text-align: center;">Cosine to Good ↑</th>
+                            <th style="text-align: center;">Text Quality</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background: rgba(63,185,80,0.15);">
+                            <td><strong style="color: var(--accent-green);">U-Net + OT-CFM + mixup+noise</strong></td>
+                            <td style="text-align: center; color: var(--accent-green); font-weight: 700;">0.15</td>
+                            <td style="text-align: center; color: var(--accent-green); font-weight: 700;">0.59</td>
+                            <td style="text-align: center; color: var(--accent-green); font-weight: 700;">0.28</td>
+                            <td style="text-align: center; color: var(--accent-green);">Coherent</td>
+                        </tr>
+                        <tr>
+                            <td>DiT + OT-CFM + mixup+noise</td>
+                            <td style="text-align: center;">0.15</td>
+                            <td style="text-align: center;">0.58</td>
+                            <td style="text-align: center;">0.26</td>
+                            <td style="text-align: center; color: var(--accent-green);">Coherent</td>
+                        </tr>
+                        <tr>
+                            <td>U-Net + Spherical-OT (FIXED)</td>
+                            <td style="text-align: center;">0.27</td>
+                            <td style="text-align: center;">0.51</td>
+                            <td style="text-align: center;">0.25</td>
+                            <td style="text-align: center; color: var(--accent-green);">Coherent</td>
+                        </tr>
+                        <tr class="broken">
+                            <td><s>U-Net + Spherical-OT (OLD)</s></td>
+                            <td style="text-align: center;"><s>0.31</s></td>
+                            <td style="text-align: center;"><s>0.03</s></td>
+                            <td style="text-align: center;"><s>0.08</s></td>
+                            <td style="text-align: center; color: var(--accent-red);"><s>Broken</s></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="winner-callout fade-in fade-in-delay-3">
+                    <strong>WINNER: U-Net + OT-CFM with mixup+noise augmentation</strong>
+                    <p style="font-size: 0.95rem; margin-top: 0.5rem; color: var(--text-secondary);">
+                        Best round-trip fidelity (L2-r = 0.15) and cosine similarity to test set
+                    </p>
+                </div>
+
+                <div class="fade-in fade-in-delay-4" style="display: flex; justify-content: center; gap: 2rem; margin-top: 1.5rem;">
+                    <div class="card" style="padding: 0.8rem; text-align: center; flex: 1; max-width: 250px;">
+                        <h4 style="color: var(--accent-purple); margin-bottom: 0.3rem; font-size: 0.9rem;">Grid Search</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary);">
+                            3 architectures × 3 flow types × 3 datasets × 4 augmentations
+                        </p>
+                    </div>
+                    <div class="card" style="padding: 0.8rem; text-align: center; flex: 1; max-width: 250px;">
+                        <h4 style="color: var(--accent-cyan); margin-bottom: 0.3rem; font-size: 0.9rem;">Best Checkpoint</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); font-family: var(--font-mono);">
+                            unet-otcfm-10k-mixup+noise/best.pt
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 7: GP Ablation -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="7">
+            <span class="section-badge fade-in">Ablation Study</span>
+            <h2 class="fade-in fade-in-delay-1">GP Surrogate Comparison</h2>
+
+            <div class="fade-in fade-in-delay-2" style="width: 100%;">
+                <table style="width: 100%; margin-bottom: 1.5rem;">
+                    <thead>
+                        <tr>
+                            <th>Method</th>
+                            <th style="text-align: center;">Spearman ↑</th>
+                            <th style="text-align: center;">ECE ↓</th>
+                            <th style="text-align: center;">AUC Regret ↓</th>
+                            <th style="text-align: center;">Steps to 99%</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background: rgba(63,185,80,0.15);">
+                            <td><strong style="color: var(--accent-green);">Riemannian + ArcCosine</strong></td>
+                            <td style="text-align: center;">0.442</td>
+                            <td style="text-align: center; color: var(--accent-green); font-weight: 700;">0.012</td>
+                            <td style="text-align: center;">0.197</td>
+                            <td style="text-align: center;">8</td>
+                        </tr>
+                        <tr>
+                            <td>Riemannian + Geodesic Matern5/2</td>
+                            <td style="text-align: center; color: var(--accent-cyan); font-weight: 700;">0.461</td>
+                            <td style="text-align: center;">0.028</td>
+                            <td style="text-align: center; color: var(--accent-green); font-weight: 700;">0.134</td>
+                            <td style="text-align: center;">8</td>
+                        </tr>
+                        <tr>
+                            <td>Riemannian + Matern5/2</td>
+                            <td style="text-align: center;">0.471</td>
+                            <td style="text-align: center; color: var(--accent-red);">0.382 ✗</td>
+                            <td style="text-align: center;">0.277</td>
+                            <td style="text-align: center;">8</td>
+                        </tr>
+                        <tr>
+                            <td>Standard MSR</td>
+                            <td style="text-align: center;">0.398</td>
+                            <td style="text-align: center;">0.030</td>
+                            <td style="text-align: center;">0.527</td>
+                            <td style="text-align: center; color: var(--accent-red);">38</td>
+                        </tr>
+                        <tr>
+                            <td>TuRBO</td>
+                            <td style="text-align: center;">0.398</td>
+                            <td style="text-align: center;">0.030</td>
+                            <td style="text-align: center;">0.527</td>
+                            <td style="text-align: center; color: var(--accent-red);">38</td>
+                        </tr>
+                        <tr>
+                            <td>BaxUS</td>
+                            <td style="text-align: center;">0.293</td>
+                            <td style="text-align: center;">0.102</td>
+                            <td style="text-align: center;">0.281</td>
+                            <td style="text-align: center;">11</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="winner-callout fade-in fade-in-delay-3">
+                    <strong>WINNER: Riemannian GP + ArcCosine Kernel (ECE = 0.012)</strong>
+                    <p style="font-size: 0.95rem; margin-top: 0.5rem; color: var(--text-secondary);">
+                        Best calibrated uncertainty. ArcCosine kernel has <strong>NO lengthscale parameter</strong>.
+                    </p>
+                </div>
+
+                <div class="fade-in fade-in-delay-4" style="display: flex; justify-content: center; gap: 2rem; margin-top: 1.5rem;">
+                    <div class="card" style="padding: 1rem; text-align: center; flex: 1; max-width: 350px;">
+                        <h4 style="color: var(--accent-purple); margin-bottom: 0.5rem; font-size: 1rem;">ArcCosine Kernel</h4>
+                        <div class="math-block" style="padding: 0.8rem; font-size: 1.1rem; margin: 0; text-align: center;">
+                            $$k(\mathbf{x}, \mathbf{y}) = 1 - \frac{1}{\pi}\arccos\left(\frac{\mathbf{x} \cdot \mathbf{y}}{\|\mathbf{x}\| \|\mathbf{y}\|}\right)$$
+                        </div>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">
+                            No lengthscale parameter, automatic normalization
+                        </p>
+                    </div>
+                    <div class="card" style="padding: 1rem; text-align: center; flex: 1; max-width: 280px;">
+                        <h4 style="color: var(--accent-cyan); margin-bottom: 0.5rem; font-size: 1rem;">Key Properties</h4>
+                        <ul style="font-size: 0.85rem; color: var(--text-secondary); text-align: left; padding-left: 1.2rem;">
+                            <li>$k(\mathbf{x}, \mathbf{x}) = 1$ (normalized)</li>
+                            <li>$k(\mathbf{x}, -\mathbf{x}) = 0$ (opposite)</li>
+                            <li>Works on unit hypersphere $S^{1023}$</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 8: Latent BO   -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="8">
+            <span class="section-badge fade-in">Method</span>
+            <h2 class="fade-in fade-in-delay-1">Latent Space Bayesian Optimization</h2>
+
+            <div class="content-split">
+                <div class="fade-in fade-in-delay-2">
+                    <h3 style="margin-bottom: 0.8rem;">The Approach</h3>
+                    <p style="margin-bottom: 1rem;">
+                        Do BO in the flow's noise space z ~ N(0,I) instead of embedding space x.
+                    </p>
+
+                    <div class="arch-box arch-box-cyan">
+                        <div style="font-size: 1.5rem;">1.</div>
+                        <div>
+                            <strong>Initial prompts → SONAR encode → Flow invert → z</strong>
+                            <p style="font-size: 0.85rem; color: var(--text-muted);">Map existing good prompts to z-space</p>
+                        </div>
+                    </div>
+
+                    <div class="arch-box arch-box-purple">
+                        <div style="font-size: 1.5rem;">2.</div>
+                        <div>
+                            <strong>GP proposes z* in Gaussian space</strong>
+                            <p style="font-size: 0.85rem; color: var(--text-muted);">LCB acquisition over z ~ N(0,I)</p>
+                        </div>
+                    </div>
+
+                    <div class="arch-box arch-box-green">
+                        <div style="font-size: 1.5rem;">3.</div>
+                        <div>
+                            <strong>Flow(z*) → x → SONAR decode → text → evaluate</strong>
+                            <p style="font-size: 0.85rem; color: var(--text-muted);">Generate and score candidate prompt</p>
+                        </div>
+                    </div>
+
+                    <div class="highlight-box highlight-green" style="margin-top: 1rem; padding: 1rem;">
+                        <strong>Key Benefits:</strong>
+                        <ul style="margin-top: 0.5rem; font-size: 0.95rem; padding-left: 1.2rem;">
+                            <li>GP works better in Gaussian z-space</li>
+                            <li>Flow ensures samples stay on embedding manifold</li>
+                            <li>Only invert embeddings once at initialization</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="fade-in fade-in-delay-3">
+                    <div class="diagram-container" style="height: 380px;">
+                        <svg viewBox="0 0 400 360" xmlns="http://www.w3.org/2000/svg">
+                            <!-- GP proposes in z-space -->
+                            <rect x="140" y="20" width="120" height="60" rx="8" fill="rgba(210,153,34,0.2)" stroke="#d29922" stroke-width="2"/>
+                            <text x="200" y="45" text-anchor="middle" fill="#d29922" font-size="12" font-weight="600" font-family="Outfit">GP Surrogate</text>
+                            <text x="200" y="62" text-anchor="middle" fill="#8b949e" font-size="9" font-family="Outfit">Proposes z* in N(0,I)</text>
+
+                            <!-- Arrow down -->
+                            <line x1="200" y1="80" x2="200" y2="105" stroke="#d29922" stroke-width="2" marker-end="url(#arrowOrange2)"/>
+
+                            <!-- z-space -->
+                            <circle cx="200" cy="150" r="40" fill="rgba(163,113,247,0.3)" stroke="#a371f7" stroke-width="2"/>
+                            <text x="200" y="145" text-anchor="middle" fill="#a371f7" font-size="11" font-weight="600" font-family="JetBrains Mono">z*</text>
+                            <text x="200" y="160" text-anchor="middle" fill="#a371f7" font-size="9" font-family="Outfit">z-space</text>
+
+                            <!-- Arrow down -->
+                            <line x1="200" y1="190" x2="200" y2="215" stroke="#a371f7" stroke-width="2" marker-end="url(#arrowPurple2)"/>
+
+                            <!-- Flow -->
+                            <rect x="140" y="220" width="120" height="40" rx="6" fill="rgba(163,113,247,0.2)" stroke="#a371f7" stroke-width="2"/>
+                            <text x="200" y="245" text-anchor="middle" fill="#a371f7" font-size="11" font-weight="500" font-family="Outfit">Flow(z*) → x</text>
+
+                            <!-- Arrow down -->
+                            <line x1="200" y1="260" x2="200" y2="285" stroke="#3fb950" stroke-width="2" marker-end="url(#arrowGreen2)"/>
+
+                            <!-- SONAR Decode -->
+                            <rect x="140" y="290" width="120" height="40" rx="6" fill="rgba(63,185,80,0.2)" stroke="#3fb950" stroke-width="2"/>
+                            <text x="200" y="315" text-anchor="middle" fill="#3fb950" font-size="11" font-weight="500" font-family="Outfit">SONAR → Text</text>
+
+                            <!-- Feedback loop -->
+                            <path d="M 260 310 L 320 310 L 320 50 L 260 50" fill="none" stroke="#00d9ff" stroke-width="2" stroke-dasharray="6,3"/>
+                            <text x="340" y="180" text-anchor="middle" fill="#00d9ff" font-size="9" font-family="Outfit" transform="rotate(90, 340, 180)">Evaluate & Update</text>
+
+                            <!-- Labels -->
+                            <text x="80" y="150" text-anchor="middle" fill="#8b949e" font-size="10" font-family="Outfit">Gaussian</text>
+                            <text x="80" y="165" text-anchor="middle" fill="#8b949e" font-size="10" font-family="Outfit">Space</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 9: Spherical Fix -->
+        <!-- ==================== -->
+        <section class="slide" data-slide="9">
+            <span class="section-badge fade-in">Bug Fix</span>
+            <h2 class="fade-in fade-in-delay-1">Spherical Flow Training Fix</h2>
+
+            <div class="content-split">
+                <div class="fade-in fade-in-delay-2">
+                    <div class="card" style="border-left: 3px solid var(--accent-red);">
+                        <h3 style="color: var(--accent-red); margin-bottom: 0.8rem;">The Problem</h3>
+                        <p style="font-size: 1rem;">
+                            Old spherical flow produced <strong>broken prompts</strong> (cosine = 0.03).
+                        </p>
+                    </div>
+
+                    <div class="card" style="border-left: 3px solid var(--accent-orange); margin-top: 1rem;">
+                        <h3 style="color: var(--accent-orange); margin-bottom: 0.8rem;">Root Cause</h3>
+                        <p style="font-size: 1rem;">
+                            <strong>Double normalization</strong>: z-score normalization + unit sphere projection.
+                        </p>
+                        <p style="font-size: 0.9rem; margin-top: 0.5rem; color: var(--text-muted);">
+                            Mean/std normalization lost semantic direction before projecting to sphere.
+                        </p>
+                    </div>
+
+                    <div class="card" style="border-left: 3px solid var(--accent-green); margin-top: 1rem;">
+                        <h3 style="color: var(--accent-green); margin-bottom: 0.8rem;">Solution</h3>
+                        <p style="font-size: 1rem;">
+                            Train with <code>--no-normalize</code> flag. Skip z-score, keep unit sphere only.
+                        </p>
+                        <div class="code-block" style="margin-top: 0.5rem; font-size: 0.8rem; padding: 0.8rem;">
+                            <span class="comment"># Fixed training command</span><br>
+                            uv run python -m study.flow_matching.train \<br>
+                            &nbsp;&nbsp;--arch unet --flow spherical-ot \<br>
+                            &nbsp;&nbsp;<span class="keyword">--no-normalize</span> --epochs 2000
+                        </div>
+                    </div>
+                </div>
+
+                <div class="fade-in fade-in-delay-3">
+                    <h3 style="margin-bottom: 1rem;">Results Comparison</h3>
+                    <table style="margin-bottom: 1.5rem;">
+                        <thead>
+                            <tr>
+                                <th>Flow Model</th>
+                                <th style="text-align: center;">||z_norm||</th>
+                                <th style="text-align: center;">Prompt Quality</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Euclidean OT-CFM</td>
+                                <td style="text-align: center; color: var(--accent-red);">368 (exploded)</td>
+                                <td style="text-align: center; color: var(--accent-red);">Degraded to gibberish</td>
+                            </tr>
+                            <tr style="background: rgba(63,185,80,0.15);">
+                                <td><strong>Spherical-OT (FIXED)</strong></td>
+                                <td style="text-align: center; color: var(--accent-green); font-weight: 700;">3.86 (bounded)</td>
+                                <td style="text-align: center; color: var(--accent-green);">Stayed coherent</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="highlight-box highlight-green">
+                        <strong>Key Finding</strong>
+                        <p style="margin-top: 0.5rem; font-size: 1rem;">
+                            Spherical flow keeps ||z|| bounded, preventing optimization from drifting into incoherent regions.
+                        </p>
+                    </div>
+
+                    <div class="diagram-container" style="height: 150px; margin-top: 1rem;">
+                        <svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Bounded z-norm -->
+                            <rect x="20" y="20" width="160" height="80" rx="8" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-width="2"/>
+                            <text x="100" y="50" text-anchor="middle" fill="#3fb950" font-size="12" font-weight="600" font-family="Outfit">Spherical</text>
+                            <text x="100" y="70" text-anchor="middle" fill="#3fb950" font-size="18" font-family="JetBrains Mono">||z|| ≈ 3.86</text>
+                            <text x="100" y="90" text-anchor="middle" fill="#8b949e" font-size="9" font-family="Outfit">Bounded, coherent</text>
+
+                            <!-- Exploded z-norm -->
+                            <rect x="220" y="20" width="160" height="80" rx="8" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-width="2"/>
+                            <text x="300" y="50" text-anchor="middle" fill="#f85149" font-size="12" font-weight="600" font-family="Outfit">Euclidean</text>
+                            <text x="300" y="70" text-anchor="middle" fill="#f85149" font-size="18" font-family="JetBrains Mono">||z|| → 368</text>
+                            <text x="300" y="90" text-anchor="middle" fill="#8b949e" font-size="9" font-family="Outfit">Exploded, gibberish</text>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== -->
+        <!-- SLIDE 10: Conclusion -->
+        <!-- ==================== -->
+        <section class="slide slide-center" data-slide="10">
+            <div class="fade-in">
+                <h1 style="background: linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-purple) 50%, var(--accent-magenta) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-size: 3.5rem;">
+                    RieLBO
+                </h1>
+                <p class="fade-in fade-in-delay-1" style="font-size: 1.5rem; color: var(--text-secondary); margin-top: 1rem;">
+                    Embedding-Conditioned Flow Matching for Prompt Optimization
+                </p>
+            </div>
+
+            <div class="fade-in fade-in-delay-2" style="margin-top: 2rem;">
+                <div class="highlight-box highlight-purple" style="max-width: 800px; text-align: center;">
+                    <p style="font-size: 1.1rem; color: var(--text-primary);">
+                        <strong style="color: var(--accent-cyan);">No VAE bottleneck</strong> +
+                        <strong style="color: var(--accent-purple);">Flow Matching</strong> +
+                        <strong style="color: var(--accent-green);">Riemannian GP</strong> +
+                        <strong style="color: var(--accent-orange);">Latent Space BO</strong>
+                    </p>
+                </div>
+            </div>
+
+            <div class="fade-in fade-in-delay-3" style="margin-top: 2rem;">
+                <h3 style="margin-bottom: 1rem; color: var(--accent-cyan);">Key Achievements</h3>
+                <div style="display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap;">
+                    <div class="card" style="padding: 0.8rem 1.2rem; text-align: center;">
+                        <div style="color: var(--accent-green); font-weight: 600;">Flow Model</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">U-Net + OT-CFM (L2-r=0.15)</div>
+                    </div>
+                    <div class="card" style="padding: 0.8rem 1.2rem; text-align: center;">
+                        <div style="color: var(--accent-purple); font-weight: 600;">GP Surrogate</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">ArcCosine (ECE=0.012)</div>
+                    </div>
+                    <div class="card" style="padding: 0.8rem 1.2rem; text-align: center;">
+                        <div style="color: var(--accent-orange); font-weight: 600;">Spherical Fix</div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">||z|| bounded at 3.86</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="fade-in fade-in-delay-4" style="margin-top: 2rem;">
+                <h3 style="margin-bottom: 0.8rem; color: var(--accent-orange);">Future Work</h3>
+                <div style="display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="dim-badge">Multi-fidelity BO</span>
+                    <span class="dim-badge" style="border-color: var(--accent-purple); color: var(--accent-purple);">vs ZeroInstruct</span>
+                    <span class="dim-badge" style="border-color: var(--accent-green); color: var(--accent-green);">vs NFBO</span>
+                    <span class="dim-badge" style="border-color: var(--accent-orange); color: var(--accent-orange);">vs TuRBO</span>
+                    <span class="dim-badge" style="border-color: var(--accent-magenta); color: var(--accent-magenta);">ESM-C Proteins</span>
+                    <span class="dim-badge" style="border-color: var(--accent-cyan); color: var(--accent-cyan);">vec2text</span>
+                </div>
+            </div>
+
+            <div class="fade-in fade-in-delay-5" style="margin-top: 2.5rem;">
+                <span class="dim-badge">1024D</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-purple); color: var(--accent-purple);">z ~ N(0,I)</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-magenta); color: var(--accent-magenta);">Flow</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-orange); color: var(--accent-orange);">1024D</span>
+                <span style="color: var(--text-muted); margin: 0 0.5rem;">→</span>
+                <span class="dim-badge" style="border-color: var(--accent-green); color: var(--accent-green);">Text</span>
+            </div>
+
+            <p class="fade-in fade-in-delay-5" style="margin-top: 2rem; font-size: 1.1rem; color: var(--text-muted);">
+                Thank you!
+            </p>
+        </section>
+
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-bar" id="progressBar"></div>
+
+    <!-- Slide counter -->
+    <div class="slide-counter">
+        <span id="currentSlide">1</span> / <span id="totalSlides">10</span>
+    </div>
+
+
+    <script>
+        // Presentation logic
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = 10;
+        let currentSlide = 0;
+
+        document.getElementById('totalSlides').textContent = totalSlides;
+
+        function updateSlide(index) {
+            slides.forEach((slide, i) => {
+                slide.classList.remove('active');
+                if (i === index) {
+                    slide.classList.add('active');
+                }
+            });
+
+            currentSlide = index;
+            document.getElementById('currentSlide').textContent = index + 1;
+            document.getElementById('progressBar').style.width =
+                ((index + 1) / totalSlides * 100) + '%';
+        }
+
+        function nextSlide() {
+            if (currentSlide < slides.length - 1) {
+                updateSlide(currentSlide + 1);
+            }
+        }
+
+        function prevSlide() {
+            if (currentSlide > 0) {
+                updateSlide(currentSlide - 1);
+            }
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                prevSlide();
+            }
+        });
+
+        // Touch support
+        let touchStartX = 0;
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+        });
+
+        document.addEventListener('touchend', (e) => {
+            const touchEndX = e.changedTouches[0].clientX;
+            const diff = touchStartX - touchEndX;
+
+            if (Math.abs(diff) > 50) {
+                if (diff > 0) nextSlide();
+                else prevSlide();
+            }
+        });
+
+        // Initialize KaTeX
+        document.addEventListener('DOMContentLoaded', function() {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '$', right: '$', display: false}
+                ],
+                throwOnError: false
+            });
+        });
+    </script>
+</body>
+</html>

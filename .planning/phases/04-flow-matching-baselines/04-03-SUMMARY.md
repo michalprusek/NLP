@@ -15,7 +15,7 @@ provides:
   - Guided ODE integration with gradient clipping
   - sample_with_guidance() convenience function
   - Phase 4 success criteria verification
-affects: [05-advanced-flow, 08-gp-guided-sampling, ecoflow-production]
+affects: [05-advanced-flow, 08-gp-guided-sampling, rielbo-production]
 
 # Tech tracking
 tech-stack:
@@ -27,7 +27,7 @@ key-files:
   modified: []
 
 key-decisions:
-  - "4% zero-init fraction for CFG-Zero* matches ecoflow/guided_flow.py"
+  - "4% zero-init fraction for CFG-Zero* matches rielbo/guided_flow.py"
   - "Gradient clipping at max_grad_norm=10.0 for stability"
   - "Both I-CFM and OT-CFM produce similar path straightness (0.0016)"
 
@@ -71,7 +71,7 @@ completed: 2026-02-01
   - make_random_guidance_fn(): Testing utility for simple gradient guidance
 
 ## Decisions Made
-- **4% zero-init fraction** - Matches ecoflow/guided_flow.py CFG-Zero* implementation
+- **4% zero-init fraction** - Matches rielbo/guided_flow.py CFG-Zero* implementation
 - **Gradient clipping at 10.0** - Prevents gradient explosion in guidance
 - **Testing utility included** - make_random_guidance_fn() for Phase 8 GP integration testing
 

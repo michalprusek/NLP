@@ -9,7 +9,7 @@
 
 This research covers flow matching architectures for generating optimal prompts via GP-guided sampling in 1024D SONAR embedding space with limited training data (1K-10K samples). The core challenge is balancing model capacity against overfitting risk while integrating Bayesian optimization guidance that respects the SONAR manifold constraints.
 
-The recommended approach uses custom flow matching implementations (not heavy frameworks) with architecture size scaled to dataset regime: MLP or U-Net style networks for <5K samples, small DiT (6 layers, 512 hidden dim) for 5K-10K samples. Critical to success is implementing OT-CFM coupling for straighter paths, proper normalization/denormalization pipeline for SONAR compatibility, and CFG-Zero* guidance schedule to prevent early trajectory corruption. The existing EcoFlow implementation already contains well-designed components (DiT architecture, GP surrogate with MSR initialization, CFG-Zero* sampling) but may need regularization tuning and architecture downsizing for small datasets.
+The recommended approach uses custom flow matching implementations (not heavy frameworks) with architecture size scaled to dataset regime: MLP or U-Net style networks for <5K samples, small DiT (6 layers, 512 hidden dim) for 5K-10K samples. Critical to success is implementing OT-CFM coupling for straighter paths, proper normalization/denormalization pipeline for SONAR compatibility, and CFG-Zero* guidance schedule to prevent early trajectory corruption. The existing RieLBO implementation already contains well-designed components (DiT architecture, GP surrogate with MSR initialization, CFG-Zero* sampling) but may need regularization tuning and architecture downsizing for small datasets.
 
 Key risks center on overfitting (the 9.4M parameter DiT-Base will memorize 1K samples), mode collapse from insufficient diversity monitoring, and SONAR decoder incompatibility from normalization errors. Prevention requires aggressive regularization (weight decay 0.01-0.05, EMA decay tuned to dataset size), validation-based early stopping, and empirical verification of decoded output quality throughout training. For NeurIPS submission, proper evaluation metrics (MMD in SONAR space, not raw FID), fair baseline comparisons, and ablation studies of guidance strength, coupling methods, and architecture variants are essential.
 
@@ -26,7 +26,7 @@ The optimal stack for this domain prioritizes control and simplicity over framew
 - **ema-pytorch 0.7.9**: Exponential moving average for stable generative model training
 - **Weights & Biases**: Experiment tracking for NeurIPS-quality research
 
-**Why custom over frameworks:** The existing EcoFlow implementation already has well-structured components (velocity_network.py, flow_model.py, guided_flow.py). For small-scale research with specific requirements (GP gradient injection, SONAR denormalization), direct PyTorch is faster and more controllable than facebookresearch/flow_matching or torchcfm. The latter can serve as reference implementations for OT coupling but don't need to be dependencies.
+**Why custom over frameworks:** The existing RieLBO implementation already has well-structured components (velocity_network.py, flow_model.py, guided_flow.py). For small-scale research with specific requirements (GP gradient injection, SONAR denormalization), direct PyTorch is faster and more controllable than facebookresearch/flow_matching or torchcfm. The latter can serve as reference implementations for OT coupling but don't need to be dependencies.
 
 **Critical versions:** BoTorch 0.16.1 includes MSR initialization (ICLR 2025) which is essential for 1024D GP optimization. PyTorch 2.8+ recommended for control flow operators and improved compilation, though 2.1+ will work.
 
@@ -64,7 +64,7 @@ For small datasets (1K-10K), architecture complexity must scale with data availa
 1. **Velocity Network** (architecture varies by dataset size)
    - 1K samples: MLP-Small (512-256-256-512 bottleneck, ~1M params) or DiT-Tiny (256 hidden, 4 layers, ~1.6M params)
    - 5K samples: U-Net MLP (768→128 bottleneck, FiLM conditioning, ~2.5M params) or DiT-Small (384 hidden, 6 layers, ~5.3M params)
-   - 10K samples: DiT-Base (512 hidden, 6 layers, ~9.4M params) — current EcoFlow default
+   - 10K samples: DiT-Base (512 hidden, 6 layers, ~9.4M params) — current RieLBO default
    - Rule of thumb: Parameters < 10x (num_samples * input_dim) for safe training
 
 2. **Time Conditioning Method** (critical for training stability)
@@ -227,7 +227,7 @@ Based on research, suggested phase structure balances baseline establishment, co
 
 **Phases with standard patterns (skip research-phase):**
 
-- **Phase 1 (Data Pipeline):** Standard ML data handling, existing EcoFlow implementation provides clear pattern.
+- **Phase 1 (Data Pipeline):** Standard ML data handling, existing RieLBO implementation provides clear pattern.
 - **Phase 3 (GP Guidance):** Implementation already exists and follows well-founded posterior guidance approach from ICML 2025 paper.
 - **Phase 5 (Evaluation):** Standard metrics for generative models, well-documented in literature.
 
@@ -267,7 +267,7 @@ Based on research, suggested phase structure balances baseline establishment, co
 ## Sources
 
 ### Primary (HIGH confidence)
-- Existing EcoFlow implementation: velocity_network.py, flow_model.py, guided_flow.py, gp_surrogate.py
+- Existing RieLBO implementation: velocity_network.py, flow_model.py, guided_flow.py, gp_surrogate.py
 - [PyTorch 2.8 Release Blog](https://pytorch.org/blog/pytorch-2-8/)
 - [BoTorch Documentation](https://botorch.org/docs/overview/) — v0.16.1 with MSR initialization
 - [torchcfm GitHub](https://github.com/atong01/conditional-flow-matching) — v1.0.7 reference implementation

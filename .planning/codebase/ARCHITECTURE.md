@@ -19,16 +19,16 @@
 - Location: `shared/`
 - Contains: LLMClient (ABC), Concrete implementations (VLLMClient, OpenAIClient, DeepInfraClient, TransformersClient), GSM8KEvaluator
 - Depends on: External LLM APIs (vLLM, OpenAI, DeepInfra), HuggingFace Transformers, Datasets
-- Used by: All optimizer methods (OPRO, ProTeGi, GEPA, EcoFlow, NFBO)
+- Used by: All optimizer methods (OPRO, ProTeGi, GEPA, RieLBO, NFBO)
 
 **Prompt Optimization Methods Layer:**
 - Purpose: Implement distinct optimization algorithms for discovering better task prompts
-- Location: `opro/`, `protegi/`, `gepa/`, `ecoflow/`, `nfbo/`
+- Location: `opro/`, `protegi/`, `gepa/`, `rielbo/`, `nfbo/`
 - Contains: Optimizer classes (OPROOptimizer, ProTeGiOptimizer, GEPAOptimizer, BOOptimizationLoop, NFBoLoop), run.py CLI entry points
 - Depends on: Shared infrastructure, PyTorch, specialized packages (torchcfm, botorch, gpytorch)
 - Used by: CLI entry points for running optimization experiments
 
-**EcoFlow-Specific Architecture (Sub-layer):**
+**RieLBO-Specific Architecture (Sub-layer):**
 - Purpose: Flow matching guided Bayesian optimization in SONAR embedding space
 - Components:
   - `velocity_network.py`: DiT-style transformer with AdaLN time conditioning for velocity field modeling
@@ -91,7 +91,7 @@
    - Select next generation via Pareto dominance
 3. Return best prompt from final population
 
-**EcoFlow (Flow + BO) Flow:**
+**RieLBO (Flow + BO) Flow:**
 
 1. Load pretrained FlowMatchingModel (trained on SONAR embeddings)
 2. Initialize SonarDecoder (embedding → text)
@@ -122,7 +122,7 @@
 **State Management:**
 
 - **OPRO/ProTeGi/GEPA:** Store scored prompts in memory, serialize best prompt to JSON/TXT
-- **EcoFlow/NFBO:** Use OptimizationState dataclass with save/load methods, checkpoint embeddings (train_X/train_Y), best prompt, iteration counter
+- **RieLBO/NFBO:** Use OptimizationState dataclass with save/load methods, checkpoint embeddings (train_X/train_Y), best prompt, iteration counter
 
 ## Key Abstractions
 
@@ -143,12 +143,12 @@
 
 **BOOptimizationLoop:**
 - Purpose: Orchestrate full Bayesian optimization cycle
-- Examples: `ecoflow/optimization_loop.py` (base), `nfbo/loop.py` (extends with flow fitting)
+- Examples: `rielbo/optimization_loop.py` (base), `nfbo/loop.py` (extends with flow fitting)
 - Pattern: Initialize with models/evaluators, expose `initialize()` and `step()` methods, manage state
 
 **OptimizationState:**
 - Purpose: Checkpoint-able full state for resumable optimization
-- Examples: `ecoflow/optimization_loop.py`
+- Examples: `rielbo/optimization_loop.py`
 - Pattern: Dataclass with torch tensors, save/load via torch.save()
 
 ## Entry Points
@@ -168,9 +168,9 @@
 - Triggers: `python -m gepa.run [--model qwen] [--budget 150000]`
 - Responsibilities: Initialize population, run GEPA loop with Pareto selection and reflection-based mutations
 
-**EcoFlow:**
-- Location: `ecoflow/run.py`
-- Triggers: `python -m ecoflow.run [--iterations 100] [--flow-checkpoint path]`
+**RieLBO:**
+- Location: `rielbo/run.py`
+- Triggers: `python -m rielbo.run [--iterations 100] [--flow-checkpoint path]`
 - Responsibilities: Load flow model, initialize GP/decoder/evaluator, run BOOptimizationLoop with checkpoint save/resume support
 
 **NFBO:**
@@ -178,9 +178,9 @@
 - Triggers: `python -m nfbo.run [--iterations 50] [--n-initial 20]`
 - Responsibilities: Initialize evaluator, create NFBoSampler + NFBoLoop, run BO with flow fitting per iteration
 
-**Flow Training (EcoFlow):**
-- Location: `ecoflow/train_flow.py`
-- Triggers: `python -m ecoflow.train_flow [--epochs 50] [--batch-size 1024]`
+**Flow Training (RieLBO):**
+- Location: `rielbo/train_flow.py`
+- Triggers: `python -m rielbo.train_flow [--epochs 50] [--batch-size 1024]`
 - Responsibilities: Load SONAR embeddings, train FlowMatchingModel with EMA, save checkpoints
 
 ## Error Handling
@@ -210,7 +210,7 @@ for prompt in prompts:
 
 **Decoder Safe Decoding:**
 ```python
-# `ecoflow/optimization_loop.py` _decode_safe()
+# `rielbo/optimization_loop.py` _decode_safe()
 try:
     prompts = self.decoder.decode(embedding)
     return prompts
@@ -223,14 +223,14 @@ except Exception as e:
 
 **Logging:**
 - Method-specific: Print statements for visibility (OPRO/ProTeGi/GEPA)
-- EcoFlow/NFBO: Python logging module via `logging.getLogger(__name__)`
+- RieLBO/NFBO: Python logging module via `logging.getLogger(__name__)`
 - CLI: Configure via `--log-level` argument (INFO, DEBUG, WARNING, ERROR)
 - CLAUDE.md constraint: Always log full prompt text, never truncate
 
 **Validation:**
 - Prompt format: Check non-empty, reasonable length in decoder
 - Answer extraction: Regex-based with multiple pattern fallbacks (####, \\boxed{}, last number)
-- Embedding validity: L2-r filter checks round-trip fidelity in EcoFlow
+- Embedding validity: L2-r filter checks round-trip fidelity in RieLBO
 - Budget checking: OPRO tracks total_budget spent across iterations
 
 **Authentication:**
@@ -239,7 +239,7 @@ except Exception as e:
 
 **GPU Management:**
 - vLLM: Multiple clients managed via CUDA_VISIBLE_DEVICES, tensor_parallel_size
-- EcoFlow: Explicit device passing, deterministic random seed for reproducibility
+- RieLBO: Explicit device passing, deterministic random seed for reproducibility
 - Cleanup: VLLMClient.cleanup() to free memory between model loads
 
 ---

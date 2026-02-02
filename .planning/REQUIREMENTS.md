@@ -28,7 +28,7 @@ Requirements for NeurIPS paper submission. Each maps to roadmap phases.
 ### Velocity Network Architectures
 
 - [x] **ARCH-01**: Implement Simple MLP baseline (~1M params)
-- [x] **ARCH-02**: Port DiT baseline from ecoflow (~9.4M params)
+- [x] **ARCH-02**: Port DiT baseline from rielbo (~9.4M params)
 - [ ] **ARCH-03**: Implement U-Net MLP with FiLM conditioning (~2.5M params)
 - [ ] **ARCH-04**: Implement Mamba/SSM velocity network (experimental)
 - [ ] **ARCH-05**: Implement scaled versions for different dataset sizes (Tiny/Small/Base)
@@ -71,7 +71,7 @@ Requirements for NeurIPS paper submission. Each maps to roadmap phases.
 - [ ] **PAPER-01**: Comprehensive results table with all configurations (~50+)
 - [ ] **PAPER-02**: Visualization: t-SNE/UMAP of generated embeddings
 - [ ] **PAPER-03**: Visualization: training curves comparison
-- [ ] **PAPER-04**: Best model selection and ecoflow replacement
+- [ ] **PAPER-04**: Best model selection and rielbo replacement
 
 ## v2 Requirements
 

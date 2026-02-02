@@ -1,8 +1,8 @@
-# EcoFlow Architecture: Analysis & Improvements
+# RieLBO Architecture: Analysis & Improvements
 
 ## Executive Summary
 
-This document tracks improvement opportunities for the EcoFlow spherical flow matching + Riemannian GP architecture for NeurIPS submission.
+This document tracks improvement opportunities for the RieLBO spherical flow matching + Riemannian GP architecture for NeurIPS submission.
 
 **Current Status (2026-02-02):**
 - Spherical-OT U-Net trained and running

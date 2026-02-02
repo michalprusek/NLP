@@ -32,11 +32,11 @@ echo ""
 # Start BO with spherical flow model
 GPU=${GPU:-1}  # Default to GPU 1, configurable via environment
 echo "Starting EcoFlow BO with Spherical-OT flow model + Riemannian guidance on GPU $GPU..."
-CUDA_VISIBLE_DEVICES=$GPU PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
+CUDA_VISIBLE_DEVICES=$GPU PYTHONPATH=/home/prusek/NLP uv run python -m rielbo.run_bo_full \
     --warm-start-k 10 \
     --gp-kernel arccosine \
     --llm-budget 50000 \
     --eval-size 1319 \
     --model qwen \
     --flow-checkpoint study/checkpoints/unet-spherical-ot-10k-none/best.pt \
-    2>&1 | tee ecoflow/results/bo_spherical_ot_$(date +%Y%m%d_%H%M%S).log
+    2>&1 | tee rielbo/results/bo_spherical_ot_$(date +%Y%m%d_%H%M%S).log

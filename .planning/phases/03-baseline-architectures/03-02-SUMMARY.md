@@ -34,7 +34,7 @@ key-files:
 key-decisions:
   - "DiTVelocityNetwork with hidden_dim=384, num_layers=3, num_heads=6 for ~9.3M params"
   - "Import timestep_embedding from mlp.py to avoid code duplication"
-  - "Ported AdaLNBlock unchanged from ecoflow/velocity_network.py"
+  - "Ported AdaLNBlock unchanged from rielbo/velocity_network.py"
   - "Velocity prediction loss ~2.0 is expected for normalized ICFM training"
 
 patterns-established:
@@ -49,7 +49,7 @@ completed: 2026-02-01
 
 # Phase 3 Plan 02: DiT Velocity Network Summary
 
-**DiT transformer velocity network ported from ecoflow with AdaLN-Zero conditioning, verified training stability and coherent text generation for both MLP and DiT baselines**
+**DiT transformer velocity network ported from rielbo with AdaLN-Zero conditioning, verified training stability and coherent text generation for both MLP and DiT baselines**
 
 ## Performance
 
@@ -71,7 +71,7 @@ completed: 2026-02-01
 
 Each task was committed atomically:
 
-1. **Task 1: Port DiT velocity network from ecoflow** - `c75f354` (feat)
+1. **Task 1: Port DiT velocity network from rielbo** - `c75f354` (feat)
 2. **Task 2: Verify both architectures train and decode** - verification task (no code changes)
 3. **Task 3: Extended training and MSE verification** - verification task (no code changes)
 
@@ -86,7 +86,7 @@ Each task was committed atomically:
 
 1. **Parameter scaling:** hidden_dim=384, num_layers=3, num_heads=6 achieves 9.3M params (10x SimpleMLP)
 2. **Code reuse:** Import timestep_embedding from mlp.py rather than duplicating
-3. **Architecture preservation:** AdaLNBlock kept unchanged from ecoflow for verified correctness
+3. **Architecture preservation:** AdaLNBlock kept unchanged from rielbo for verified correctness
 4. **Velocity loss interpretation:** Loss ~2.0 is expected for normalized ICFM (predicting x1-x0 direction)
 
 ## Deviations from Plan

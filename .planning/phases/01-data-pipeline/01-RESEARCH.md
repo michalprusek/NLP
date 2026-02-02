@@ -8,7 +8,7 @@
 
 This research covers the technical implementation details for establishing a data pipeline for flow matching training on SONAR embeddings. The phase involves generating a 10K verbosed sampling (VS) dataset with SONAR embeddings, creating nested train/val/test splits for 1K/5K/10K sizes, implementing per-dimension normalization with stored statistics, and verifying SONAR decoder round-trip fidelity.
 
-The existing codebase provides a strong foundation: `datasets/gsm8k_instructions_vs.pt` contains 4070 VS instructions with SONAR embeddings (1024D) as a reference format, and `ecoflow/decoder.py` implements the `SonarDecoder` class correctly. The VS pipeline config shows the generation approach (LLM-based instruction generation with SONAR encoding). The key technical decisions are locked: nested splits (1K subset of 5K subset of 10K), per-dimension normalization from 10K training set only, and cosine similarity >= 0.9 as the round-trip verification threshold.
+The existing codebase provides a strong foundation: `datasets/gsm8k_instructions_vs.pt` contains 4070 VS instructions with SONAR embeddings (1024D) as a reference format, and `rielbo/decoder.py` implements the `SonarDecoder` class correctly. The VS pipeline config shows the generation approach (LLM-based instruction generation with SONAR encoding). The key technical decisions are locked: nested splits (1K subset of 5K subset of 10K), per-dimension normalization from 10K training set only, and cosine similarity >= 0.9 as the round-trip verification threshold.
 
 **Primary recommendation:** Follow the existing `gsm8k_instructions_vs.pt` format (dict with `embeddings`, `instructions`, `sources`, `config`, `stats` keys), implement normalization as z-score transform with per-dimension mean/std, and verify round-trip fidelity using `torch.nn.functional.cosine_similarity`.
 
@@ -263,7 +263,7 @@ Verified patterns from official sources:
 
 ### SONAR Decoder with N-gram Blocking
 ```python
-# Source: ecoflow/decoder.py (existing implementation)
+# Source: rielbo/decoder.py (existing implementation)
 from sonar.inference_pipelines.text import EmbeddingToTextModelPipeline
 from fairseq2.generation.step_processor import NGramRepeatBlockProcessor
 
@@ -360,7 +360,7 @@ Things that couldn't be fully resolved:
 - [SONAR GitHub](https://github.com/facebookresearch/SONAR) - TextToEmbeddingModelPipeline, EmbeddingToTextModelPipeline API
 - [PyTorch Documentation](https://docs.pytorch.org/) - torch.save, torch.load, cosine_similarity, DataLoader
 - [fairseq2 Documentation](https://facebookresearch.github.io/fairseq2/stable/) - NGramRepeatBlockProcessor, BeamSearchSeq2SeqGenerator
-- Existing codebase: `ecoflow/decoder.py`, `ecoflow/data.py`, `datasets/gsm8k_instructions_vs.pt`
+- Existing codebase: `rielbo/decoder.py`, `rielbo/data.py`, `datasets/gsm8k_instructions_vs.pt`
 
 ### Secondary (MEDIUM confidence)
 - [PyTorch Reproducibility Notes](https://docs.pytorch.org/docs/stable/notes/randomness.html) - Seed management best practices

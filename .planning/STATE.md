@@ -48,7 +48,7 @@ Progress: [█████████████░] 64%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Study location: study/flow_matching/ (separate from production ecoflow)
+- Study location: study/flow_matching/ (separate from production rielbo)
 - Train on VS dataset for higher quality prompts
 - Test 1K/5K/10K sample sizes for dataset scaling ablation
 - GPU 1 (A5000) only for all experiments
@@ -76,7 +76,7 @@ Recent decisions affecting current work:
 - Factory pattern for coupling selection: create_coupling(method) (04-01)
 - OT-CFM produces ~8% lower val loss than I-CFM (1.841 vs 2.008) (04-02)
 - Path straightness similar for both methods (~0.0016 deviation) on small MLP (04-02/04-03)
-- CFG-Zero* uses 4% zero-init fraction matching ecoflow/guided_flow.py (04-03)
+- CFG-Zero* uses 4% zero-init fraction matching rielbo/guided_flow.py (04-03)
 - Gradient clipping at max_grad_norm=10.0 for guidance stability (04-03)
 - Reflow uses 10K pairs (10x dataset) from OT-CFM teacher (05-01)
 - Reflow pairs cached at study/datasets/reflow_pairs_1k.pt (05-01)

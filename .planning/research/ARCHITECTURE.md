@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This research surveys velocity network architectures for flow matching in 1024D embedding spaces with limited training data (1K-10K samples). The key finding is that **architecture complexity must scale with dataset size** to avoid overfitting. For small datasets, simpler architectures (MLPs, shallow DiT) outperform deep transformers. The existing DiT-style baseline in `ecoflow/velocity_network.py` is well-designed but may need scaling down for <5K samples.
+This research surveys velocity network architectures for flow matching in 1024D embedding spaces with limited training data (1K-10K samples). The key finding is that **architecture complexity must scale with dataset size** to avoid overfitting. For small datasets, simpler architectures (MLPs, shallow DiT) outperform deep transformers. The existing DiT-style baseline in `rielbo/velocity_network.py` is well-designed but may need scaling down for <5K samples.
 
 ---
 
@@ -59,7 +59,7 @@ Full Model:
   - Output projection: hidden_dim * 1024
 ```
 
-**Existing Implementation Configurations (from ecoflow/):**
+**Existing Implementation Configurations (from rielbo/):**
 
 | Config | hidden_dim | layers | heads | Parameters | Use Case |
 |--------|------------|--------|-------|------------|----------|
@@ -516,7 +516,7 @@ Regularization: weight_decay=0.01, EMA=0.999
 
 ### For 10K Samples (LOW-MEDIUM overfitting risk)
 
-**Primary: DiT-Base (current ecoflow/ default)**
+**Primary: DiT-Base (current rielbo/ default)**
 ```python
 DiT-Base:
   input_dim: 1024

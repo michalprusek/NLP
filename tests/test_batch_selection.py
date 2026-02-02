@@ -22,7 +22,7 @@ def device():
 @pytest.fixture
 def fitted_gp(device):
     """Create and fit a GP surrogate for testing."""
-    from ecoflow.gp_surrogate import create_surrogate
+    from rielbo.gp_surrogate import create_surrogate
 
     gp = create_surrogate("msr", D=1024, device=device)
     X = torch.randn(20, 1024, device=device)
@@ -36,7 +36,7 @@ class TestBatchDiversity:
 
     def test_lp_more_diverse_than_greedy(self, fitted_gp, device):
         """Verify Local Penalization produces more diverse batches than greedy."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(100, 1024, device=device)
         batch_size = 8
@@ -65,7 +65,7 @@ class TestBatchDiversity:
 
     def test_batch_points_are_distinct(self, fitted_gp, device):
         """Verify all batch points are distinct."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(50, 1024, device=device)
         batch_size = 4
@@ -88,7 +88,7 @@ class TestSelectBatchCandidates:
 
     def test_output_shapes(self, fitted_gp, device):
         """Verify correct output shapes."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         N = 64
         D = 1024
@@ -104,7 +104,7 @@ class TestSelectBatchCandidates:
 
     def test_indices_valid(self, fitted_gp, device):
         """Verify indices are valid into candidates tensor."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         N = 64
         candidates = torch.randn(N, 1024, device=device)
@@ -119,7 +119,7 @@ class TestSelectBatchCandidates:
 
     def test_selected_from_candidates(self, fitted_gp, device):
         """Verify selected points are from candidates tensor."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(64, 1024, device=device)
         batch_size = 4
@@ -137,7 +137,7 @@ class TestEdgeCases:
 
     def test_batch_size_one(self, fitted_gp, device):
         """Verify batch_size=1 works (just returns best UCB)."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(20, 1024, device=device)
 
@@ -156,7 +156,7 @@ class TestEdgeCases:
 
     def test_batch_size_equals_candidates(self, fitted_gp, device):
         """Verify batch_size=N returns all candidates."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         N = 10
         candidates = torch.randn(N, 1024, device=device)
@@ -170,7 +170,7 @@ class TestEdgeCases:
 
     def test_batch_size_exceeds_candidates(self, fitted_gp, device):
         """Verify batch_size > N returns all N candidates."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         N = 5
         candidates = torch.randn(N, 1024, device=device)
@@ -184,7 +184,7 @@ class TestEdgeCases:
 
     def test_greedy_method(self, fitted_gp, device):
         """Verify greedy method works."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(50, 1024, device=device)
 
@@ -203,7 +203,7 @@ class TestEdgeCases:
 
     def test_unknown_method_raises(self, fitted_gp, device):
         """Verify unknown method raises ValueError."""
-        from ecoflow.batch_selection import select_batch_candidates
+        from rielbo.batch_selection import select_batch_candidates
 
         candidates = torch.randn(20, 1024, device=device)
 

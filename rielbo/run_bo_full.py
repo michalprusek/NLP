@@ -128,7 +128,7 @@ def main():
     # Load flow model
     logger.info(f"Loading flow model from {args.flow_checkpoint}...")
     from study.flow_matching.models import create_model
-    from ecoflow.flow_model import FlowMatchingModel
+    from rielbo.flow_model import FlowMatchingModel
 
     ckpt = torch.load(args.flow_checkpoint, map_location=device)
 
@@ -169,7 +169,7 @@ def main():
 
     # Create GP surrogate
     logger.info(f"Creating RiemannianGP with {args.gp_kernel} kernel...")
-    from ecoflow.guided_flow import create_optimal_gp_for_guided_flow, GuidedFlowSampler
+    from rielbo.guided_flow import create_optimal_gp_for_guided_flow, GuidedFlowSampler
 
     gp = create_optimal_gp_for_guided_flow(
         input_dim=1024,
@@ -196,7 +196,7 @@ def main():
 
     # Load SONAR decoder
     logger.info("Loading SONAR decoder...")
-    from ecoflow.decoder import SonarDecoder
+    from rielbo.decoder import SonarDecoder
     decoder = SonarDecoder(device=device)
     logger.info("  SONAR decoder loaded")
 
@@ -216,7 +216,7 @@ def main():
     logger.info("  LLM client ready")
 
     # Create optimization loop
-    from ecoflow.optimization_loop import BOOptimizationLoop
+    from rielbo.optimization_loop import BOOptimizationLoop
 
     loop = BOOptimizationLoop(
         flow_model=flow_model,

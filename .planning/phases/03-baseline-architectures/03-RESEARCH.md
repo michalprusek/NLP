@@ -6,13 +6,13 @@
 
 ## Summary
 
-This research covers the implementation of two baseline velocity network architectures for flow matching: a Simple MLP (~1M params) and a DiT (Diffusion Transformer) variant (~9.4M params) ported from the existing ecoflow codebase. Both architectures will predict velocity fields for the ICFM (Independent Conditional Flow Matching) formulation where `x_t = (1-t)*x0 + t*x1` and `v_target = x1 - x0`.
+This research covers the implementation of two baseline velocity network architectures for flow matching: a Simple MLP (~1M params) and a DiT (Diffusion Transformer) variant (~9.4M params) ported from the existing rielbo codebase. Both architectures will predict velocity fields for the ICFM (Independent Conditional Flow Matching) formulation where `x_t = (1-t)*x0 + t*x1` and `v_target = x1 - x0`.
 
-The existing infrastructure from Phase 2 provides a complete training loop (`FlowTrainer`), EMA, early stopping, and Wandb integration. The key work for Phase 3 is: (1) creating a well-structured Simple MLP baseline with sinusoidal time embeddings, (2) adapting the existing DiT from ecoflow to the target ~9.4M parameter size, and (3) integrating both architectures with the train.py CLI.
+The existing infrastructure from Phase 2 provides a complete training loop (`FlowTrainer`), EMA, early stopping, and Wandb integration. The key work for Phase 3 is: (1) creating a well-structured Simple MLP baseline with sinusoidal time embeddings, (2) adapting the existing DiT from rielbo to the target ~9.4M parameter size, and (3) integrating both architectures with the train.py CLI.
 
 Analysis shows the optimal MLP configuration is `hidden_dim=256, num_layers=5` (~985K params) and the optimal DiT configuration is `hidden_dim=384, num_layers=3, num_heads=6` (~9.3M params). Both architectures should use sinusoidal timestep embeddings and proper initialization (Xavier/Kaiming for MLP, AdaLN-Zero for DiT).
 
-**Primary recommendation:** Create `study/flow_matching/models/` directory with `mlp.py` and `dit.py` modules, each providing a velocity network class with consistent interface `forward(x, t) -> v`. Use existing ecoflow VelocityNetwork as DiT base, scaling down to 3 layers. Add `--arch` argument to train.py to select architecture.
+**Primary recommendation:** Create `study/flow_matching/models/` directory with `mlp.py` and `dit.py` modules, each providing a velocity network class with consistent interface `forward(x, t) -> v`. Use existing rielbo VelocityNetwork as DiT base, scaling down to 3 layers. Add `--arch` argument to train.py to select architecture.
 
 ## Standard Stack
 
@@ -52,7 +52,7 @@ study/
 │   ├── models/
 │   │   ├── __init__.py     # Model registry/factory
 │   │   ├── mlp.py          # SimpleMLP velocity network
-│   │   └── dit.py          # DiT velocity network (ported from ecoflow)
+│   │   └── dit.py          # DiT velocity network (ported from rielbo)
 │   ├── train.py            # CLI with --arch flag
 │   ├── trainer.py          # FlowTrainer (Phase 2)
 │   ├── config.py           # TrainingConfig (Phase 2)
@@ -181,7 +181,7 @@ class DiTVelocityNetwork(nn.Module):
         mlp_ratio: float = 4.0,
     ):
         super().__init__()
-        # ... (see existing ecoflow/velocity_network.py for full implementation)
+        # ... (see existing rielbo/velocity_network.py for full implementation)
 
         # Critical: Zero-init final layers
         nn.init.zeros_(self.final_adaLN[-1].weight)
@@ -243,7 +243,7 @@ def create_model(arch: str, **kwargs) -> nn.Module:
 | Parameter counting | Manual arithmetic | `sum(p.numel() for p in model.parameters())` | Accounts for all parameters including buffers |
 | Initialization | Manual std calculation | nn.init.xavier_uniform_, nn.init.kaiming_uniform_ | Correct fan-in/fan-out calculations |
 
-**Key insight:** The existing ecoflow VelocityNetwork is well-implemented and should be ported with minimal changes. Don't rewrite AdaLN-Zero from scratch.
+**Key insight:** The existing rielbo VelocityNetwork is well-implemented and should be ported with minimal changes. Don't rewrite AdaLN-Zero from scratch.
 
 ## Common Pitfalls
 
@@ -454,7 +454,7 @@ def main():
 2. **DiT sequence length for embedding-level flow**
    - What we know: Original DiT uses patch sequences; we use single embedding
    - What's unclear: Whether sequence length 1 still benefits from attention
-   - Recommendation: Keep sequence length 1 (matches ecoflow); attention provides time-dependent weighting
+   - Recommendation: Keep sequence length 1 (matches rielbo); attention provides time-dependent weighting
 
 3. **Reconstruction MSE threshold for "reasonable"**
    - What we know: Phase requirements say MSE < 0.1
@@ -467,7 +467,7 @@ def main():
 - [DiT Paper (arXiv:2212.09748)](https://ar5iv.labs.arxiv.org/html/2212.09748) - Model configurations, adaLN-Zero design
 - [Facebook DiT Implementation](https://github.com/facebookresearch/DiT/blob/main/models.py) - Reference implementation
 - [HuggingFace Diffusers Embeddings](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/embeddings.py) - Sinusoidal embedding reference
-- Existing codebase: `ecoflow/velocity_network.py` - DiT implementation to port
+- Existing codebase: `rielbo/velocity_network.py` - DiT implementation to port
 - Existing codebase: `study/flow_matching/trainer.py` - FlowTrainer interface
 
 ### Secondary (MEDIUM confidence)
@@ -483,7 +483,7 @@ def main():
 
 **Confidence breakdown:**
 - Standard stack: HIGH - Using PyTorch built-ins, well-documented
-- Architecture: HIGH - Based on existing ecoflow code + DiT paper
+- Architecture: HIGH - Based on existing rielbo code + DiT paper
 - Pitfalls: HIGH - Verified against existing implementations and documentation
 
 **Research date:** 2026-02-01
@@ -508,4 +508,4 @@ def main():
 | 320 | 4 | 8 | ~8.4M |
 | 384 | 3 | 6 | **~9.3M** (recommended) |
 | 384 | 4 | 6 | ~12.0M |
-| 512 | 6 | 8 | ~30.3M (original ecoflow) |
+| 512 | 6 | 8 | ~30.3M (original rielbo) |

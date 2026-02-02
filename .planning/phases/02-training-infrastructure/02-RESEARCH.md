@@ -8,9 +8,9 @@
 
 This research covers the technical implementation for building a training infrastructure for flow matching experiments on SONAR embeddings. The phase involves creating a training loop with EMA (Exponential Moving Average), gradient clipping, early stopping, checkpoint management, Wandb integration for experiment tracking, and training resumption support. All experiments run on GPU 1 (A5000) with `CUDA_VISIBLE_DEVICES=1`.
 
-The existing codebase in `ecoflow/train_flow.py` provides an excellent foundation with EMA, gradient clipping, cosine annealing with warmup, and basic checkpointing. The Phase 1 data pipeline (`study/data/dataset.py`) provides `FlowDataset` and `create_dataloader()` utilities ready for use. The key additions needed are: (1) Wandb integration with proper grouping by ablation dimension, (2) early stopping based on validation loss, (3) best-only checkpoint strategy, and (4) explicit resume support.
+The existing codebase in `rielbo/train_flow.py` provides an excellent foundation with EMA, gradient clipping, cosine annealing with warmup, and basic checkpointing. The Phase 1 data pipeline (`study/data/dataset.py`) provides `FlowDataset` and `create_dataloader()` utilities ready for use. The key additions needed are: (1) Wandb integration with proper grouping by ablation dimension, (2) early stopping based on validation loss, (3) best-only checkpoint strategy, and (4) explicit resume support.
 
-**Primary recommendation:** Use the existing `EMAModel` class pattern from `ecoflow/train_flow.py`, integrate Wandb with `group` parameter for ablation organization, implement early stopping as a simple class tracking patience, and save only the best checkpoint based on validation loss.
+**Primary recommendation:** Use the existing `EMAModel` class pattern from `rielbo/train_flow.py`, integrate Wandb with `group` parameter for ablation organization, implement early stopping as a simple class tracking patience, and save only the best checkpoint based on validation loss.
 
 ## Standard Stack
 
@@ -97,7 +97,7 @@ def init_wandb(config: dict, group: str) -> wandb.Run:
 **When to use:** Always for flow matching (standard practice)
 **Example:**
 ```python
-# Source: ecoflow/train_flow.py (existing implementation)
+# Source: rielbo/train_flow.py (existing implementation)
 import copy
 from typing import Dict
 import torch
@@ -170,7 +170,7 @@ class EarlyStopping:
 **When to use:** Standard for transformer training
 **Example:**
 ```python
-# Source: ecoflow/train_flow.py (existing implementation)
+# Source: rielbo/train_flow.py (existing implementation)
 import math
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -198,7 +198,7 @@ def get_cosine_schedule_with_warmup(
 **When to use:** When early stopping indicates improvement
 **Example:**
 ```python
-# Source: PyTorch documentation + ecoflow/train_flow.py
+# Source: PyTorch documentation + rielbo/train_flow.py
 import os
 import torch
 
@@ -383,7 +383,7 @@ Verified patterns from official sources:
 
 ### Complete Training Loop Structure
 ```python
-# Source: ecoflow/train_flow.py + wandb docs + PyTorch docs
+# Source: rielbo/train_flow.py + wandb docs + PyTorch docs
 import os
 import torch
 import torch.nn.functional as F
@@ -611,7 +611,7 @@ Things that couldn't be fully resolved:
 - [Wandb Custom Axes](https://docs.wandb.ai/models/track/log/customize-logging-axes) - define_metric for step_metric
 - [Wandb init Parameters](https://docs.wandb.ai/ref/python/init) - project, name, group, config
 - PyTorch Documentation - clip_grad_norm_, LambdaLR, DataLoader
-- Existing codebase: `ecoflow/train_flow.py` - EMAModel, cosine schedule, checkpoint pattern
+- Existing codebase: `rielbo/train_flow.py` - EMAModel, cosine schedule, checkpoint pattern
 - Existing codebase: `study/data/dataset.py` - FlowDataset, create_dataloader
 
 ### Secondary (MEDIUM confidence)
@@ -629,7 +629,7 @@ Things that couldn't be fully resolved:
 
 **Confidence breakdown:**
 - Standard stack: HIGH - PyTorch and Wandb are well-documented, patterns verified
-- Architecture: HIGH - Based on existing ecoflow implementation + official docs
+- Architecture: HIGH - Based on existing rielbo implementation + official docs
 - Pitfalls: HIGH - Verified against official documentation and community resources
 
 **Research date:** 2026-02-01

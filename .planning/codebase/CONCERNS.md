@@ -6,7 +6,7 @@
 
 **Bare Exception Handlers:**
 - Issue: Multiple modules use `except Exception` or bare `except:` clauses without specific error types, making debugging and error handling harder to trace
-- Files: `protegi/protegi.py`, `protegi/run.py`, `ecoflow/optimization_loop.py`, `ecoflow/run.py`, `shared/llm_client.py`, `nfbo/run.py`
+- Files: `protegi/protegi.py`, `protegi/run.py`, `rielbo/optimization_loop.py`, `rielbo/run.py`, `shared/llm_client.py`, `nfbo/run.py`
 - Impact: Swallows unexpected errors, makes error recovery harder, masks programming mistakes
 - Fix approach: Replace broad exception handlers with specific exception types (e.g., `except (RuntimeError, ValueError)`) and re-raise unhandled errors
 
@@ -38,7 +38,7 @@
 
 **Flow Matching ODE Integration Device Handling:**
 - Symptoms: Tensor device mismatches possible if normalization stats not on correct device
-- Files: `ecoflow/flow_model.py:24-38`
+- Files: `rielbo/flow_model.py:24-38`
 - Trigger: Using flow model on different GPU than where norm_stats were computed
 - Workaround: Explicit `.to(x.device)` calls in normalize/denormalize, but not validated at init
 
@@ -51,8 +51,8 @@
 - Recommendations: Add log redaction for API key patterns; use structured logging with sanitization
 
 **Untrusted Prompt Execution:**
-- Risk: SONAR decoder in `ecoflow/decoder.py` receives generated embeddings that may encode adversarial content
-- Files: `ecoflow/decoder.py:36-82`
+- Risk: SONAR decoder in `rielbo/decoder.py` receives generated embeddings that may encode adversarial content
+- Files: `rielbo/decoder.py:36-82`
 - Current mitigation: None; relies on downstream task model to validate semantic safety
 - Recommendations: Add prompt validation filter pre-evaluation; log decoded prompts for audit trails
 
@@ -66,38 +66,38 @@
 
 **GP Surrogate Fitting in Optimization Loop:**
 - Problem: Each BO iteration refits GP from scratch on all historical data (O(n³) cubic complexity in BO observations)
-- Files: `ecoflow/gp_surrogate.py:258-284` (SonarGPSurrogate.fit/update), `ecoflow/optimization_loop.py:270-320`
+- Files: `rielbo/gp_surrogate.py:258-284` (SonarGPSurrogate.fit/update), `rielbo/optimization_loop.py:270-320`
 - Cause: `_fit_model()` calls `fit_gpytorch_mll()` which solves Cholesky decomposition on full data
 - Improvement path: Implement incremental GP updates using Sherman-Morrison formula for rank-1 updates; cache Cholesky factorization
 
 **1024D Embedding Space Without Dimensionality Reduction:**
 - Problem: GP operates in full 1024D SONAR space, leading to slow posterior computations and high kernel memory
-- Files: `ecoflow/gp_surrogate.py:231-256` (SonarGPSurrogate), `ecoflow/guided_flow.py` (guidance generation)
+- Files: `rielbo/gp_surrogate.py:231-256` (SonarGPSurrogate), `rielbo/guided_flow.py` (guidance generation)
 - Cause: MSR initialization uses full-D lengthscale priors; no automatic dimensionality reduction
 - Improvement path: Use BAxUSGPSurrogate with reduced target_dim by default (currently must be explicitly selected); profile to find optimal subspace dimension
 
 **ODE Integration with Small Time Steps:**
-- Problem: `ecoflow/flow_model.py:46-89` uses default num_steps=50 for 1024D integration; may be slow for large batches
-- Files: `ecoflow/flow_model.py:46-89`, `ecoflow/optimization_loop.py` (guidance loop)
+- Problem: `rielbo/flow_model.py:46-89` uses default num_steps=50 for 1024D integration; may be slow for large batches
+- Files: `rielbo/flow_model.py:46-89`, `rielbo/optimization_loop.py` (guidance loop)
 - Cause: No adaptive step size control; trades accuracy for speed without auto-tuning
 - Improvement path: Implement tolerance-based adaptive Runge-Kutta; benchmark step count vs accuracy
 
 **Batch Evaluation Without Parallelization:**
 - Problem: `protegi/protegi.py` and other optimizers evaluate candidates sequentially with LLM calls
-- Files: `protegi/protegi.py:200-250`, `ecoflow/optimization_loop.py:240-320`
+- Files: `protegi/protegi.py:200-250`, `rielbo/optimization_loop.py:240-320`
 - Cause: vLLM batch size is single-example per prompt; no prompt fusion/batching
 - Improvement path: Batch multiple prompts together using vLLM native batch API; reduce I/O overhead
 
 ## Fragile Areas
 
 **Flow Model Checkpoint Loading:**
-- Files: `ecoflow/run.py:150-170` (checkpoint path resolution)
+- Files: `rielbo/run.py:150-170` (checkpoint path resolution)
 - Why fragile: Path must be absolute or relative to cwd; no validation that checkpoint exists or has correct architecture before loading
 - Safe modification: Add explicit checkpoint validation in `FlowMatchingModel.load_checkpoint()`; check expected input_dim
 - Test coverage: Only implicit via integration tests; no unit tests for checkpoint I/O
 
 **BAxUS Embedding Matrix Initialization:**
-- Files: `ecoflow/gp_surrogate.py:306-315`
+- Files: `rielbo/gp_surrogate.py:306-315`
 - Why fragile: Random sparse embedding matrix S generated with `torch.rand()` without seed control in default path; non-reproducible across runs
 - Safe modification: Always accept optional seed parameter and use `torch.manual_seed()` before matrix creation
 - Test coverage: `tests/test_gp_surrogate.py` does not test reproducibility of BAxUSGPSurrogate with fixed seed
@@ -163,7 +163,7 @@
 **Hyperparameter Search:**
 - Problem: No automated hyperparameter tuning for GP surrogate (target_dim for BAxUS, kernel priors, optimization learning rates)
 - Blocks: No principled way to tune for new tasks; defaults may be suboptimal
-- Mitigation: Validation script provided in `ecoflow/validate.py` but not integrated into pipeline
+- Mitigation: Validation script provided in `rielbo/validate.py` but not integrated into pipeline
 
 ## Test Coverage Gaps
 
@@ -175,19 +175,19 @@
 
 **Flow Model ODE Accuracy:**
 - What's not tested: Verification that ODE integration produces samples on SONAR manifold; no distribution matching tests
-- Files: `ecoflow/flow_model.py:46-89`, `ecoflow/flow_model.py:92-120` (sample method)
+- Files: `rielbo/flow_model.py:46-89`, `rielbo/flow_model.py:92-120` (sample method)
 - Risk: Flow may produce out-of-distribution embeddings causing decoder failures
-- Priority: High - affects entire EcoFlow method validity
+- Priority: High - affects entire RieLBO method validity
 
 **Decoder Robustness:**
 - What's not tested: Behavior when decoder fails (OOM, malformed embedding); no fallback handling
-- Files: `ecoflow/decoder.py:36-82`
+- Files: `rielbo/decoder.py:36-82`
 - Risk: Single failing embedding halts entire optimization batch
 - Priority: High - blocking issue for long runs
 
 **GP Update Consistency:**
 - What's not tested: That GP training data remains consistent after incremental updates; no numerical stability checks
-- Files: `ecoflow/gp_surrogate.py:269-284` (BAxUSGPSurrogate.update)
+- Files: `rielbo/gp_surrogate.py:269-284` (BAxUSGPSurrogate.update)
 - Risk: Accumulated numerical errors in iterative updates may degrade model quality
 - Priority: Medium - would manifest as poor exploration decisions after many iterations
 

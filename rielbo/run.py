@@ -11,13 +11,13 @@ This script runs the simple BO optimization loop:
 6. Repeat
 
 Example usage:
-    python -m ecoflow.run --iterations 100
+    python -m rielbo.run --iterations 100
 
 For long runs in tmux:
-    tmux new-session -d -s bo_run "python -m ecoflow.run --iterations 100 2>&1 | tee ecoflow/results/bo_$(date +%Y%m%d_%H%M%S).log; exec bash"
+    tmux new-session -d -s bo_run "python -m rielbo.run --iterations 100 2>&1 | tee ecoflow/results/bo_$(date +%Y%m%d_%H%M%S).log; exec bash"
 
 Resume from checkpoint:
-    python -m ecoflow.run --resume ecoflow/results/bo_checkpoints/checkpoint_iter50.pt --iterations 100
+    python -m rielbo.run --resume ecoflow/results/bo_checkpoints/checkpoint_iter50.pt --iterations 100
 """
 
 import argparse
@@ -43,13 +43,13 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Examples:
     # Quick test (5 iterations)
-    python -m ecoflow.run --iterations 5 --n-initial 5
+    python -m rielbo.run --iterations 5 --n-initial 5
 
     # Full run in tmux
-    tmux new-session -d -s bo_run "python -m ecoflow.run --iterations 100 2>&1 | tee ecoflow/results/bo_$(date +%Y%m%d_%H%M%S).log"
+    tmux new-session -d -s bo_run "python -m rielbo.run --iterations 100 2>&1 | tee ecoflow/results/bo_$(date +%Y%m%d_%H%M%S).log"
 
     # Resume from checkpoint
-    python -m ecoflow.run --resume ecoflow/results/bo_checkpoints/checkpoint_iter50.pt
+    python -m rielbo.run --resume ecoflow/results/bo_checkpoints/checkpoint_iter50.pt
         """,
     )
 
@@ -224,11 +224,11 @@ def main() -> None:
 
     # Lazy imports to avoid loading heavy modules during --help
     import torch
-    from ecoflow.decoder import SonarDecoder
-    from ecoflow.gp_surrogate import create_surrogate
-    from ecoflow.guided_flow import GuidedFlowSampler
-    from ecoflow.optimization_loop import BOOptimizationLoop
-    from ecoflow.validate import load_model_from_checkpoint
+    from rielbo.decoder import SonarDecoder
+    from rielbo.gp_surrogate import create_surrogate
+    from rielbo.guided_flow import GuidedFlowSampler
+    from rielbo.optimization_loop import BOOptimizationLoop
+    from rielbo.validate import load_model_from_checkpoint
     from shared.gsm8k_evaluator import GSM8KEvaluator
     from shared.llm_client import create_llm_client
 

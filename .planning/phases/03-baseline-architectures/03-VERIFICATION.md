@@ -40,7 +40,7 @@ gaps:
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
 | 1 | Simple MLP velocity network trains without NaN loss | ✓ VERIFIED | Checkpoint shows best_loss=2.008077 (finite), epoch 2 |
-| 2 | DiT velocity network (ported from ecoflow) trains without NaN loss | ✓ VERIFIED | Checkpoint shows best_loss=2.007965 (finite), epoch 2 |
+| 2 | DiT velocity network (ported from rielbo) trains without NaN loss | ✓ VERIFIED | Checkpoint shows best_loss=2.007965 (finite), epoch 2 |
 | 3 | Both architectures produce reasonable reconstruction MSE (<0.1) | ✗ FAILED | No MSE measurement exists; only training loss ~2.0 |
 | 4 | Generated embeddings decode to coherent text | ? UNCERTAIN | SUMMARY claims samples but no test script found |
 
@@ -79,7 +79,7 @@ From REQUIREMENTS.md Phase 3 requirements:
 | Requirement | Status | Blocking Issue |
 |-------------|--------|----------------|
 | ARCH-01: Implement Simple MLP baseline (~1M params) | ✓ SATISFIED | None |
-| ARCH-02: Port DiT baseline from ecoflow (~9.4M params) | ✓ SATISFIED | None |
+| ARCH-02: Port DiT baseline from rielbo (~9.4M params) | ✓ SATISFIED | None |
 
 **All Phase 3 requirements satisfied.**
 

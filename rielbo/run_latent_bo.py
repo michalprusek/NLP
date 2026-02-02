@@ -6,10 +6,10 @@ This gives better GP behavior since z-space is Gaussian.
 
 Usage:
     # Pure Latent BO (simple, fast)
-    uv run python -m ecoflow.run_latent_bo --llm-budget 50000
+    uv run python -m rielbo.run_latent_bo --llm-budget 50000
 
     # Hybrid: Latent BO + Guided Flow refinement
-    uv run python -m ecoflow.run_latent_bo --llm-budget 50000 --use-guided-refinement
+    uv run python -m rielbo.run_latent_bo --llm-budget 50000 --use-guided-refinement
 """
 
 import argparse
@@ -121,7 +121,7 @@ def main():
     # Load flow model
     logger.info(f"Loading flow model from {args.flow_checkpoint}...")
     from study.flow_matching.models import create_model
-    from ecoflow.flow_model import FlowMatchingModel
+    from rielbo.flow_model import FlowMatchingModel
 
     ckpt = torch.load(args.flow_checkpoint, map_location=device)
     flow_config = ckpt["config"]
@@ -145,7 +145,7 @@ def main():
 
     # Load SONAR decoder
     logger.info("Loading SONAR decoder...")
-    from ecoflow.decoder import SonarDecoder
+    from rielbo.decoder import SonarDecoder
     decoder = SonarDecoder(device=device)
 
     # Create evaluator
@@ -168,7 +168,7 @@ def main():
 
     if args.use_guided_refinement:
         logger.info("Setting up guided refinement components...")
-        from ecoflow.guided_flow import create_optimal_gp_for_guided_flow, GuidedFlowSampler
+        from rielbo.guided_flow import create_optimal_gp_for_guided_flow, GuidedFlowSampler
 
         gp_x = create_optimal_gp_for_guided_flow(
             input_dim=1024,
@@ -189,7 +189,7 @@ def main():
 
     # Create Latent BO
     logger.info("Creating Latent Space BO...")
-    from ecoflow.latent_bo import LatentSpaceBO
+    from rielbo.latent_bo import LatentSpaceBO
 
     latent_bo = LatentSpaceBO(
         flow_model=flow_model,

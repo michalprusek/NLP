@@ -46,7 +46,7 @@ All gaps are now **CLOSED**. Phase 3 goal is **ACHIEVED**.
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
 | 1 | Simple MLP velocity network trains without NaN loss | ✓ VERIFIED | Checkpoint: best_loss=2.008077 (finite), epoch 2 |
-| 2 | DiT velocity network (ported from ecoflow) trains without NaN loss | ✓ VERIFIED | Checkpoint: best_loss=2.007965 (finite), epoch 2 |
+| 2 | DiT velocity network (ported from rielbo) trains without NaN loss | ✓ VERIFIED | Checkpoint: best_loss=2.007965 (finite), epoch 2 |
 | 3 | Both architectures produce reasonable reconstruction MSE (<0.1) | ✓ VERIFIED (REINTERPRETED) | MSE ~1.0 is correct for ICFM generative models. MLP: 0.999±0.044, DiT: 0.998±0.042 |
 | 4 | Generated embeddings decode to coherent text | ✓ VERIFIED | All 3 checkpoints produce coherent English sentences about problem-solving (see samples below) |
 
@@ -85,7 +85,7 @@ All gaps are now **CLOSED**. Phase 3 goal is **ACHIEVED**.
 | `models/__init__.py` | `mlp.py` | import SimpleMLP | ✓ WIRED | Line 14: from study.flow_matching.models.mlp import SimpleMLP |
 | `models/__init__.py` | `dit.py` | import DiTVelocityNetwork | ✓ WIRED | Line 15: from study.flow_matching.models.dit import DiTVelocityNetwork |
 | `evaluate.py` | `models/__init__.py` | import create_model | ✓ WIRED | Line 38: from study.flow_matching.models import create_model |
-| `evaluate.py` | `ecoflow/decoder.py` | import SonarDecoder | ✓ WIRED | Line 40: from ecoflow.decoder import SonarDecoder |
+| `evaluate.py` | `rielbo/decoder.py` | import SonarDecoder | ✓ WIRED | Line 40: from rielbo.decoder import SonarDecoder |
 | `evaluate.py` | ODE integration | euler_ode_integrate() | ✓ WIRED | Used in compute_distribution_mse() and generate_and_decode() |
 
 **All critical paths verified:**
@@ -99,7 +99,7 @@ From REQUIREMENTS.md Phase 3 requirements:
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
 | ARCH-01: Implement Simple MLP baseline (~1M params) | ✓ SATISFIED | SimpleMLP: 920,064 params (target: 800K-1.2M) |
-| ARCH-02: Port DiT baseline from ecoflow (~9.4M params) | ✓ SATISFIED | DiTVelocityNetwork: 9,309,952 params (target: 9-10M) |
+| ARCH-02: Port DiT baseline from rielbo (~9.4M params) | ✓ SATISFIED | DiTVelocityNetwork: 9,309,952 params (target: 9-10M) |
 
 **All Phase 3 requirements satisfied.**
 
@@ -197,7 +197,7 @@ Both criteria are now satisfied.
 
 **Evidence of closure:**
 - generate_and_decode() function exists with pipeline: noise → ODE → denormalize → decode ✓
-- Imports SonarDecoder from ecoflow.decoder ✓
+- Imports SonarDecoder from rielbo.decoder ✓
 - Ran on all 3 checkpoints ✓
 - Produced 3+ coherent English samples per checkpoint ✓
 - All samples are problem-solving domain text ✓
@@ -229,7 +229,7 @@ None. All verification criteria can be (and were) verified programmatically or t
 
 All Phase 3 success criteria are now verified:
 1. ✓ Simple MLP velocity network trains without NaN loss
-2. ✓ DiT velocity network (ported from ecoflow) trains without NaN loss
+2. ✓ DiT velocity network (ported from rielbo) trains without NaN loss
 3. ✓ Both architectures produce valid samples (MSE ~1.0 for normalized data)
 4. ✓ Generated embeddings decode to coherent English text
 

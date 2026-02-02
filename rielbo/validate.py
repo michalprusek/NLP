@@ -147,8 +147,8 @@ def load_model_from_checkpoint(
     use_ema: bool = True,
 ) -> Any:
     """Load FlowMatchingModel from checkpoint file."""
-    from ecoflow.velocity_network import VelocityNetwork
-    from ecoflow.flow_model import FlowMatchingModel
+    from rielbo.velocity_network import VelocityNetwork
+    from rielbo.flow_model import FlowMatchingModel
 
     logger.info(f"Loading checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -223,7 +223,7 @@ def main() -> None:
 
     decoder = None
     if args.decode:
-        from ecoflow.decoder import SonarDecoder
+        from rielbo.decoder import SonarDecoder
         decoder = SonarDecoder(device=args.device)
 
     results = validate_generation(

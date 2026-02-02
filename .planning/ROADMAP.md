@@ -64,14 +64,14 @@ Plans:
 **Requirements**: ARCH-01, ARCH-02
 **Success Criteria** (what must be TRUE):
   1. Simple MLP velocity network trains without NaN loss
-  2. DiT velocity network (ported from ecoflow) trains without NaN loss
+  2. DiT velocity network (ported from rielbo) trains without NaN loss
   3. Both architectures produce reasonable reconstruction MSE (<0.1)
   4. Generated embeddings decode to coherent text
 **Plans**: 3 plans
 
 Plans:
 - [x] 03-01-PLAN.md - Simple MLP implementation with model factory
-- [x] 03-02-PLAN.md - DiT port from ecoflow and verification
+- [x] 03-02-PLAN.md - DiT port from rielbo and verification
 - [x] 03-03-PLAN.md - Reconstruction MSE and text generation verification (gap closure)
 
 ### Phase 4: Flow Matching Baselines
@@ -199,7 +199,7 @@ Plans:
   1. Comprehensive results table with 50+ configurations exists
   2. t-SNE/UMAP visualizations of generated embeddings created
   3. Training curves comparison figure exists
-  4. Best model identified and ecoflow replacement prepared
+  4. Best model identified and rielbo replacement prepared
   5. All figures and tables are publication-ready
 **Plans**: TBD
 

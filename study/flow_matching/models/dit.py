@@ -1,7 +1,7 @@
 """DiT-style velocity network for flow matching with AdaLN-Zero conditioning.
 
 This module provides DiTVelocityNetwork, a Diffusion Transformer (DiT) velocity network
-ported from ecoflow/velocity_network.py with scaled-down configuration for the baseline
+ported from rielbo/velocity_network.py with scaled-down configuration for the baseline
 architecture study.
 
 Key fix (from code review): The 1024-dim embedding is now chunked into 16 tokens of 64 dims
@@ -196,7 +196,7 @@ class AdaLNBlock(nn.Module):
 class DiTVelocityNetwork(nn.Module):
     """DiT-style velocity network for flow matching with AdaLN-Zero time conditioning.
 
-    Ported from ecoflow/velocity_network.py with scaled-down configuration for baseline study.
+    Ported from rielbo/velocity_network.py with scaled-down configuration for baseline study.
 
     Architecture:
     - Chunk 1024-dim embedding into 16 tokens of 64 dims each (enables meaningful attention)

@@ -10,7 +10,7 @@ This phase implements two flow matching training methods: I-CFM (Independent Cou
 
 The existing `study/flow_matching/trainer.py` already implements I-CFM correctly with random noise-data pairing. OT-CFM requires integrating the `torchcfm` library's `ExactOptimalTransportConditionalFlowMatcher` or `OTPlanSampler` to compute optimal transport couplings before computing the velocity matching loss.
 
-CFG-Zero* is already implemented in `ecoflow/guided_flow.py` with 4% zero-guidance at initial steps. This schedule should be integrated into the evaluation pipeline for guided sampling.
+CFG-Zero* is already implemented in `rielbo/guided_flow.py` with 4% zero-guidance at initial steps. This schedule should be integrated into the evaluation pipeline for guided sampling.
 
 **Primary recommendation:** Use `torchcfm.ExactOptimalTransportConditionalFlowMatcher` for OT-CFM training with `normalize_cost=True` and higher regularization (0.5) for numerical stability in 1024D SONAR space. Measure path straightness using per-sample trajectory variance.
 
@@ -125,7 +125,7 @@ for batch_x1 in dataloader:
 **When to use:** Any guided sampling with flow matching
 **Example:**
 ```python
-# Source: CFG-Zero* paper (arXiv:2503.18886), existing ecoflow/guided_flow.py
+# Source: CFG-Zero* paper (arXiv:2503.18886), existing rielbo/guided_flow.py
 def get_guidance_lambda(step: int, total_steps: int,
                         guidance_strength: float,
                         zero_init_fraction: float = 0.04) -> float:
@@ -304,7 +304,7 @@ def train_step_otcfm(model, x1, optimizer, ot_fm):
 
 ### CFG-Zero* Guided Sampling
 ```python
-# Source: Existing ecoflow/guided_flow.py (verified)
+# Source: Existing rielbo/guided_flow.py (verified)
 @torch.no_grad()
 def sample_with_cfg_zero_star(
     model,
@@ -421,7 +421,7 @@ def evaluate_path_straightness(
 ### Primary (HIGH confidence)
 - torchcfm library: `ExactOptimalTransportConditionalFlowMatcher`, `OTPlanSampler` classes - verified working
 - [POT documentation (Context7)](/pythonot/pot) - Sinkhorn algorithm solvers
-- Existing `ecoflow/guided_flow.py` - CFG-Zero* implementation verified
+- Existing `rielbo/guided_flow.py` - CFG-Zero* implementation verified
 - Existing `study/flow_matching/trainer.py` - I-CFM implementation verified
 
 ### Secondary (MEDIUM confidence)

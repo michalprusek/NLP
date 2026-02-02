@@ -14,7 +14,7 @@ Generate a 10K verbosed sampling dataset with SONAR embeddings, create nested tr
 ## Implementation Decisions
 
 ### Dataset Generation
-- Generate fresh 10K prompts using the VS (verbosed sampling) pipeline from ecoflow
+- Generate fresh 10K prompts using the VS (verbosed sampling) pipeline from rielbo
 - Each sample includes: prompt text, SONAR embedding (1024D), and metadata (source, timestamp)
 - Store as PyTorch tensors with accompanying JSON metadata
 

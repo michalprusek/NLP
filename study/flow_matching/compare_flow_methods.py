@@ -86,7 +86,7 @@ def compare_methods(
     decoder = None
     if generate_text:
         try:
-            from ecoflow.decoder import SonarDecoder
+            from rielbo.decoder import SonarDecoder
             decoder = SonarDecoder(device=device)
         except ImportError as e:
             logger.error(f"SonarDecoder unavailable - missing dependencies: {e}")

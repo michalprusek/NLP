@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Comprehensive flow matching architecture study for guided prompt generation in SONAR embedding space. This study systematically evaluates flow matching methods (Rectified Flow, OT-CFM, Stochastic Interpolants), velocity network backbones (DiT, U-Net MLP, Simple MLP, Mamba), data augmentation strategies, and dataset scaling to find the optimal configuration for GP-guided generation. Results will replace the existing ecoflow implementation and form the core contribution of a NeurIPS paper.
+Comprehensive flow matching architecture study for guided prompt generation in SONAR embedding space. This study systematically evaluates flow matching methods (Rectified Flow, OT-CFM, Stochastic Interpolants), velocity network backbones (DiT, U-Net MLP, Simple MLP, Mamba), data augmentation strategies, and dataset scaling to find the optimal configuration for GP-guided generation. Results will replace the existing rielbo implementation and form the core contribution of a NeurIPS paper.
 
 ## Core Value
 
@@ -20,7 +20,7 @@ Find the best flow matching architecture that maximizes both embedding reconstru
 - [ ] Implement Rectified Flow with linear interpolation paths
 - [ ] Implement Optimal Transport CFM with mini-batch OT coupling
 - [ ] Implement Stochastic Interpolants with learnable interpolation
-- [ ] Implement DiT velocity network as baseline (port from ecoflow)
+- [ ] Implement DiT velocity network as baseline (port from rielbo)
 - [ ] Implement U-Net style MLP velocity network with skip connections
 - [ ] Implement Simple MLP velocity network as ablation baseline
 - [ ] Implement Mamba/SSM velocity network for sequence modeling
@@ -33,7 +33,7 @@ Find the best flow matching architecture that maximizes both embedding reconstru
 - [ ] Evaluation metrics: guidance responsiveness (GP-guided sampling quality)
 - [ ] Training infrastructure: GPU 1 (A5000), checkpointing, logging
 - [ ] Experiment tracking: comprehensive ablation with 50+ configurations
-- [ ] Final analysis: select best configuration, replace ecoflow
+- [ ] Final analysis: select best configuration, replace rielbo
 - [ ] Paper-ready visualizations and tables
 
 ### Out of Scope
@@ -51,10 +51,10 @@ Find the best flow matching architecture that maximizes both embedding reconstru
 - CRITICAL: Unnormalized embeddings required for SONAR decoder compatibility
 
 **Existing Implementation:**
-- `ecoflow/velocity_network.py`: DiT-style VelocityNetwork with AdaLN-Zero
-- `ecoflow/flow_model.py`: FlowMatchingModel with Euler/Heun ODE integration
-- `ecoflow/guided_flow.py`: GuidedFlowSampler with GP-UCB guidance
-- This study aims to REPLACE ecoflow with better architecture
+- `rielbo/velocity_network.py`: DiT-style VelocityNetwork with AdaLN-Zero
+- `rielbo/flow_model.py`: FlowMatchingModel with Euler/Heun ODE integration
+- `rielbo/guided_flow.py`: GuidedFlowSampler with GP-UCB guidance
+- This study aims to REPLACE rielbo with better architecture
 
 **Hardware:**
 - Training: GPU 1 (NVIDIA A5000, 24GB VRAM)
@@ -74,7 +74,7 @@ Find the best flow matching architecture that maximizes both embedding reconstru
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Study in study/flow_matching/ | Keep separate from production ecoflow | — Pending |
+| Study in study/flow_matching/ | Keep separate from production rielbo | — Pending |
 | Train on VS dataset | Higher quality prompts than random sampling | — Pending |
 | Test 1K/5K/10K samples | Dataset scaling ablation for paper | — Pending |
 | GPU 1 (A5000) only | Available hardware, sufficient for study | — Pending |

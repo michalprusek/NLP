@@ -41,7 +41,7 @@ For flow matching in high-dimensional embedding spaces (1024D SONAR), the recomm
 | Custom impl | N/A | Velocity network + ODE sampling | HIGH |
 | torchcfm | 1.0.7 (reference) | OT-CFM implementation reference | MEDIUM |
 
-**Rationale:** Your existing EcoFlow codebase already has a well-structured implementation:
+**Rationale:** Your existing RieLBO codebase already has a well-structured implementation:
 - `velocity_network.py`: DiT-style AdaLN-Zero architecture
 - `flow_model.py`: Custom Euler/Heun integration
 
@@ -160,7 +160,7 @@ torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 | **rectified-flow-pytorch** (lucidrains) | Clean API, recent research integrated | Image-focused, less embedding support | Not recommended |
 | **Custom implementation** | Full control, minimal dependencies | Requires understanding FM theory | **Recommended** |
 
-**Your existing EcoFlow implementation is well-structured.** The DiT-style AdaLN-Zero architecture in `velocity_network.py` follows best practices from Stable Diffusion 3 and SiT papers.
+**Your existing RieLBO implementation is well-structured.** The DiT-style AdaLN-Zero architecture in `velocity_network.py` follows best practices from Stable Diffusion 3 and SiT papers.
 
 ### OT-CFM vs Standard CFM
 

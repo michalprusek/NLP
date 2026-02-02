@@ -47,7 +47,7 @@ from study.flow_matching.models import create_model
 from study.flow_matching.solvers import get_solver, list_solvers
 from study.data import DEFAULT_STATS_PATH
 from study.data.normalize import denormalize, load_stats
-from ecoflow.decoder import SonarDecoder
+from rielbo.decoder import SonarDecoder
 
 logger = logging.getLogger(__name__)
 

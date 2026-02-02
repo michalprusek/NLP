@@ -31,10 +31,10 @@ echo ""
 
 # Start BO
 echo "Starting EcoFlow BO with Riemannian guidance..."
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/home/prusek/NLP uv run python -m rielbo.run_bo_full \
     --warm-start-k 10 \
     --gp-kernel arccosine \
     --llm-budget 50000 \
     --eval-size 1319 \
     --model qwen \
-    2>&1 | tee ecoflow/results/bo_unet_riemannian_$(date +%Y%m%d_%H%M%S).log
+    2>&1 | tee rielbo/results/bo_unet_riemannian_$(date +%Y%m%d_%H%M%S).log

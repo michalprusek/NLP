@@ -27,10 +27,10 @@ from botorch.optim import optimize_acqf
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
-from ecoflow.decoder import SonarDecoder
-from ecoflow.flow_model import FlowMatchingModel
-from ecoflow.guided_flow import GuidedFlowSampler
-from ecoflow.gp_surrogate import SonarGPSurrogate
+from rielbo.decoder import SonarDecoder
+from rielbo.flow_model import FlowMatchingModel
+from rielbo.guided_flow import GuidedFlowSampler
+from rielbo.gp_surrogate import SonarGPSurrogate
 from shared.gsm8k_evaluator import GSM8KEvaluator
 from shared.llm_client import LLMClient
 

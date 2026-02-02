@@ -29,8 +29,8 @@ class GuidanceSchedule(Enum):
     ADAPTIVE = "adaptive"   # Uncertainty-weighted (more guidance where GP is confident)
     RIEMANNIAN = "riemannian"  # Full Riemannian: spherical projection + cutoff + flow-relative scaling
 
-from ecoflow.flow_model import FlowMatchingModel
-from ecoflow.gp_surrogate import SonarGPSurrogate
+from rielbo.flow_model import FlowMatchingModel
+from rielbo.gp_surrogate import SonarGPSurrogate
 
 # Import new GP surrogates if available
 import logging as _logging

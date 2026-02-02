@@ -15,7 +15,7 @@ import torch
 from torch import Tensor
 from torch.nn.functional import cosine_similarity
 
-from ecoflow.decoder import SonarDecoder
+from rielbo.decoder import SonarDecoder
 from study.data import DATASETS_DIR, DEFAULT_STATS_PATH, get_split_path
 from study.data.normalize import denormalize, load_stats
 

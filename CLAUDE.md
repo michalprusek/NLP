@@ -42,7 +42,7 @@ This repository contains six prompt optimization methods:
 1. **OPRO** (`opro/`) - Optimization by PROmpting for meta-optimization
 2. **ProTeGi** (`protegi/`) - Prompt Optimization with Textual Gradients
 3. **GEPA** (`gepa_gsm8k/`) - Genetic-Pareto Prompt Adaptation (GSM8K-specific)
-4. **EcoFlow** (`ecoflow/`) - Guided flow matching in SONAR embedding space
+4. **RieLBO** (`rielbo/`) - Guided flow matching in SONAR embedding space
 5. **NFBO** (`nfbo_gsm8k/`) - Normalizing Flow Bayesian Optimization (GSM8K-specific)
 6. **InstructZero** (`instructzero/`, `instructzero_gsm8k/`) - Soft prompt optimization with GP
 
@@ -65,7 +65,7 @@ NLP/
 ├── gepa_gsm8k/              # GEPA for GSM8K task
 │   └── run.py               # CLI entry point with integrated optimizer
 │
-├── ecoflow/                 # Flow matching + BO
+├── rielbo/                 # Flow matching + BO
 │   ├── velocity_network.py  # DiT-style velocity network
 │   ├── flow_model.py        # FlowMatchingModel
 │   ├── guided_flow.py       # GuidedFlowSampler with CFG-Zero*
@@ -146,16 +146,16 @@ tmux new-session -d -s gepa_run \
   2>&1 | tee gepa_gsm8k/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
-### EcoFlow
+### RieLBO
 
 ```bash
 # Train flow model
-uv run python -m ecoflow.train_flow \
+uv run python -m rielbo.train_flow \
   --data datasets/sonar_embeddings.pt \
   --epochs 50 --batch-size 1024
 
 # Run BO optimization
-uv run python -m ecoflow.run \
+uv run python -m rielbo.run \
   --flow-checkpoint path/to/flow.pt \
   --iterations 100
 ```
@@ -226,7 +226,7 @@ A:
 | **OPRO** | Meta-optimization | Simple, interpretable | Requires many LLM calls |
 | **ProTeGi** | Gradient-based | Directed search, beam search | Gradient quality varies |
 | **GEPA** | Evolutionary | Pareto diversity, reflection | Complex, slower convergence |
-| **EcoFlow** | Flow + BO | Continuous space, GP-guided | Requires pretrained flow |
+| **RieLBO** | Flow + BO | Continuous space, GP-guided | Requires pretrained flow |
 | **NFBO** | Normalizing Flow | Adaptive density modeling | Training overhead per step |
 | **InstructZero** | GP + Soft Prompts | Sample-efficient, continuous | Requires soft prompt support |
 
@@ -256,7 +256,7 @@ A:
 - `--pareto-size`: Max Pareto front size (default: 10)
 - `--mutations`: Mutations per iteration (default: 4)
 
-### EcoFlow
+### RieLBO
 - `--guidance-strength`: LCB guidance λ (default: 1.0)
 - `--alpha`: LCB exploration weight (default: 1.0)
 - `--n-candidates`: Candidates to generate (default: 64)
@@ -296,7 +296,7 @@ A:
 ### Best Checkpoints
 
 ```
-# RECOMMENDED for EcoFlow BO (best quality):
+# RECOMMENDED for RieLBO BO (best quality):
 study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt  # L2-r=0.15, coherent
 
 # ALTERNATIVE (spherical geometry):
@@ -326,7 +326,7 @@ Do BO in flow's noise space z ~ N(0,I) instead of embedding space x:
 
 ```bash
 # Run Latent Space BO
-uv run python -m ecoflow.run_latent_bo \
+uv run python -m rielbo.run_latent_bo \
   --flow-checkpoint study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt \
   --llm-budget 50000 --eval-size 1319
 ```

@@ -5,7 +5,7 @@ from typing import Dict, Optional
 import torch
 import torch.nn as nn
 
-from ecoflow.velocity_network import VelocityNetwork
+from rielbo.velocity_network import VelocityNetwork
 
 
 class FlowMatchingModel(nn.Module):

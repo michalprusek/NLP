@@ -29,10 +29,10 @@ from typing import Any, Optional
 
 import torch
 
-from ecoflow.decoder import SonarDecoder
-from ecoflow.flow_model import FlowMatchingModel
-from ecoflow.gp_surrogate import SonarGPSurrogate
-from ecoflow.guided_flow import GuidedFlowSampler
+from rielbo.decoder import SonarDecoder
+from rielbo.flow_model import FlowMatchingModel
+from rielbo.gp_surrogate import SonarGPSurrogate
+from rielbo.guided_flow import GuidedFlowSampler
 from shared.gsm8k_evaluator import GSM8KEvaluator
 from shared.llm_client import LLMClient
 

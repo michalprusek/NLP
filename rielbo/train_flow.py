@@ -20,8 +20,8 @@ from torchcfm.conditional_flow_matching import (
     ExactOptimalTransportConditionalFlowMatcher,
 )
 
-from ecoflow.velocity_network import VelocityNetwork
-from ecoflow.data import get_sonar_dataloader
+from rielbo.velocity_network import VelocityNetwork
+from rielbo.data import get_sonar_dataloader
 
 logging.basicConfig(
     level=logging.INFO,

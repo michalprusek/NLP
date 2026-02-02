@@ -34,7 +34,7 @@
   - SDK/Client: `sonar-space>=0.5.0`, `sentence-transformers>=2.3.0`
   - Auth: None (HuggingFace token)
   - Models: text_sonar_basic_encoder (embedding), text_sonar_basic_decoder (decoding)
-  - Implementation: `ecoflow/decoder.py::SonarDecoder`, `ecoflow/data.py`
+  - Implementation: `rielbo/decoder.py::SonarDecoder`, `rielbo/data.py`
   - Pipeline: `sonar.inference_pipelines.text.EmbeddingToTextModelPipeline`
 
 ## Data Storage
@@ -49,11 +49,11 @@
 **Local File Storage:**
 - **PyTorch Checkpoints** - Model weights and embeddings
   - Location: `datasets/sonar_embeddings.pt` (1.5M pre-computed embeddings)
-  - Location: `ecoflow/results/` (flow model checkpoints)
+  - Location: `rielbo/results/` (flow model checkpoints)
   - Format: PyTorch `.pt` (torch.save/load)
 
 - **Results Output** - Optimization trajectories and prompts
-  - Location: `{opro,protegi,gepa,ecoflow,nfbo}/results/`
+  - Location: `{opro,protegi,gepa,rielbo,nfbo}/results/`
   - Format: JSON files with scored prompts, timestamps
 
 **Caching:**
@@ -81,7 +81,7 @@
 - Errors logged to stdout/stderr via print statements and logging module
 
 **Logging:**
-- **Built-in Python logging** - Used in `ecoflow/train_flow.py`
+- **Built-in Python logging** - Used in `rielbo/train_flow.py`
   - Format: `%(asctime)s - %(levelname)s - %(message)s`
   - Level: INFO by default
 - **stdout/print statements** - Throughout `shared/llm_client.py` and optimization modules

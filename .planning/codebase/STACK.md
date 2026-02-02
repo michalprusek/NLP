@@ -72,10 +72,10 @@
 - anthropic 0.71.0+ - Claude API client for claude-haiku and claude-sonnet backends
 
 **Optimization-Specific:**
-- botorch 0.14.0+ - Provides SingleTaskGP, Matern kernels for EcoFlow GP surrogate
+- botorch 0.14.0+ - Provides SingleTaskGP, Matern kernels for RieLBO GP surrogate
 - gpytorch 1.14.2+ - Underlying GP implementation used by botorch
-- torchcfm 1.0.4+ - ConditionalFlowMatcher for OT-CFM training in EcoFlow
-- uncertainty-toolbox 0.1.1+ - Uncertainty quantification tools for EcoFlow
+- torchcfm 1.0.4+ - ConditionalFlowMatcher for OT-CFM training in RieLBO
+- uncertainty-toolbox 0.1.1+ - Uncertainty quantification tools for RieLBO
 
 **Embedding & Decoding:**
 - sonar-space 0.5.0+ - SONAR embedding utilities and text_sonar_basic_decoder

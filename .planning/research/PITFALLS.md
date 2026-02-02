@@ -35,7 +35,7 @@ Flow matching training involves numerous subtle failure modes that can undermine
 
 **Phase mapping:** Phase 1 (Architecture) - Must establish normalization/denormalization pipeline from the start
 
-**Confidence:** HIGH (verified in existing ecoflow/flow_model.py lines 24-38)
+**Confidence:** HIGH (verified in existing rielbo/flow_model.py lines 24-38)
 
 ---
 
@@ -546,7 +546,7 @@ Flow matching training involves numerous subtle failure modes that can undermine
 ## Sources Summary
 
 ### High-Confidence Sources (Context7 / Official Docs)
-- Existing ecoflow implementation: velocity_network.py, flow_model.py, guided_flow.py, gp_surrogate.py
+- Existing rielbo implementation: velocity_network.py, flow_model.py, guided_flow.py, gp_surrogate.py
 - [torchdiffeq ODE solvers](https://github.com/rtqichen/torchdiffeq)
 - [CFG-Zero* paper](https://arxiv.org/abs/2503.18886)
 
