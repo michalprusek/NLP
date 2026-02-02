@@ -222,12 +222,12 @@ class GuidedFlowSampler:
         return grad * scale
 
     def _denormalize(self, z: torch.Tensor) -> torch.Tensor:
-        """Convert from flow space to SONAR space."""
-        if self.norm_stats is None:
-            return z
-        mean = self.norm_stats["mean"].to(z.device)
-        std = self.norm_stats["std"].to(z.device)
-        return z * std + mean
+        """Convert from flow space to SONAR space.
+
+        Delegates to flow_model.denormalize() which handles both regular and
+        spherical flows correctly.
+        """
+        return self.flow_model.denormalize(z)
 
     def _compute_ucb_gradient(
         self, z_sonar: torch.Tensor, scale_to_flow_space: bool = True
@@ -429,14 +429,11 @@ class GuidedFlowSampler:
         z = self._integrate_ode(z, num_steps, method, with_guidance=True,
                                 return_trajectory=return_trajectory)
 
-        # Denormalize to SONAR space
-        # Note: SONAR embeddings have norm ~0.2, NOT unit norm
-        # Do NOT renormalize here - it would break the decoder
+        # Denormalize to SONAR space using flow_model.denormalize()
+        # This handles both regular flows (mean/std) and spherical flows (scale to SONAR norm)
         if return_trajectory:
-            if self.norm_stats is not None:
-                mean = self.norm_stats["mean"].to(device)
-                std = self.norm_stats["std"].to(device)
-                z = z * std + mean
+            # Denormalize each timestep
+            z = torch.stack([self._denormalize(z_t) for z_t in z], dim=0)
         else:
             z = self._denormalize(z)
 

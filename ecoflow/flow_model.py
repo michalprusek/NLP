@@ -11,15 +11,28 @@ from ecoflow.velocity_network import VelocityNetwork
 class FlowMatchingModel(nn.Module):
     """Flow matching wrapper with Euler/Heun ODE integration."""
 
+    # Mean SONAR embedding norm (for spherical flow denormalization)
+    SONAR_EMBEDDING_NORM = 0.3185
+
     def __init__(
         self,
         velocity_net: VelocityNetwork,
         norm_stats: Optional[Dict[str, torch.Tensor]] = None,
+        is_spherical: bool = False,
     ):
+        """
+        Args:
+            velocity_net: Velocity network.
+            norm_stats: Normalization statistics {'mean': [D], 'std': [D]}.
+            is_spherical: If True, use spherical denormalization (scale to SONAR norm)
+                         instead of mean/std denormalization. Required for spherical
+                         flow models (spherical, spherical-ot).
+        """
         super().__init__()
         self.velocity_net = velocity_net
         self.input_dim = velocity_net.input_dim
         self.norm_stats = norm_stats
+        self.is_spherical = is_spherical
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize samples to training scale."""
@@ -30,7 +43,17 @@ class FlowMatchingModel(nn.Module):
         return (x - mean) / std
 
     def denormalize(self, x: torch.Tensor) -> torch.Tensor:
-        """Denormalize samples back to original scale."""
+        """Denormalize samples back to original scale.
+
+        For spherical flows: normalizes to unit sphere then scales to SONAR norm.
+        For regular flows: applies x * std + mean transform.
+        """
+        if self.is_spherical:
+            # Spherical flow outputs on unit sphere - scale to SONAR embedding norm
+            import torch.nn.functional as F
+            x_unit = F.normalize(x, p=2, dim=-1)
+            return x_unit * self.SONAR_EMBEDDING_NORM
+
         if self.norm_stats is None:
             return x
         mean = self.norm_stats["mean"].to(x.device)
@@ -59,6 +82,8 @@ class FlowMatchingModel(nn.Module):
             num_steps: Number of integration steps
             forward: True for t=0->1 (sampling), False for t=1->0 (encoding)
         """
+        import torch.nn.functional as F
+
         dt = 1.0 / num_steps
         device = z.device
 
@@ -81,10 +106,17 @@ class FlowMatchingModel(nn.Module):
 
             if method == "heun":
                 z_pred = z + direction * v1 * dt
+                # For spherical flows, project predictor back to sphere
+                if self.is_spherical:
+                    z_pred = F.normalize(z_pred, p=2, dim=-1)
                 v2 = self._ode_func(t_next, z_pred)
                 z = z + direction * 0.5 * (v1 + v2) * dt
             else:
                 z = z + direction * v1 * dt
+
+            # For spherical flows, project back to unit sphere after each step
+            if self.is_spherical:
+                z = F.normalize(z, p=2, dim=-1)
 
         return z
 
@@ -107,8 +139,15 @@ class FlowMatchingModel(nn.Module):
             num_steps: Number of integration steps
             denormalize: Convert samples to original scale if norm_stats exist
         """
+        import torch.nn.functional as F
+
         self.velocity_net.eval()
         x = torch.randn(n_samples, self.input_dim, device=device)
+
+        # For spherical flows, start on unit sphere (matches SLERP training)
+        if self.is_spherical:
+            x = F.normalize(x, p=2, dim=-1)
+
         x = self._integrate(x, method, num_steps, forward=True)
 
         if denormalize:

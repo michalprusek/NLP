@@ -276,41 +276,88 @@ A:
 
 ---
 
-## Ablation Study Results
+## Ablation Study Results (2026-02-02)
 
-### Best Flow Model
-- **U-Net + OT-CFM + 10K** - Val loss ~1.07 (after 1000 epochs)
-- Checkpoint: `study/checkpoints/unet-otcfm-10k-none/best.pt`
-- Continue training: `./scripts/continue_unet_training.sh 500`
+### Flow Model Quality Comparison
+
+| Model | L2-r ↓ | Cosine to Test ↑ | Cosine to Good ↑ | Text Quality |
+|-------|--------|------------------|------------------|--------------|
+| **U-Net + OT-CFM + mixup+noise** | **0.15** | **0.59** | **0.28** | Coherent |
+| DiT + OT-CFM + mixup+noise | 0.15 | 0.58 | 0.26 | Coherent |
+| U-Net + Spherical-OT (FIXED) | 0.27 | 0.51 | 0.25 | Coherent |
+| ~~U-Net + Spherical-OT (OLD)~~ | 0.31 | 0.03 | 0.08 | Broken |
+
+**WINNER: U-Net + OT-CFM** - Best round-trip fidelity and cosine similarity.
+
+**Spherical-OT FIXED**: Now produces coherent prompts after training with `--no-normalize` flag.
+- Previous bug: double normalization (mean/std then unit sphere) lost semantic direction
+- Fix: train spherical flows on raw SONAR embeddings (no z-score normalization)
+
+### Best Checkpoints
+
+```
+# RECOMMENDED for EcoFlow BO (best quality):
+study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt  # L2-r=0.15, coherent
+
+# ALTERNATIVE (spherical geometry):
+study/checkpoints/unet-spherical-ot-10k-none/best.pt  # L2-r=0.27, fixed
+```
+
+### Spherical Flow Training
+
+For spherical flows (spherical, spherical-ot), use `--no-normalize` to skip z-score normalization:
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run python -m study.flow_matching.train \
+  --arch unet --flow spherical-ot --dataset 10k --aug none \
+  --group spherical-fixed --no-normalize --epochs 2000
+```
 
 ### Best GP Configuration
 - **RiemannianGP + arccosine kernel** - Spearman=0.44, ECE=0.012
-- ArcCosine kernel has NO lengthscale parameter - handle in `get_hyperparameters()`
-- Kernel normalizes inputs internally: `k(x,y) = 1 - arccos(x̂·ŷ)/π`
+- ArcCosine kernel has NO lengthscale parameter
+- Kernel normalizes inputs: `k(x,y) = 1 - arccos(x̂·ŷ)/π`
 
-### Riemannian Guided Flow (best for ArcCosine GP)
-- **Spherical projection**: Project gradient onto tangent plane (don't change norm)
-- **Flow-relative scaling**: Gradient ≤ 50% of flow velocity magnitude
-- **Cutoff at 80%**: Stop guidance, let flow smooth last 20%
-- **Uncertainty weighting**: Less guidance where GP is uncertain
+### Latent Space BO
+
+Do BO in flow's noise space z ~ N(0,I) instead of embedding space x:
+- GP works better in Gaussian z-space
+- Only invert embeddings once at initialization
+- During BO: GP proposes z → flow(z) → x → decode → evaluate
 
 ```bash
-# Run EcoFlow BO with best configuration (U-Net + arccosine GP + Riemannian guidance)
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/home/prusek/NLP uv run python -m ecoflow.run_bo_full \
-  --gp-kernel arccosine --warm-start-k 10 --llm-budget 50000 --eval-size 1319
+# Run Latent Space BO
+uv run python -m ecoflow.run_latent_bo \
+  --flow-checkpoint study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt \
+  --llm-budget 50000 --eval-size 1319
 ```
+
+**Results (2026-02-02):**
+
+| Flow Model | Best Score | Final z_norm | Prompt Quality |
+|------------|------------|--------------|----------------|
+| Euclidean OT-CFM | 0.8355 | 368 | Degraded to gibberish |
+| Spherical-OT | 0.8355 | 3.86 | Stayed coherent |
+
+**Key Findings:**
+- Neither improved over warm start (top 10/100 prompts)
+- Spherical flow keeps z_norm bounded, preserving coherence
+- Euclidean z_norm exploded, causing incoherent prompts
+
+**Improvements needed:**
+- Constrain z_norm during acquisition optimization
+- Better GP initialization for z-space
+- Consider UCB bounds or Thompson sampling
 
 ### Flow Matching Methods
 
-| Method | Coupling | Best For |
-|--------|----------|----------|
-| `icfm` | Random pairing | Baseline |
-| `otcfm` | Optimal Transport | Straight paths, best overall |
-| `spherical` | SLERP interpolation | Normalized embeddings |
-| `spherical-ot` | OT + SLERP | Best for hypersphere data |
-| `si-gvp` | Stochastic Interpolant | Alternative schedule |
+| Method | Coupling | L2-r | Status |
+|--------|----------|------|--------|
+| `otcfm` | Optimal Transport | 0.15 | **BEST** |
+| `icfm` | Random pairing | 0.18 | Good |
+| `si-gvp` | Stochastic Interpolant | 0.17 | Good |
+| `spherical-ot` | OT + SLERP | 0.31 | BROKEN |
 
-**Spherical Flow**: Uses geodesic (great circle) paths instead of Euclidean linear interpolation. Ideal for SONAR embeddings which lie on unit hypersphere.
+**Note on Spherical Flow**: While mathematically elegant (geodesic paths on hypersphere), current implementation produces samples in wrong region of the sphere. Needs investigation.
 
 ---
 

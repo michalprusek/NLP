@@ -231,6 +231,13 @@ def parse_args() -> argparse.Namespace:
         help="Enable automatic mixed precision (FP16) training for faster computation",
     )
 
+    # Spherical flow options
+    parser.add_argument(
+        "--no-normalize",
+        action="store_true",
+        help="Disable mean/std normalization. Use for spherical flows that operate on raw embeddings.",
+    )
+
     return parser.parse_args()
 
 
@@ -291,10 +298,23 @@ def main() -> None:
             logger.info(f"Will resume from: {resume_path}")
 
         # Load datasets
+        # For spherical flows, use raw embeddings (no mean/std normalization)
+        use_normalization = not args.no_normalize
+        if args.flow.startswith("spherical") and not args.no_normalize:
+            logger.warning(
+                "Spherical flow detected but --no-normalize not set. "
+                "Consider using --no-normalize for better semantic coherence."
+            )
+
+        # If not using normalization, clear stats_path so checkpoint won't save stats
+        if not use_normalization:
+            logger.info("Normalization disabled - checkpoint will not include normalization_stats")
+            config.stats_path = None
+
         train_ds, val_ds, test_ds = load_all_splits(
             size=args.dataset,
-            stats_path=config.stats_path,
-            return_normalized=True,
+            stats_path=config.stats_path if use_normalization else None,
+            return_normalized=use_normalization,
         )
         logger.info(
             f"Loaded datasets: train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}"
