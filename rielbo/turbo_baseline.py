@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import os
+import random
 from datetime import datetime
 from typing import Optional
 
@@ -160,7 +161,7 @@ class TuRBOBaseline:
                     valid_smiles.append(smi)
                     self.smiles_observed.add(smi)
             except Exception as e:
-                logger.debug(f"Failed to encode {smi}: {e}")
+                logger.info(f"Failed to encode {smi[:50]}...: {e}")
                 continue
 
         if not z_list:
@@ -281,7 +282,7 @@ class TuRBOBaseline:
         try:
             smiles = self.codec.decode(z_opt)[0]
         except Exception as e:
-            logger.debug(f"Decode failed: {e}")
+            logger.info(f"Decode failed: {e}")
             return None
 
         # Skip if already evaluated
@@ -357,6 +358,7 @@ def main():
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # Load components
     logger.info("Loading codec and oracle...")

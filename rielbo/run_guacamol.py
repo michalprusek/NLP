@@ -90,8 +90,9 @@ class SphericalGP:
             mll = ExactMarginalLogLikelihood(self.model.likelihood, self.model)
             fit_gpytorch_mll(mll)
             self.model.eval()
-        except Exception as e:
-            logger.warning(f"GP fitting failed: {e}. Using fallback.")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues (Cholesky, singular matrix) - use fallback
+            logger.warning(f"GP fitting failed (numerical): {e}. Using fallback.")
             self.model = SingleTaskGP(
                 self.train_X, self.train_Y,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -100,6 +101,9 @@ class SphericalGP:
             ).to(self.device)
             self.model.likelihood.noise = 0.1
             self.model.eval()
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
     def update(self, X_new: torch.Tensor, Y_new: torch.Tensor) -> None:
         """Update GP with new observations."""
@@ -149,10 +153,14 @@ class SphericalGP:
             # Project to unit sphere
             u_opt = F.normalize(u_opt.float(), p=2, dim=-1)
             return u_opt
-        except Exception as e:
-            logger.warning(f"Acquisition optimization failed: {e}. Using random.")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues - use random fallback
+            logger.warning(f"Acquisition optimization failed (numerical): {e}. Using random.")
             z = torch.randn(1, self.input_dim, device=self.device)
             return F.normalize(z, p=2, dim=-1)
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
 
 class RieLBOSpherical:
@@ -230,7 +238,7 @@ class RieLBOSpherical:
         from rielbo.velocity_network import VelocityNetwork
 
         logger.info(f"Loading spherical flow from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         # Check for stereographic projection
         self.is_stereographic = checkpoint.get("is_stereographic", False)

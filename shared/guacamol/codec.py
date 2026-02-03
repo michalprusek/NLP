@@ -115,11 +115,14 @@ class SELFIESVAECodec(MolecularCodec):
 
         # Load weights
         if weights_path.exists():
-            state_dict = torch.load(weights_path, map_location="cpu")
+            state_dict = torch.load(weights_path, map_location="cpu", weights_only=False)
             model.load_state_dict(state_dict)
             logger.info(f"Loaded SELFIES VAE weights from {weights_path}")
         else:
-            raise FileNotFoundError(f"Weights not found at {weights_path}")
+            raise FileNotFoundError(
+                f"Weights not found at {weights_path}\n"
+                f"See CLAUDE.md for instructions on obtaining SELFIES VAE weights."
+            )
 
         return cls(model, dataset, device)
 
@@ -127,14 +130,22 @@ class SELFIESVAECodec(MolecularCodec):
         """Convert SMILES to SELFIES. Returns None if conversion fails."""
         try:
             return sf.encoder(smiles)
-        except Exception:
+        except sf.EncoderError as e:
+            logger.debug(f"SELFIES encoding failed for '{smiles[:50]}...': {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error encoding '{smiles[:50]}...': {type(e).__name__}: {e}")
             return None
 
     def _selfies_to_smiles(self, selfies_str: str) -> Optional[str]:
         """Convert SELFIES to SMILES. Returns None if conversion fails."""
         try:
             return sf.decoder(selfies_str)
-        except Exception:
+        except sf.DecoderError as e:
+            logger.debug(f"SELFIES decoding failed: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error decoding SELFIES: {type(e).__name__}: {e}")
             return None
 
     def _tokenize_selfies(self, selfies_str: str) -> torch.Tensor:
@@ -163,12 +174,14 @@ class SELFIESVAECodec(MolecularCodec):
             return torch.empty(0, self.EMBEDDING_DIM, device=self.device)
 
         embeddings = []
+        invalid_count = 0
         with torch.no_grad():
             for smiles in smiles_list:
                 # Convert SMILES to SELFIES
                 selfies_str = self._smiles_to_selfies(smiles)
                 if selfies_str is None:
                     # Invalid molecule - return zeros
+                    invalid_count += 1
                     embeddings.append(torch.zeros(self.EMBEDDING_DIM, device=self.device))
                     continue
 
@@ -181,6 +194,12 @@ class SELFIESVAECodec(MolecularCodec):
                 # Flatten: [1, bottleneck_size, d_model] -> [1, bottleneck_size * d_model]
                 z = mu.reshape(1, -1)
                 embeddings.append(z[0])
+
+        # Log warning if significant number of invalid molecules
+        if invalid_count > 0:
+            logger.warning(
+                f"Encoded {invalid_count}/{len(smiles_list)} invalid molecules as zeros"
+            )
 
         return torch.stack(embeddings)
 

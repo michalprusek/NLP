@@ -88,6 +88,16 @@ class SphericalSubspaceBO:
         seed: int = 42,
         verbose: bool = True,
     ):
+        # Validate dimensions
+        if subspace_dim >= input_dim:
+            raise ValueError(
+                f"subspace_dim ({subspace_dim}) must be < input_dim ({input_dim})"
+            )
+        if subspace_dim < 2:
+            raise ValueError(f"subspace_dim must be >= 2, got {subspace_dim}")
+        if not (0 < trust_region <= 2.0):
+            raise ValueError(f"trust_region must be in (0, 2], got {trust_region}")
+
         self.device = device
         self.codec = codec
         self.oracle = oracle
@@ -99,6 +109,7 @@ class SphericalSubspaceBO:
         self.trust_region = trust_region
         self.verbose = verbose
         self.seed = seed
+        self.fallback_count = 0  # Track GP fallback usage
 
         # Orthonormal projection A ∈ R^{D×d}
         torch.manual_seed(seed)
@@ -166,8 +177,10 @@ class SphericalSubspaceBO:
                         f"GP: corr={corr.item():.3f}, n={len(X)}, "
                         f"noise={self.likelihood.noise.item():.4f}"
                     )
-        except Exception as e:
-            logger.warning(f"GP fit failed: {e}")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues (Cholesky, singular matrix) - use fallback
+            self.fallback_count += 1
+            logger.warning(f"GP fit failed (numerical, fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
                 X, Y,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -177,6 +190,9 @@ class SphericalSubspaceBO:
             self.likelihood = self.gp.likelihood
             self.likelihood.noise = 0.1
             self.gp.eval()
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
     def _generate_sobol_candidates(self, n_candidates: int) -> torch.Tensor:
         """Generate Sobol candidates in trust region around best training point."""
@@ -247,10 +263,14 @@ class SphericalSubspaceBO:
             u_opt = self.lift_to_original(v_opt)
             return u_opt, diag
 
-        except Exception as e:
-            logger.warning(f"Acquisition failed: {e}")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues - use random fallback
+            logger.warning(f"Acquisition failed (numerical): {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
-            return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0}
+            return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0, "is_fallback": True}
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
     def cold_start(self, smiles_list: list[str], scores: torch.Tensor):
         """Initialize with pre-scored molecules."""
@@ -384,7 +404,24 @@ class SphericalSubspaceBO:
 
 
 class AdaptiveSphericalSubspaceBO(SphericalSubspaceBO):
-    """Grows subspace when optimization stalls."""
+    """Adaptive Spherical Subspace BO with data-driven dimension scaling.
+
+    Key innovation: Dynamically scales subspace dimension based on training data size.
+
+    Two expansion strategies:
+    1. **Data-driven** (default): d = n_train / points_per_dim
+       - With 100 points and 6 pts/dim: d=16
+       - With 200 points: d=33
+       - With 600 points: d=100 (capped at max_dim)
+
+    2. **Stall-based** (BAxUS-style): Expand when no improvement for k iterations
+
+    Mathematical rationale:
+    - GP needs ~6-10 points per dimension for reliable inference
+    - Starting small (d=4) allows exploration with limited data
+    - Growing with data ensures GP can leverage new observations
+    - Preserves orthonormal projection (re-projects all data when expanding)
+    """
 
     def __init__(
         self,
@@ -393,8 +430,10 @@ class AdaptiveSphericalSubspaceBO(SphericalSubspaceBO):
         input_dim: int = 256,
         initial_dim: int = 4,
         max_dim: int = 64,
-        growth_factor: int = 2,
-        no_improve_threshold: int = 50,
+        points_per_dim: float = 6.0,  # Target ratio for data-driven expansion
+        growth_factor: int = 2,  # For stall-based expansion
+        no_improve_threshold: int = 50,  # Iterations without improvement before expanding
+        use_data_driven: bool = True,  # Use data-driven expansion (vs stall-based)
         device: str = "cuda",
         n_candidates: int = 2000,
         ucb_beta: float = 2.0,
@@ -412,27 +451,100 @@ class AdaptiveSphericalSubspaceBO(SphericalSubspaceBO):
         )
         self.initial_dim = initial_dim
         self.max_dim = max_dim
+        self.points_per_dim = points_per_dim
         self.growth_factor = growth_factor
         self.no_improve_threshold = no_improve_threshold
+        self.use_data_driven = use_data_driven
         self.last_improvement_iter = 0
         self.expansion_count = 0
 
-    def _maybe_expand(self):
+        # Track dimension history for analysis
+        self.history["subspace_dim"] = []
+
+    def _compute_target_dim(self, n_train: int) -> int:
+        """Compute target dimension based on training data size.
+
+        Formula: d = max(initial_dim, min(max_dim, n_train / points_per_dim))
+
+        Examples (with points_per_dim=6, initial=4, max=64):
+            n=24  → d=4  (minimum)
+            n=100 → d=16
+            n=200 → d=33
+            n=400 → d=64 (capped)
+        """
+        target = int(n_train / self.points_per_dim)
+        target = max(self.initial_dim, target)
+        target = min(self.max_dim, target)
+        return target
+
+    def _expand_to_dim(self, new_dim: int):
+        """Expand subspace to new dimension."""
+        if new_dim <= self.subspace_dim:
+            return
+
+        logger.info(
+            f"Expanding: S^{self.subspace_dim-1} → S^{new_dim-1} "
+            f"(n_train={len(self.train_Y)}, ratio={len(self.train_Y)/new_dim:.1f})"
+        )
+        self.subspace_dim = new_dim
+
+        # Generate new orthonormal projection
+        torch.manual_seed(self.seed + self.expansion_count + 1)
+        A_raw = torch.randn(self.input_dim, self.subspace_dim, device=self.device)
+        self.A, _ = torch.linalg.qr(A_raw)
+
+        # Re-project all training data to new subspace
+        self.train_V = self.project_to_subspace(self.train_U)
+
+        # Re-fit GP in new subspace
+        self._fit_gp()
+
+        self.expansion_count += 1
+
+    def _maybe_expand_data_driven(self):
+        """Expand subspace based on training data size."""
+        n_train = len(self.train_Y)
+        target_dim = self._compute_target_dim(n_train)
+
+        if target_dim > self.subspace_dim:
+            self._expand_to_dim(target_dim)
+
+    def _maybe_expand_stall_based(self):
+        """Expand subspace when optimization stalls (BAxUS-style)."""
         stalled = self.iteration - self.last_improvement_iter
         if stalled >= self.no_improve_threshold and self.subspace_dim < self.max_dim:
             new_dim = min(self.subspace_dim * self.growth_factor, self.max_dim)
-            logger.info(f"Expanding: S^{self.subspace_dim-1} → S^{new_dim-1}")
-            self.subspace_dim = new_dim
-            torch.manual_seed(self.seed + self.expansion_count + 1)
-            A_raw = torch.randn(self.input_dim, self.subspace_dim, device=self.device)
-            self.A, _ = torch.linalg.qr(A_raw)
-            self._fit_gp()
+            self._expand_to_dim(new_dim)
             self.last_improvement_iter = self.iteration
-            self.expansion_count += 1
 
     def step(self) -> dict:
         result = super().step()
+
+        # Track improvement for stall-based expansion
         if result["score"] > self.best_score - 1e-6:
             self.last_improvement_iter = self.iteration
-        self._maybe_expand()
+
+        # Expand if needed
+        if self.use_data_driven:
+            self._maybe_expand_data_driven()
+        else:
+            self._maybe_expand_stall_based()
+
+        # Record dimension history
+        self.history["subspace_dim"].append(self.subspace_dim)
+
         return result
+
+    def cold_start(self, smiles_list: list[str], scores: torch.Tensor):
+        """Initialize and set initial subspace dimension based on data size."""
+        super().cold_start(smiles_list, scores)
+
+        # Adjust initial dimension based on cold start size
+        if self.use_data_driven:
+            target_dim = self._compute_target_dim(len(smiles_list))
+            if target_dim != self.subspace_dim:
+                self._expand_to_dim(target_dim)
+                logger.info(
+                    f"Initial dimension set to {self.subspace_dim} "
+                    f"based on {len(smiles_list)} cold start molecules"
+                )

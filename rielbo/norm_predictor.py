@@ -163,7 +163,7 @@ class NormPredictor(nn.Module):
     @classmethod
     def load(cls, path: str, device: str = "cuda") -> "NormPredictor":
         """Load model from file."""
-        checkpoint = torch.load(path, map_location=device)
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
         model = cls(input_dim=checkpoint["input_dim"])
         model.load_state_dict(checkpoint["state_dict"])
         model.to(device)

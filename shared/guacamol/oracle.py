@@ -98,7 +98,7 @@ def score_smiles(smiles: str, task_id: str) -> float:
         else:
             raise ValueError(f"Unknown task: {task_id}")
     except Exception as e:
-        logger.debug(f"Scoring failed for '{smiles}' on task '{task_id}': {e}")
+        logger.info(f"Scoring failed for '{smiles}' on task '{task_id}': {e}")
         return 0.0
 
 
@@ -123,7 +123,8 @@ def _penalized_logp(mol) -> float:
             + (-cycle_length - -0.04861121) / 0.28746695
         )
         return max(score, -float("inf"))
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Penalized logP calculation failed: {e}")
         return 0.0
 
 

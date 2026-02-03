@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import random
 from datetime import datetime
 
 import numpy as np
@@ -123,8 +124,9 @@ class DirectSphereBO:
             mll = ExactMarginalLogLikelihood(self.likelihood, self.gp)
             fit_gpytorch_mll(mll)
             self.gp.eval()
-        except Exception as e:
-            logger.warning(f"GP fitting with ArcCosine failed: {e}. Using fallback.")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues (Cholesky, singular matrix) - use fallback
+            logger.warning(f"GP fitting with ArcCosine failed (numerical): {e}. Using fallback.")
             self.gp = SingleTaskGP(
                 X, Y,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -134,6 +136,9 @@ class DirectSphereBO:
             self.likelihood = self.gp.likelihood
             self.likelihood.noise = 0.1
             self.gp.eval()
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
     def _optimize_acquisition(self) -> torch.Tensor:
         """Find u* = argmax UCB(u) on unit sphere."""
@@ -160,10 +165,14 @@ class DirectSphereBO:
             # Project to unit sphere
             u_opt = F.normalize(u_opt.float(), p=2, dim=-1)
             return u_opt
-        except Exception as e:
-            logger.warning(f"Acquisition optimization failed: {e}. Using random.")
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            # Numerical issues - use random fallback
+            logger.warning(f"Acquisition optimization failed (numerical): {e}. Using random.")
             z = torch.randn(1, self.input_dim, device=self.device)
             return F.normalize(z, p=2, dim=-1)
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
     def _reconstruct_embedding(self, directions: torch.Tensor) -> torch.Tensor:
         """Reconstruct full embedding from direction using NormPredictor."""
@@ -360,9 +369,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Set seeds
+    # Set seeds for full reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # Load components
     logger.info("Loading codec and oracle...")
