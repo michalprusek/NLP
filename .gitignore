@@ -204,3 +204,4 @@ wandb/
 # Original reference implementations (untracked)
 nfbo_original/
 instructzero_original/
+shared/guacamol/minicddd_models/

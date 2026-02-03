@@ -361,6 +361,97 @@ uv run python -m rielbo.run_latent_bo \
 
 ---
 
+## RieLBO GuacaMol Molecular Optimization
+
+### Two BO Approaches
+- **Flow-Based BO** (`rielbo/run_guacamol.py`): GP in z-space → flow forward → decode
+- **Direct Sphere BO** (`rielbo/run_guacamol_direct.py`): GP directly on unit sphere (no flow)
+
+### Key Components
+- `rielbo/velocity_network.py` - DiT-style velocity network (256D, 6 layers)
+- `rielbo/norm_predictor.py` - MLP predicting magnitude from direction
+- `shared/guacamol/codec.py` - SELFIES VAE (256D latent space)
+- `shared/guacamol/data.py` - Data loaders for GuacaMol CSV and ZINC
+
+### Datasets
+- GuacaMol: `nfbo_original/data/guacamol/oracle/guacamol_train_data_first_20k.csv` (20K molecules)
+- ZINC: `datasets/zinc/zinc_all.txt` (249K molecules) - use for larger training
+
+### Training Commands
+```bash
+# Train spherical flow on ZINC (250K)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.train_flow_guacamol \
+    --spherical --zinc --n-samples 250000 --epochs 500 \
+    --output-dir rielbo/checkpoints/guacamol_flow_zinc_250k
+
+# Train NormPredictor on ZINC
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.norm_predictor \
+    --zinc --n-samples 250000 --epochs 200 \
+    --output rielbo/checkpoints/guacamol_flow_zinc_250k/norm_predictor.pt
+
+# Run Direct Sphere BO (recommended - faster, comparable results)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_direct \
+    --norm-predictor rielbo/checkpoints/guacamol_flow_zinc_250k/norm_predictor.pt \
+    --task-id adip --n-cold-start 100 --iterations 500
+```
+
+### Key Findings (2026-02-02)
+- **OT-CFM invertibility broken**: z→u→z round-trip has ~0.50 cosine (should be >0.95)
+- **Direct Sphere BO preferred**: Faster (~3 it/s vs 0.3 it/s) with comparable results
+- **ArcCosine kernel**: `k(x,y) = 1 - arccos(x·y)/π` for GP on unit sphere (no lengthscale)
+- **Best results**: Direct BO achieved 0.5419 on adip task (vs 0.4910 cold start)
+
+### Subspace BO Design Pattern
+
+**Problem**: GP in 256D with ~100 points overfits (correlation=1.0, no generalization).
+
+**Solution**: Orthonormal projection S^(D-1) → S^(d-1) with d=16:
+- QR decomposition: `A, _ = torch.linalg.qr(torch.randn(D, d))`
+- Project: `v = normalize(u @ A)`
+- Lift: `u = normalize(v @ A.T)`
+- Magnitude: Use `mean_norm` from training embeddings
+
+**Gotcha**: Stereographic projection incompatible with subspace methods. Lifting v → S^D produces random last coordinate (magnitude encoding), causing wrong magnitudes. Use direction sphere + mean norm instead.
+
+**Key files**: `rielbo/subspace_bo.py`, `rielbo/run_guacamol_subspace.py`
+
+```bash
+# Run Subspace BO (no flow, no norm_predictor needed)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+    --subspace-dim 16 --task-id pdop --n-cold-start 100 --iterations 500
+```
+
+### Standard GuacaMol Test Configuration
+
+**Always use this setup for benchmarking:**
+- **Cold start**: 100 molecules
+- **Iterations**: 500
+- **Seeds**: 42, 43, 44, 45, 46 (5 runs)
+- **Tasks**: pdop, adip, med2
+
+```bash
+# Run Subspace BO benchmark on all tasks
+for task in pdop adip med2; do
+  for seed in 42 43 44 45 46; do
+    CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+      --task-id $task --subspace-dim 16 --acqf ts --trust-region 0.8 \
+      --n-cold-start 100 --iterations 500 --seed $seed
+  done
+done
+
+# Run TuRBO baseline for comparison
+for task in pdop adip med2; do
+  for seed in 42 43 44 45 46; do
+    CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
+      --task-id $task --n-cold-start 100 --iterations 500 --seed $seed
+  done
+done
+```
+
+**Results directory**: `rielbo/best_so_far/` (save best configs and results)
+
+---
+
 ## Training → BO Automation
 
 Use monitoring scripts to auto-start BO after training completes:

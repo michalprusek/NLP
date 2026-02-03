@@ -3,7 +3,7 @@ _target_: BO.initializer.Initializer
 defaults:
   - /global
   - objective: guacamol
-  - generative_model: glow
+  - generative_model: seqflow
   - surrogate_model: deepGP
   - _self_
   

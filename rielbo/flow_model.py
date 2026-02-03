@@ -11,28 +11,45 @@ from rielbo.velocity_network import VelocityNetwork
 class FlowMatchingModel(nn.Module):
     """Flow matching wrapper with Euler/Heun ODE integration."""
 
-    # Mean SONAR embedding norm (for spherical flow denormalization)
-    SONAR_EMBEDDING_NORM = 0.3185
+    # Default embedding norms for different domains
+    DEFAULT_EMBEDDING_NORMS = {
+        "sonar": 0.3185,      # SONAR text embeddings (1024D)
+        "megamolbart": 17.0,  # MegaMolBART molecular embeddings (512D)
+    }
 
     def __init__(
         self,
         velocity_net: VelocityNetwork,
         norm_stats: Optional[Dict[str, torch.Tensor]] = None,
         is_spherical: bool = False,
+        embedding_norm: Optional[float] = None,
     ):
         """
         Args:
             velocity_net: Velocity network.
             norm_stats: Normalization statistics {'mean': [D], 'std': [D]}.
-            is_spherical: If True, use spherical denormalization (scale to SONAR norm)
+            is_spherical: If True, use spherical denormalization (scale to embedding norm)
                          instead of mean/std denormalization. Required for spherical
                          flow models (spherical, spherical-ot).
+            embedding_norm: Target embedding norm for spherical denormalization.
+                           If None, uses default based on input_dim (1024 -> SONAR, 512 -> MegaMolBART).
         """
         super().__init__()
         self.velocity_net = velocity_net
         self.input_dim = velocity_net.input_dim
         self.norm_stats = norm_stats
         self.is_spherical = is_spherical
+
+        # Set embedding norm based on input dimension if not provided
+        if embedding_norm is not None:
+            self.embedding_norm = embedding_norm
+        elif self.input_dim == 1024:
+            self.embedding_norm = self.DEFAULT_EMBEDDING_NORMS["sonar"]
+        elif self.input_dim == 512:
+            self.embedding_norm = self.DEFAULT_EMBEDDING_NORMS["megamolbart"]
+        else:
+            # For other dimensions, compute from training data if available
+            self.embedding_norm = 1.0  # Default fallback
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize samples to training scale."""
@@ -45,14 +62,14 @@ class FlowMatchingModel(nn.Module):
     def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """Denormalize samples back to original scale.
 
-        For spherical flows: normalizes to unit sphere then scales to SONAR norm.
+        For spherical flows: normalizes to unit sphere then scales to embedding norm.
         For regular flows: applies x * std + mean transform.
         """
         if self.is_spherical:
-            # Spherical flow outputs on unit sphere - scale to SONAR embedding norm
+            # Spherical flow outputs on unit sphere - scale to target embedding norm
             import torch.nn.functional as F
             x_unit = F.normalize(x, p=2, dim=-1)
-            return x_unit * self.SONAR_EMBEDDING_NORM
+            return x_unit * self.embedding_norm
 
         if self.norm_stats is None:
             return x
