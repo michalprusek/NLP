@@ -255,3 +255,54 @@ def step(self):
 - [Standard GP is All You Need (ICLR 2025)](https://arxiv.org/abs/2402.02746)
 - [TuRBO (NeurIPS 2019)](https://arxiv.org/abs/1910.01739)
 - [SAASBO (NeurIPS 2021)](https://arxiv.org/abs/2103.00349)
+
+
+
+1. Shrnutí: Dataset a ArchitekturaPokud používáte MegaMolBART (nebo podobný moderní Transformer) v kontextu GuacaMol benchmarku, vypadá váš systém takto:A) Dataset (Data)Zdroj: Primárně ZINC15 (pro předtrénování modelu, cca 1.45 miliardy molekul) nebo ChEMBL (pro ladění v rámci GuacaMol benchmarku).Formát: SMILES (řetězce textu).Reprezentace: Tokenizovaný text. Speciální znaky (např. [START], [END], [PAD]) + chemické symboly.Čištění: Molekuly jsou "kanonizovány" (standardizovaný zápis) pomocí knihovny RDKit.B) Architektura (Model)Typ: Seq2Seq Transformer (BART - Bidirectional Auto-Regressive Transformer).Struktura: Encoder-Decoder.Encoder: Čte SMILES $\rightarrow$ vytváří kontextový vektor (embedding).Latentní prostor: Vektor o velikosti 512 dimenzí (reprezentuje chemii a strukturu).Decoder: Čte vektor $\rightarrow$ generuje SMILES (slovo po slově).Klíčová vlastnost pro LSBO: Musí fungovat v režimu, který umožňuje vzorkování z latentního prostoru (ideálně jako VAE nebo s využitím maskování).2. Jak "vydolovat" 10 000 validních molekulProtože generativní modely (hlavně Transformery) nejsou 100% dokonalé, občas vygenerují syntaktickou chybu (např. otevřou závorku a nezavřou ji). Proto nemůžete vygenerovat přesně 10 000 řetězců, ale musíte jich vygenerovat o něco více a ty špatné zahodit (filtrace).Zde je postup (Workflow):Krok 1: Vzorkování z latentního prostoruMusíte vytvořit 10 000 (respektive cca 12 000, abyste měli rezervu) náhodných vektorů.Pokud je model VAE: Vzorkujete z normálního rozdělení $\mathcal{N}(0, 1)$.Pokud je to čistý MegaMolBART: Buď vzorkujete okolo známých molekul (přidáte šum k jejich embeddingu), nebo použijete náhodné vektory (ale to u čistého BARTu funguje hůře).Krok 2: DekódováníTyto vektory pošlete do Decoderu. Ten vyplivne seznam řetězců (SMILES).Krok 3: Validace (Sanity Check)Použijete chemickou knihovnu RDKit, která ověří, zda je řetězec chemicky možný.Python kód pro tento procesTento skript ukazuje logiku, jak získat garantovaných 10 000 validních unikátních molekul:Pythonimport torch
+from rdkit import Chem
+
+def generate_valid_molecules(model, tokenizer, target_count=10000, latent_dim=512):
+    valid_molecules = set() # Používáme set pro unikátnost
+    batch_size = 100    # Generujeme po dávkách, abychom nepřetížili GPU
+
+    print(f"Začínám generovat {target_count} molekul...")
+
+    while len(valid_molecules) < target_count:
+        # 1. Vytvoření náhodných latentních vektorů (z normalního rozdělení)
+        # Tvar: [batch_size, 1, latent_dim] nebo [batch_size, latent_dim] dle modelu
+        z = torch.randn(batch_size, latent_dim).cuda() 
+        
+        # 2. Dekódování pomocí modelu
+        with torch.no_grad():
+            # Model specifická funkce - u MegaMolBART to může být model.decode() 
+            # nebo model.generate()
+            generated_smiles_list = model.decode_from_latent(z) 
+
+        # 3. Validace a filtrace pomocí RDKit
+        for smiles in generated_smiles_list:
+            if smiles is None or len(smiles) == 0:
+                continue
+            
+            # RDKit se pokusí vytvořit molekulu
+            mol = Chem.MolFromSmiles(smiles)
+            
+            if mol is not None:
+                # Je validní! Převedeme zpět na kanonický SMILES (pro jistotu)
+                canon_smiles = Chem.MolToSmiles(mol)
+                valid_molecules.add(canon_smiles)
+
+        # Výpis progresu
+        if len(valid_molecules) % 1000 == 0:
+            print(f"Zatím mám {len(valid_molecules)} validních unikátních molekul.")
+
+        # Pokud už máme dost, cyklus skončí
+        if len(valid_molecules) >= target_count:
+            break
+            
+    # Oříznout na přesný počet a vrátit seznam
+    return list(valid_molecules)[:target_count]
+
+# Příklad použití (pseudokód):
+# molecules = generate_valid_molecules(my_megamolbart_model, my_tokenizer)
+# print(molecules[:5])
+Na co si dát pozor (Best Practices)Unikátnost: Model může vygenerovat jednu molekulu dvakrát. Proto v kódu používám set() (množinu), která automaticky maže duplicity.Validita: U Transformerů bývá validita výstupu kolem 80–95 %. Proto musíte generovat v cyklu while, dokud nenaplníte košík.Teplota (Temperature): Při dekódování (model.generate) můžete nastavit parametr temperature.temp = 1.0 (standardní, pestré molekuly).temp < 1.0 (konzervativní, méně chyb, ale nudné molekuly).temp > 1.0 (divoké, kreativní, ale více chyb).
