@@ -450,6 +450,21 @@ done
 
 **Results directory**: `rielbo/best_so_far/` (save best configs and results)
 
+### Benchmark Results (2026-02-03)
+
+| Task | Cold Start | Subspace BO (5 seeds) | TuRBO (5 seeds) | Improvement |
+|------|------------|----------------------|-----------------|-------------|
+| pdop | 0.4558 | **0.5676 ± 0.033** | 0.5587 ± 0.011 | **+24.5%** |
+| adip | 0.4910 | **0.5447 ± 0.008** | - | **+10.9%** |
+| med2 | 0.1856 | 0.1856 ± 0.000 | - | +0.0%* |
+
+*Med2 showed no improvement - score range is extremely narrow [0.02, 0.19], and cold start already found near-optimal molecule. See `rielbo/best_so_far/subspace_ts_med2/DIAGNOSTIC_REPORT.md`.
+
+**Key findings**:
+- Subspace BO (S^15) outperforms TuRBO (R^256) on pdop by +1.6%
+- Both methods significantly improve over cold start (~+23% on pdop)
+- Med2 is fundamentally hard: only 0.6% of 20K molecules beat cold start best
+
 ---
 
 ## Training → BO Automation
