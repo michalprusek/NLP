@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import random
 from datetime import datetime
 
 import numpy as np
@@ -36,22 +37,30 @@ def main():
     parser.add_argument("--n-candidates", type=int, default=2000,
                         help="Number of Sobol candidates")
     parser.add_argument("--acqf", type=str, default="ts",
-                        choices=["ts", "ei", "ucb"],
-                        help="Acquisition: ts=Thompson, ei=ExpectedImprovement, ucb=UCB")
+                        choices=["ts", "ei", "ucb", "qlogei"],
+                        help="Acquisition: ts=Thompson, ei=ExpectedImprovement, ucb=UCB, qlogei=qLogEI")
     parser.add_argument("--trust-region", type=float, default=0.8,
                         help="Trust region length (TuRBO-style)")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--adaptive", action="store_true",
                         help="Use adaptive subspace expansion")
-    parser.add_argument("--initial-dim", type=int, default=4)
-    parser.add_argument("--max-dim", type=int, default=64)
-    parser.add_argument("--no-improve-threshold", type=int, default=50)
+    parser.add_argument("--initial-dim", type=int, default=4,
+                        help="Initial subspace dimension for adaptive mode")
+    parser.add_argument("--max-dim", type=int, default=64,
+                        help="Max subspace dimension for adaptive mode")
+    parser.add_argument("--points-per-dim", type=float, default=6.0,
+                        help="Target points per dimension for data-driven expansion")
+    parser.add_argument("--stall-expansion", action="store_true",
+                        help="Use stall-based expansion (default: data-driven)")
+    parser.add_argument("--no-improve-threshold", type=int, default=50,
+                        help="Iterations without improvement before expanding (stall mode)")
 
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # Load components
     logger.info("Loading codec and oracle...")
@@ -72,14 +81,17 @@ def main():
     # Create optimizer
     if args.adaptive:
         from rielbo.subspace_bo import AdaptiveSphericalSubspaceBO
-        logger.info(f"Adaptive: S^3 → S^{args.max_dim-1}, acqf={args.acqf}")
+        mode = "stall" if args.stall_expansion else "data-driven"
+        logger.info(f"Adaptive ({mode}): S^{args.initial_dim-1} → S^{args.max_dim-1}, acqf={args.acqf}")
         optimizer = AdaptiveSphericalSubspaceBO(
             codec=codec,
             oracle=oracle,
             input_dim=256,
             initial_dim=args.initial_dim,
             max_dim=args.max_dim,
+            points_per_dim=args.points_per_dim,
             no_improve_threshold=args.no_improve_threshold,
+            use_data_driven=not args.stall_expansion,
             device=args.device,
             n_candidates=args.n_candidates,
             ucb_beta=args.ucb_beta,

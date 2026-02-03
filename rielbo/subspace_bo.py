@@ -28,6 +28,7 @@ import gpytorch
 import torch
 import torch.nn.functional as F
 from botorch.acquisition import UpperConfidenceBound, qExpectedImprovement
+from botorch.acquisition.logei import qLogExpectedImprovement
 from botorch.fit import fit_gpytorch_mll
 from botorch.generation import MaxPosteriorSampling
 from botorch.models import SingleTaskGP
@@ -83,7 +84,7 @@ class SphericalSubspaceBO:
         device: str = "cuda",
         n_candidates: int = 2000,
         ucb_beta: float = 2.0,
-        acqf: str = "ts",  # "ts" (Thompson), "ei" (Expected Improvement), "ucb"
+        acqf: str = "ts",  # "ts", "ei", "ucb", "qlogei"
         trust_region: float = 0.8,  # TuRBO-style trust region length
         seed: int = 42,
         verbose: bool = True,
@@ -218,7 +219,7 @@ class SphericalSubspaceBO:
         return v_cand
 
     def _optimize_acquisition(self) -> tuple[torch.Tensor, dict]:
-        """Find optimal v* using Thompson Sampling, EI, or UCB."""
+        """Find optimal v* using Thompson Sampling, EI, UCB, or qLogEI."""
         diag = {}
 
         try:
@@ -241,15 +242,25 @@ class SphericalSubspaceBO:
                 best_idx = ei_vals.argmax()
                 v_opt = v_cand[best_idx:best_idx+1]
 
-            else:  # ucb
-                # UCB with Sobol candidates (NFBO style: mean + variance)
+            elif self.acqf == "ucb":
+                # UCB with Sobol candidates: mean + beta * std
                 v_cand = self._generate_sobol_candidates(self.n_candidates)
 
                 with torch.no_grad():
                     post = self.gp.posterior(v_cand.double())
-                    # NFBO uses mean + variance, not mean + beta*std
-                    ucb_vals = post.mean.squeeze() + post.variance.squeeze()
+                    # Standard UCB: mean + beta * std (beta controls exploration)
+                    ucb_vals = post.mean.squeeze() + self.ucb_beta * post.variance.sqrt().squeeze()
                 best_idx = ucb_vals.argmax()
+                v_opt = v_cand[best_idx:best_idx+1]
+
+            else:  # qlogei
+                # qLogExpectedImprovement - numerically stable log-space EI
+                v_cand = self._generate_sobol_candidates(self.n_candidates)
+
+                qlogei = qLogExpectedImprovement(self.gp, best_f=self.train_Y.max().double())
+                with torch.no_grad():
+                    qlogei_vals = qlogei(v_cand.double().unsqueeze(-2))  # [n_candidates]
+                best_idx = qlogei_vals.argmax()
                 v_opt = v_cand[best_idx:best_idx+1]
 
             # Diagnostics

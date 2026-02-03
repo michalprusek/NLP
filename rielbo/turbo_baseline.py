@@ -160,9 +160,13 @@ class TuRBOBaseline:
                     valid_scores.append(score)
                     valid_smiles.append(smi)
                     self.smiles_observed.add(smi)
-            except Exception as e:
+            except (ValueError, RuntimeError) as e:
+                # Expected encoding failures (invalid SMILES, tensor issues)
                 logger.info(f"Failed to encode {smi[:50]}...: {e}")
                 continue
+            except (torch.cuda.OutOfMemoryError, MemoryError):
+                # Critical memory errors - re-raise
+                raise
 
         if not z_list:
             raise ValueError("No valid molecules in cold start")
@@ -281,9 +285,13 @@ class TuRBOBaseline:
         # Decode to SMILES
         try:
             smiles = self.codec.decode(z_opt)[0]
-        except Exception as e:
+        except (ValueError, RuntimeError, IndexError) as e:
+            # Expected decoding failures
             logger.info(f"Decode failed: {e}")
             return None
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Critical memory errors - re-raise
+            raise
 
         # Skip if already evaluated
         if smiles in self.smiles_observed:

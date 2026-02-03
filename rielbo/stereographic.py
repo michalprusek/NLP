@@ -144,7 +144,7 @@ class StereographicTransform:
     @classmethod
     def load(cls, path: str) -> "StereographicTransform":
         """Load transform from file."""
-        data = torch.load(path, map_location="cpu")
+        data = torch.load(path, map_location="cpu", weights_only=False)
         transform = cls(data["input_dim"], data["radius_scaling"])
         logger.info(
             f"Loaded StereographicTransform: D={transform.input_dim}, "

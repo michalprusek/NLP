@@ -36,7 +36,7 @@ def test_flow_quality():
     oracle = GuacaMolOracle(task_id="adip")
 
     # Load flow
-    checkpoint = torch.load("rielbo/checkpoints/guacamol_flow_spherical/best.pt", map_location=device)
+    checkpoint = torch.load("rielbo/checkpoints/guacamol_flow_spherical/best.pt", map_location=device, weights_only=False)
     flow = VelocityNetwork(
         input_dim=256, hidden_dim=256, num_layers=6, num_heads=8
     ).to(device)
