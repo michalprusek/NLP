@@ -205,3 +205,17 @@ wandb/
 nfbo_original/
 instructzero_original/
 shared/guacamol/minicddd_models/
+
+# LOLBO reference implementation (local dependency for SELFIES VAE)
+lolbo_ref/
+
+# GuacaMol and ZINC datasets (large, download separately)
+datasets/guacamol/
+datasets/zinc/
+
+# Best results archive (local analysis, not for version control)
+rielbo/best_so_far/
+
+# Debug and plotting scripts (local development)
+rielbo/plot_comparison.py
+rielbo/benchmark_acqf.py
