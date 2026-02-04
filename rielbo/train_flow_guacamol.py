@@ -173,28 +173,8 @@ def train_flow(args: argparse.Namespace) -> None:
     norm_stats = compute_embedding_stats(embeddings)
     embedding_norm = norm_stats["embedding_norm"].item()
 
-    # Handle stereographic projection (D -> D+1, encodes magnitude in geometry)
-    stereo_transform = None
-    original_input_dim = args.input_dim
-    actual_input_dim = args.input_dim
-
-    if args.stereographic:
-        from rielbo.stereographic import StereographicTransform
-
-        mean_norm = embeddings.norm(dim=-1).mean().item()
-        stereo_transform = StereographicTransform(embeddings.shape[-1], mean_norm)
-        embeddings = stereo_transform.lift(embeddings)  # [N, D+1]
-        actual_input_dim = embeddings.shape[-1]
-        logger.info(
-            f"Stereographic projection: {original_input_dim}D -> {actual_input_dim}D, "
-            f"R={mean_norm:.4f}"
-        )
-        norm_stats = None  # No additional normalization needed
-        # Stereographic implies spherical (data is on unit sphere S^D)
-        args.spherical = True
-
-    # For spherical flow (without stereographic), normalize to unit sphere
-    elif args.spherical:
+    # For spherical flow, normalize to unit sphere
+    if args.spherical:
         logger.info("Normalizing embeddings to unit sphere for spherical flow...")
         embeddings = F.normalize(embeddings, p=2, dim=-1)
         norm_stats = None  # No mean/std normalization for spherical
@@ -214,9 +194,9 @@ def train_flow(args: argparse.Namespace) -> None:
     )
     logger.info(f"DataLoader: {len(train_loader)} batches")
 
-    # Create model (use actual_input_dim which may be D+1 for stereographic)
+    # Create model
     model = VelocityNetwork(
-        input_dim=actual_input_dim,
+        input_dim=args.input_dim,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
         num_heads=args.num_heads,
@@ -317,11 +297,8 @@ def train_flow(args: argparse.Namespace) -> None:
                     for k, v in norm_stats.items()
                 } if norm_stats else None,
                 "embedding_norm": embedding_norm,
-                "is_spherical": args.spherical or args.stereographic,
-                "is_stereographic": args.stereographic,
-                "original_input_dim": original_input_dim,
-                "input_dim": actual_input_dim,
-                "radius_scaling": stereo_transform.radius_scaling if stereo_transform else None,
+                "is_spherical": args.spherical,
+                "input_dim": args.input_dim,
             }
 
             best_path = os.path.join(args.output_dir, "best.pt")
@@ -345,11 +322,8 @@ def train_flow(args: argparse.Namespace) -> None:
                     for k, v in norm_stats.items()
                 } if norm_stats else None,
                 "embedding_norm": embedding_norm,
-                "is_spherical": args.spherical or args.stereographic,
-                "is_stereographic": args.stereographic,
-                "original_input_dim": original_input_dim,
-                "input_dim": actual_input_dim,
-                "radius_scaling": stereo_transform.radius_scaling if stereo_transform else None,
+                "is_spherical": args.spherical,
+                "input_dim": args.input_dim,
             }
             torch.save(checkpoint, checkpoint_path)
             logger.info(f"Saved checkpoint: {checkpoint_path}")
@@ -360,7 +334,7 @@ def train_flow(args: argparse.Namespace) -> None:
 def main() -> None:
     """Parse arguments and run training."""
     parser = argparse.ArgumentParser(
-        description="Train flow matching model on MegaMolBART molecular embeddings"
+        description="Train flow matching model on SELFIES VAE molecular embeddings"
     )
 
     # Data arguments
@@ -433,10 +407,6 @@ def main() -> None:
     parser.add_argument(
         "--spherical", action="store_true",
         help="Use spherical flow (normalize to unit sphere)"
-    )
-    parser.add_argument(
-        "--stereographic", action="store_true",
-        help="Use stereographic projection (D -> D+1, encodes magnitude in geometry)"
     )
 
     # Output arguments

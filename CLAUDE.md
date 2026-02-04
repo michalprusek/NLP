@@ -317,37 +317,6 @@ CUDA_VISIBLE_DEVICES=1 uv run python -m study.flow_matching.train \
 - ArcCosine kernel has NO lengthscale parameter
 - Kernel normalizes inputs: `k(x,y) = 1 - arccos(x̂·ŷ)/π`
 
-### Latent Space BO
-
-Do BO in flow's noise space z ~ N(0,I) instead of embedding space x:
-- GP works better in Gaussian z-space
-- Only invert embeddings once at initialization
-- During BO: GP proposes z → flow(z) → x → decode → evaluate
-
-```bash
-# Run Latent Space BO
-uv run python -m rielbo.run_latent_bo \
-  --flow-checkpoint study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt \
-  --llm-budget 50000 --eval-size 1319
-```
-
-**Results (2026-02-02):**
-
-| Flow Model | Best Score | Final z_norm | Prompt Quality |
-|------------|------------|--------------|----------------|
-| Euclidean OT-CFM | 0.8355 | 368 | Degraded to gibberish |
-| Spherical-OT | 0.8355 | 3.86 | Stayed coherent |
-
-**Key Findings:**
-- Neither improved over warm start (top 10/100 prompts)
-- Spherical flow keeps z_norm bounded, preserving coherence
-- Euclidean z_norm exploded, causing incoherent prompts
-
-**Improvements needed:**
-- Constrain z_norm during acquisition optimization
-- Better GP initialization for z-space
-- Consider UCB bounds or Thompson sampling
-
 ### Flow Matching Methods
 
 | Method | Coupling | L2-r | Status |
@@ -363,8 +332,8 @@ uv run python -m rielbo.run_latent_bo \
 
 ## RieLBO GuacaMol Molecular Optimization
 
-### Two BO Approaches
-- **Flow-Based BO** (`rielbo/run_guacamol.py`): GP in z-space → flow forward → decode
+### Main Approach
+- **Subspace BO** (`rielbo/run_guacamol_subspace.py`): Projects S^255 → S^15 for tractable GP
 - **Direct Sphere BO** (`rielbo/run_guacamol_direct.py`): GP directly on unit sphere (no flow)
 
 ### Key Components
@@ -411,15 +380,32 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_direct \
 - Lift: `u = normalize(v @ A.T)`
 - Magnitude: Use `mean_norm` from training embeddings
 
-**Gotcha**: Stereographic projection incompatible with subspace methods. Lifting v → S^D produces random last coordinate (magnitude encoding), causing wrong magnitudes. Use direction sphere + mean norm instead.
-
 **Key files**: `rielbo/subspace_bo.py`, `rielbo/run_guacamol_subspace.py`
 
 ```bash
 # Run Subspace BO (no flow, no norm_predictor needed)
 CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
     --subspace-dim 16 --task-id pdop --n-cold-start 100 --iterations 500
+
+# With Matern kernel
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+    --subspace-dim 16 --kernel matern --task-id pdop --iterations 500
+
+# With UCB acquisition
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+    --subspace-dim 16 --acqf ucb --ucb-beta 2.0 --task-id pdop --iterations 500
 ```
+
+### CLI Options
+
+**Kernel options** (`--kernel`):
+- `arccosine` (default): k(x,y) = 1 - arccos(x·y)/π (no lengthscale)
+- `matern`: Matern-5/2 kernel
+
+**Acquisition Functions** (`--acqf`):
+- `ts` (default): Thompson Sampling
+- `ei`: Expected Improvement
+- `ucb`: Upper Confidence Bound (with `--ucb-beta`)
 
 ### Standard GuacaMol Test Configuration
 
@@ -427,11 +413,13 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
 - **Cold start**: 100 molecules
 - **Iterations**: 500
 - **Seeds**: 42, 43, 44, 45, 46 (5 runs)
-- **Tasks**: pdop, adip, med2
+- **Tasks**: adip, med2 (NOT pdop - pdop is solved, focus on harder tasks)
+
+**IMPORTANT: Do NOT benchmark on pdop. Focus experiments on med2 and adip.**
 
 ```bash
-# Run Subspace BO benchmark on all tasks
-for task in pdop adip med2; do
+# Run Subspace BO benchmark on hard tasks
+for task in adip med2; do
   for seed in 42 43 44 45 46; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
       --task-id $task --subspace-dim 16 --acqf ts --trust-region 0.8 \
@@ -440,15 +428,13 @@ for task in pdop adip med2; do
 done
 
 # Run TuRBO baseline for comparison
-for task in pdop adip med2; do
+for task in adip med2; do
   for seed in 42 43 44 45 46; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
       --task-id $task --n-cold-start 100 --iterations 500 --seed $seed
   done
 done
 ```
-
-**Results directory**: `rielbo/best_so_far/` (save best configs and results)
 
 ### Benchmark Results (2026-02-03)
 
@@ -458,7 +444,7 @@ done
 | adip | 0.4910 | **0.5447 ± 0.008** | - | **+10.9%** |
 | med2 | 0.1856 | 0.1856 ± 0.000 | - | +0.0%* |
 
-*Med2 showed no improvement - score range is extremely narrow [0.02, 0.19], and cold start already found near-optimal molecule. See `rielbo/best_so_far/subspace_ts_med2/DIAGNOSTIC_REPORT.md`.
+*Med2 showed no improvement - score range is extremely narrow [0.02, 0.19], and cold start already found near-optimal molecule.
 
 **Key findings**:
 - Subspace BO (S^15) outperforms TuRBO (R^256) on pdop by +1.6%

@@ -291,8 +291,10 @@ def create_molecular_codec(
     """Factory function to create a molecular codec.
 
     Args:
-        codec_type: Type of codec ("selfies_vae" or "minicddd" for backwards compat)
-        model_path: Path to model weights
+        codec_type: Type of codec:
+            - "selfies_vae" (default): LOLBO SELFIES VAE (256D)
+            - "minicddd": Alias for selfies_vae
+        model_path: Path to model weights (optional)
         device: Device for computation
         **kwargs: Additional arguments for specific codec
 
@@ -302,4 +304,6 @@ def create_molecular_codec(
     if codec_type in ("selfies_vae", "minicddd"):
         return SELFIESVAECodec.from_pretrained(model_path, device=device, **kwargs)
     else:
-        raise ValueError(f"Unknown codec type: {codec_type}. Use 'selfies_vae'.")
+        raise ValueError(
+            f"Unknown codec type: {codec_type}. Use 'selfies_vae'."
+        )
