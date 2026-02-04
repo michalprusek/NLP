@@ -1,10 +1,15 @@
 """Run Spherical Subspace BO on GuacaMol.
 
-Projects S^255 → S^15 for tractable GP. Uses mean norm for magnitude.
+Projects S^255 → S^15 for tractable GP using SELFIES VAE codec.
 
 Usage:
+    # Standard run
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
         --subspace-dim 16 --task-id pdop --n-cold-start 100 --iterations 500
+
+    # With different acquisition function
+    CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+        --subspace-dim 16 --acqf ei --task-id pdop --iterations 500
 """
 
 import argparse
@@ -37,24 +42,15 @@ def main():
     parser.add_argument("--n-candidates", type=int, default=2000,
                         help="Number of Sobol candidates")
     parser.add_argument("--acqf", type=str, default="ts",
-                        choices=["ts", "ei", "ucb", "qlogei"],
-                        help="Acquisition: ts=Thompson, ei=ExpectedImprovement, ucb=UCB, qlogei=qLogEI")
+                        choices=["ts", "ei", "ucb"],
+                        help="Acquisition: ts=Thompson, ei=ExpectedImprovement, ucb=UCB")
     parser.add_argument("--trust-region", type=float, default=0.8,
                         help="Trust region length (TuRBO-style)")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--adaptive", action="store_true",
-                        help="Use adaptive subspace expansion")
-    parser.add_argument("--initial-dim", type=int, default=4,
-                        help="Initial subspace dimension for adaptive mode")
-    parser.add_argument("--max-dim", type=int, default=64,
-                        help="Max subspace dimension for adaptive mode")
-    parser.add_argument("--points-per-dim", type=float, default=6.0,
-                        help="Target points per dimension for data-driven expansion")
-    parser.add_argument("--stall-expansion", action="store_true",
-                        help="Use stall-based expansion (default: data-driven)")
-    parser.add_argument("--no-improve-threshold", type=int, default=50,
-                        help="Iterations without improvement before expanding (stall mode)")
+    parser.add_argument("--kernel", type=str, default="arccosine",
+                        choices=["arccosine", "matern"],
+                        help="Kernel type: arccosine (default), matern")
 
     args = parser.parse_args()
 
@@ -64,11 +60,14 @@ def main():
 
     # Load components
     logger.info("Loading codec and oracle...")
-    from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
     from shared.guacamol.oracle import GuacaMolOracle
+    from shared.guacamol.codec import SELFIESVAECodec
 
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
+    input_dim = 256
+    logger.info("Using SELFIES VAE codec (embedding_dim=256)")
+
     oracle = GuacaMolOracle(task_id=args.task_id)
 
     # Load cold start
@@ -79,41 +78,24 @@ def main():
     )
 
     # Create optimizer
-    if args.adaptive:
-        from rielbo.subspace_bo import AdaptiveSphericalSubspaceBO
-        mode = "stall" if args.stall_expansion else "data-driven"
-        logger.info(f"Adaptive ({mode}): S^{args.initial_dim-1} → S^{args.max_dim-1}, acqf={args.acqf}")
-        optimizer = AdaptiveSphericalSubspaceBO(
-            codec=codec,
-            oracle=oracle,
-            input_dim=256,
-            initial_dim=args.initial_dim,
-            max_dim=args.max_dim,
-            points_per_dim=args.points_per_dim,
-            no_improve_threshold=args.no_improve_threshold,
-            use_data_driven=not args.stall_expansion,
-            device=args.device,
-            n_candidates=args.n_candidates,
-            ucb_beta=args.ucb_beta,
-            acqf=args.acqf,
-            trust_region=args.trust_region,
-            seed=args.seed,
-        )
-    else:
-        from rielbo.subspace_bo import SphericalSubspaceBO
-        logger.info(f"Fixed subspace: S^255 → S^{args.subspace_dim-1}, acqf={args.acqf}")
-        optimizer = SphericalSubspaceBO(
-            codec=codec,
-            oracle=oracle,
-            input_dim=256,
-            subspace_dim=args.subspace_dim,
-            device=args.device,
-            n_candidates=args.n_candidates,
-            ucb_beta=args.ucb_beta,
-            acqf=args.acqf,
-            trust_region=args.trust_region,
-            seed=args.seed,
-        )
+    from rielbo.subspace_bo import SphericalSubspaceBO
+    logger.info(
+        f"Fixed subspace: S^{input_dim-1} → S^{args.subspace_dim-1}, "
+        f"kernel={args.kernel}, acqf={args.acqf}"
+    )
+    optimizer = SphericalSubspaceBO(
+        codec=codec,
+        oracle=oracle,
+        input_dim=input_dim,
+        subspace_dim=args.subspace_dim,
+        device=args.device,
+        n_candidates=args.n_candidates,
+        ucb_beta=args.ucb_beta,
+        acqf=args.acqf,
+        trust_region=args.trust_region,
+        seed=args.seed,
+        kernel=args.kernel,
+    )
 
     # Run
     optimizer.cold_start(smiles_list, scores)
@@ -124,7 +106,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dim_str = f"adaptive_{args.initial_dim}-{args.max_dim}" if args.adaptive else f"d{args.subspace_dim}"
+    dim_str = f"d{args.subspace_dim}"
     results_path = os.path.join(results_dir, f"subspace_{dim_str}_{args.task_id}_{timestamp}.json")
 
     results = {
@@ -133,9 +115,9 @@ def main():
         "best_smiles": optimizer.best_smiles,
         "n_evaluated": len(optimizer.smiles_observed),
         "subspace_dim": dim_str,
-        "mean_norm": optimizer.mean_norm,
         "history": optimizer.history,
         "args": vars(args),
+        "mean_norm": optimizer.mean_norm,
     }
 
     with open(results_path, "w") as f:
