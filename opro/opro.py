@@ -4,13 +4,16 @@ OPRO: Optimization by PROmpting for GSM8K
 Based on "Large Language Models as Optimizers"
 https://arxiv.org/abs/2309.03409
 """
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 import random
 import json
 import os
+
+if TYPE_CHECKING:
+    from shared.incremental_saver import IncrementalPromptSaver
 
 
 # Load meta-prompt template
@@ -51,6 +54,8 @@ class OPROOptimizer:
         total_budget: int = None,  # Total LLM evaluation budget (None = unlimited)
         max_meta_prompts: int = 20,  # Max prompts to show in meta-prompt (prevents context overflow)
         max_prompt_length: int = 300,  # Max chars per prompt in meta-context
+        max_prompts: Optional[int] = None,  # Max prompts to evaluate (for benchmarking)
+        incremental_saver: Optional["IncrementalPromptSaver"] = None,  # Saves prompts incrementally
     ):
         self.task_llm = task_llm_client
         self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
@@ -64,10 +69,13 @@ class OPROOptimizer:
         self.total_budget = total_budget
         self.max_meta_prompts = max_meta_prompts
         self.max_prompt_length = max_prompt_length
+        self.max_prompts = max_prompts
+        self.incremental_saver = incremental_saver
 
         self.scored_prompts: List[ScoredPrompt] = []
         self.history = []
         self.budget_used = 0  # Track LLM evaluations
+        self.prompts_evaluated = 0  # Track number of prompts evaluated (for max_prompts)
 
         # Create fixed evaluation set (same for all prompts)
         dataset_size = len(evaluator)
@@ -108,6 +116,20 @@ class OPROOptimizer:
             return True
         return (self.budget_used + self.minibatch_size) <= self.total_budget
 
+    def _is_max_prompts_reached(self) -> bool:
+        """Check if max prompts limit is reached."""
+        if self.max_prompts is None:
+            return False
+        return self.prompts_evaluated >= self.max_prompts
+
+    def _can_evaluate_more_prompts(self) -> bool:
+        """Check if we can evaluate more prompts (budget and max_prompts)."""
+        if not self._can_afford_evaluation():
+            return False
+        if self._is_max_prompts_reached():
+            return False
+        return True
+
     def evaluate_prompt(
         self,
         prompt: str,
@@ -133,6 +155,21 @@ class OPROOptimizer:
         indices = [ex['idx'] for ex in batch]
         results = self.evaluator.evaluate_batch(outputs, indices)
         score = results['accuracy']
+
+        # Track prompts evaluated
+        self.prompts_evaluated += 1
+
+        # Save to incremental saver if provided
+        if self.incremental_saver is not None:
+            method_specific = {}
+            if candidate_idx is not None:
+                method_specific["candidate_idx"] = candidate_idx
+            self.incremental_saver.save_prompt(
+                prompt=prompt,
+                score=score,
+                iteration=iteration if iteration is not None else -1,
+                method_specific=method_specific if method_specific else None,
+            )
 
         # Save detailed JSON if requested
         if save_eval_json and eval_output_dir:
@@ -310,10 +347,13 @@ class OPROOptimizer:
             print("Evaluating initial prompts...\n")
 
         for idx, prompt in enumerate(initial_prompts):
-            # Check budget before evaluation
-            if not self._can_afford_evaluation():
+            # Check budget and max_prompts before evaluation
+            if not self._can_evaluate_more_prompts():
                 if verbose:
-                    print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping initial evaluation.")
+                    if self._is_max_prompts_reached():
+                        print(f"Max prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping initial evaluation.")
+                    else:
+                        print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping initial evaluation.")
                 break
 
             score, _ = self.evaluate_prompt(
@@ -328,16 +368,24 @@ class OPROOptimizer:
 
             if verbose:
                 budget_str = f" [budget: {self.budget_used}/{self.total_budget}]" if self.total_budget else ""
-                print(f"Score: {score:.1%} | {prompt if prompt else '(empty)'}{budget_str}")
+                prompts_str = f" [prompts: {self.prompts_evaluated}/{self.max_prompts}]" if self.max_prompts else ""
+                print(f"Score: {score:.1%} | {prompt if prompt else '(empty)'}{budget_str}{prompts_str}")
 
         # Optimization loop
         budget_exhausted = False
+        max_prompts_reached = False
         for iteration in range(self.num_iterations):
-            # Check budget at start of iteration
+            # Check budget and max_prompts at start of iteration
             if self._is_budget_exhausted():
                 if verbose:
                     print(f"\nBudget exhausted ({self.budget_used}/{self.total_budget}). Stopping.")
                 budget_exhausted = True
+                break
+
+            if self._is_max_prompts_reached():
+                if verbose:
+                    print(f"\nMax prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping.")
+                max_prompts_reached = True
                 break
 
             if verbose:
@@ -345,6 +393,8 @@ class OPROOptimizer:
                 print(f"Iteration {iteration + 1}/{self.num_iterations}")
                 if self.total_budget:
                     print(f"Budget: {self.budget_used}/{self.total_budget}")
+                if self.max_prompts:
+                    print(f"Prompts evaluated: {self.prompts_evaluated}/{self.max_prompts}")
                 print(f"{'='*60}\n")
 
             # Generate candidates
@@ -365,11 +415,15 @@ class OPROOptimizer:
 
             # Evaluate candidates
             for i, candidate in enumerate(candidates):
-                # Check budget before each evaluation
-                if not self._can_afford_evaluation():
+                # Check budget and max_prompts before each evaluation
+                if not self._can_evaluate_more_prompts():
                     if verbose:
-                        print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping evaluation.")
-                    budget_exhausted = True
+                        if self._is_max_prompts_reached():
+                            print(f"Max prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping evaluation.")
+                            max_prompts_reached = True
+                        else:
+                            print(f"Budget exhausted ({self.budget_used}/{self.total_budget}). Stopping evaluation.")
+                            budget_exhausted = True
                     break
 
                 if verbose:
@@ -387,9 +441,10 @@ class OPROOptimizer:
 
                 if verbose:
                     budget_str = f" [budget: {self.budget_used}/{self.total_budget}]" if self.total_budget else ""
-                    print(f"Score: {score:.1%}{budget_str}")
+                    prompts_str = f" [prompts: {self.prompts_evaluated}/{self.max_prompts}]" if self.max_prompts else ""
+                    print(f"Score: {score:.1%}{budget_str}{prompts_str}")
 
-            if budget_exhausted:
+            if budget_exhausted or max_prompts_reached:
                 break
 
             # Keep top-k
@@ -405,6 +460,8 @@ class OPROOptimizer:
         if not self.scored_prompts:
             if verbose:
                 print("No prompts evaluated. Returning empty.")
+            if self.incremental_saver is not None:
+                self.incremental_saver.finalize("", 0.0)
             return "", self.history
 
         best = max(self.scored_prompts, key=lambda x: x.score)
@@ -414,7 +471,13 @@ class OPROOptimizer:
             print(best.prompt)
             if self.total_budget:
                 print(f"Total budget used: {self.budget_used}/{self.total_budget}")
+            if self.max_prompts:
+                print(f"Total prompts evaluated: {self.prompts_evaluated}/{self.max_prompts}")
             print(f"{'='*60}\n")
+
+        # Finalize incremental saver
+        if self.incremental_saver is not None:
+            self.incremental_saver.finalize(best.prompt, best.score)
 
         return best.prompt, self.history
 

@@ -9,7 +9,7 @@ Key differences from OPRO:
 2. Beam search with UCB bandit selection for exploration-exploitation
 3. Monte Carlo paraphrasing for local search exploration
 """
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
@@ -18,6 +18,9 @@ import math
 import json
 import os
 import re
+
+if TYPE_CHECKING:
+    from shared.incremental_saver import IncrementalPromptSaver
 
 
 # Load prompt templates
@@ -110,6 +113,9 @@ class ProTeGiOptimizer:
         ucb_c: float = 2.0,              # Exploration parameter
         # Budget tracking
         total_budget: int = None,        # Total task LLM eval budget
+        # Benchmarking parameters
+        max_prompts: Optional[int] = None,  # Max prompts to evaluate
+        incremental_saver: Optional["IncrementalPromptSaver"] = None,  # Save prompts incrementally
     ):
         self.task_llm = task_llm_client
         self.meta_llm = meta_llm_client if meta_llm_client is not None else task_llm_client
@@ -128,6 +134,8 @@ class ProTeGiOptimizer:
         self.meta_max_tokens = meta_max_tokens
         self.ucb_c = ucb_c
         self.total_budget = total_budget
+        self.max_prompts = max_prompts
+        self.incremental_saver = incremental_saver
 
         # State
         self.beam: List[ScoredPrompt] = []
@@ -138,6 +146,8 @@ class ProTeGiOptimizer:
         self.meta_calls_gradient = 0    # Gradient generation calls
         self.meta_calls_edit = 0        # Edit prompt calls
         self.meta_calls_paraphrase = 0  # Paraphrase calls
+        self.prompts_evaluated = 0      # Track number of prompts evaluated (for max_prompts)
+        self._current_iteration = 0     # Track current iteration for saver
 
         # Create fixed evaluation set (same as OPRO - consistent evaluation)
         dataset_size = len(evaluator)
@@ -167,6 +177,20 @@ class ProTeGiOptimizer:
         if self.total_budget is None:
             return True
         return (self.task_budget_used + len(self.fixed_eval_set)) <= self.total_budget
+
+    def _is_max_prompts_reached(self) -> bool:
+        """Check if max prompts limit is reached."""
+        if self.max_prompts is None:
+            return False
+        return self.prompts_evaluated >= self.max_prompts
+
+    def _can_evaluate_more_prompts(self) -> bool:
+        """Check if we can evaluate more prompts (budget and max_prompts)."""
+        if not self._can_afford_evaluation():
+            return False
+        if self._is_max_prompts_reached():
+            return False
+        return True
 
     @property
     def total_meta_calls(self) -> int:
@@ -244,9 +268,14 @@ class ProTeGiOptimizer:
     # EVALUATION
     # =========================================================================
 
-    def evaluate_prompt(self, prompt: str) -> Tuple[float, Dict]:
+    def evaluate_prompt(self, prompt: str, is_parent_eval: bool = False) -> Tuple[float, Dict]:
         """
         Evaluate prompt on fixed evaluation set.
+
+        Args:
+            prompt: The prompt to evaluate
+            is_parent_eval: If True, this is a parent re-evaluation (for fresh errors),
+                           not counted towards prompts_evaluated
 
         Returns:
             score: Accuracy on evaluation set
@@ -269,6 +298,19 @@ class ProTeGiOptimizer:
         indices = [ex['idx'] for ex in batch]
         results = self.evaluator.evaluate_batch(outputs, indices)
         score = results['accuracy']
+
+        # Track prompts evaluated (only for non-parent evaluations)
+        # Parent re-evaluations are for getting fresh errors, not new prompts
+        if not is_parent_eval:
+            self.prompts_evaluated += 1
+
+            # Save to incremental saver if provided
+            if self.incremental_saver is not None:
+                self.incremental_saver.save_prompt(
+                    prompt=prompt,
+                    score=score,
+                    iteration=self._current_iteration,
+                )
 
         return score, results
 
@@ -599,13 +641,18 @@ class ProTeGiOptimizer:
         # =====================================================================
         # INITIALIZATION: Evaluate initial prompts
         # =====================================================================
+        self._current_iteration = 0
+
         if verbose:
             print("Evaluating initial prompts...\n")
 
         for prompt in initial_prompts:
-            if not self._can_afford_evaluation():
+            if not self._can_evaluate_more_prompts():
                 if verbose:
-                    print(f"Budget exhausted. Stopping initial evaluation.")
+                    if self._is_max_prompts_reached():
+                        print(f"Max prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping initial evaluation.")
+                    else:
+                        print(f"Budget exhausted. Stopping initial evaluation.")
                 break
 
             score, results = self.evaluate_prompt(prompt)
@@ -615,8 +662,9 @@ class ProTeGiOptimizer:
 
             if verbose:
                 budget_str = f" [budget: {self.task_budget_used}/{self.total_budget}]" if self.total_budget else ""
+                prompts_str = f" [prompts: {self.prompts_evaluated}/{self.max_prompts}]" if self.max_prompts else ""
                 # Full prompt logging per CLAUDE.md
-                print(f"Initial: Score {score:.1%}{budget_str}\nPrompt:\n{prompt if prompt else '(empty)'}")
+                print(f"Initial: Score {score:.1%}{budget_str}{prompts_str}\nPrompt:\n{prompt if prompt else '(empty)'}")
 
         # Sort beam by score
         self.beam.sort(key=lambda x: x.score, reverse=True)
@@ -626,9 +674,16 @@ class ProTeGiOptimizer:
         # MAIN OPTIMIZATION LOOP
         # =====================================================================
         for step in range(self.num_steps):
+            self._current_iteration = step + 1
+
             if self._is_budget_exhausted():
                 if verbose:
                     print(f"\nBudget exhausted ({self.task_budget_used}/{self.total_budget}). Stopping.")
+                break
+
+            if self._is_max_prompts_reached():
+                if verbose:
+                    print(f"\nMax prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping.")
                 break
 
             if verbose:
@@ -636,6 +691,8 @@ class ProTeGiOptimizer:
                 print(f"Step {step + 1}/{self.num_steps}")
                 if self.total_budget:
                     print(f"Budget: {self.task_budget_used}/{self.total_budget} | Meta calls: {self.total_meta_calls}")
+                if self.max_prompts:
+                    print(f"Prompts evaluated: {self.prompts_evaluated}/{self.max_prompts}")
                 print(f"{'='*60}\n")
 
             step_meta_calls_start = self.total_meta_calls
@@ -663,7 +720,9 @@ class ProTeGiOptimizer:
                     print("Budget exhausted before parent evaluation.")
                 break
 
-            parent_score, results = self.evaluate_prompt(parent.prompt)
+            # Note: is_parent_eval=True means this doesn't count towards prompts_evaluated
+            # because it's re-evaluating an existing prompt, not a new one
+            parent_score, results = self.evaluate_prompt(parent.prompt, is_parent_eval=True)
             self.update_ucb_stats(parent, parent_score)
 
             if verbose:
@@ -719,9 +778,12 @@ class ProTeGiOptimizer:
             # -----------------------------------------------------------------
             scored_candidates = []
             for i, candidate in enumerate(all_candidates):
-                if not self._can_afford_evaluation():
+                if not self._can_evaluate_more_prompts():
                     if verbose:
-                        print(f"Budget exhausted. Evaluated {i}/{len(all_candidates)} candidates.")
+                        if self._is_max_prompts_reached():
+                            print(f"Max prompts reached. Evaluated {i}/{len(all_candidates)} candidates.")
+                        else:
+                            print(f"Budget exhausted. Evaluated {i}/{len(all_candidates)} candidates.")
                     break
 
                 score, _ = self.evaluate_prompt(candidate)
@@ -729,7 +791,8 @@ class ProTeGiOptimizer:
 
                 if verbose:
                     budget_str = f" [budget: {self.task_budget_used}/{self.total_budget}]" if self.total_budget else ""
-                    print(f"  Candidate {i+1}: Score {score:.1%}{budget_str}")
+                    prompts_str = f" [prompts: {self.prompts_evaluated}/{self.max_prompts}]" if self.max_prompts else ""
+                    print(f"  Candidate {i+1}: Score {score:.1%}{budget_str}{prompts_str}")
 
             # -----------------------------------------------------------------
             # UPDATE BEAM
@@ -772,6 +835,8 @@ class ProTeGiOptimizer:
         if not self.beam:
             if verbose:
                 print("No prompts evaluated. Returning empty.")
+            if self.incremental_saver is not None:
+                self.incremental_saver.finalize("", 0.0)
             return "", self._format_history()
 
         best = self.beam[0]
@@ -780,8 +845,14 @@ class ProTeGiOptimizer:
             print(f"Best prompt (score: {best.score:.1%}):")
             print(f"{best.prompt}")
             print(f"\nTask budget used: {self.task_budget_used}")
+            if self.max_prompts:
+                print(f"Total prompts evaluated: {self.prompts_evaluated}/{self.max_prompts}")
             print(f"Meta calls: {self.total_meta_calls} (gradient: {self.meta_calls_gradient}, edit: {self.meta_calls_edit}, paraphrase: {self.meta_calls_paraphrase})")
             print(f"{'='*60}\n")
+
+        # Finalize incremental saver
+        if self.incremental_saver is not None:
+            self.incremental_saver.finalize(best.prompt, best.score)
 
         return best.prompt, self._format_history()
 

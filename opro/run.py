@@ -16,6 +16,7 @@ from datetime import datetime
 
 from shared.llm_client import create_llm_client
 from shared.gsm8k_evaluator import GSM8KEvaluator
+from shared.incremental_saver import IncrementalPromptSaver
 from opro.opro import OPROOptimizer
 
 
@@ -122,6 +123,29 @@ def main():
         help="Max tokens for task model (default: 2048)",
     )
 
+    # Benchmarking parameters
+    parser.add_argument(
+        "--max-prompts",
+        type=int,
+        default=None,
+        help="Max prompts to evaluate (for benchmarking). Stops after evaluating this many prompts.",
+    )
+
+    parser.add_argument(
+        "--incremental-json",
+        type=str,
+        default=None,
+        help="Path to save incremental JSON with evaluated prompts (for benchmarking).",
+    )
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train",
+        choices=["train", "test"],
+        help="Dataset split to use for evaluation (default: train). Use 'test' for final benchmarking.",
+    )
+
     # Output settings
     parser.add_argument(
         "--output-dir",
@@ -187,6 +211,10 @@ def main():
     print(f"Budget: {args.budget if args.budget else 'unlimited'}")
     print(f"Minibatch: {args.minibatch_size}")
     print(f"Candidates/iter: {args.num_candidates}")
+    print(f"Split: {args.split}")
+    print(f"Max prompts: {args.max_prompts if args.max_prompts else 'unlimited'}")
+    if args.incremental_json:
+        print(f"Incremental JSON: {args.incremental_json}")
     print("="*60 + "\n")
 
     # Initialize LLM client
@@ -219,10 +247,29 @@ def main():
     print("Loading GSM8K dataset...")
     evaluator = GSM8KEvaluator(
         dataset_path="datasets/gsm8k",
-        split="train",
+        split=args.split,
         debug=args.debug,
     )
-    print(f"Training set: {len(evaluator)} examples\n")
+    print(f"{args.split.capitalize()} set: {len(evaluator)} examples\n")
+
+    # Initialize incremental saver if requested
+    incremental_saver = None
+    if args.incremental_json:
+        config = {
+            "iterations": args.iterations,
+            "budget": args.budget,
+            "minibatch_size": args.minibatch_size,
+            "num_candidates": args.num_candidates,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
+        }
+        incremental_saver = IncrementalPromptSaver(
+            output_path=args.incremental_json,
+            method="opro",
+            model=args.model,
+            config=config,
+        )
+        print(f"Incremental saver initialized: {args.incremental_json}\n")
 
     # Initialize OPRO
     optimizer = OPROOptimizer(
@@ -235,6 +282,8 @@ def main():
         task_max_tokens=args.max_new_tokens,  # For math solutions (default: 2048)
         meta_max_tokens=500,  # For prompt generation (short)
         total_budget=args.budget,  # Budget-based stopping
+        max_prompts=args.max_prompts,  # Max prompts to evaluate
+        incremental_saver=incremental_saver,  # Save prompts incrementally
     )
 
     # Set up eval output directory
@@ -293,14 +342,19 @@ def main():
             "budget": args.budget,
             "minibatch_size": args.minibatch_size,
             "num_candidates": args.num_candidates,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
         },
         "budget_used": optimizer.budget_used,
+        "prompts_evaluated": optimizer.prompts_evaluated,
         "best_prompt": best_prompt,
         "validation_accuracy": max(sp.score for sp in optimizer.scored_prompts) if optimizer.scored_prompts else 0,
         "test_accuracy": test_accuracy,
         "test_error": test_error,
         "history": history,
     }
+    if args.incremental_json:
+        results["incremental_json"] = args.incremental_json
 
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)

@@ -16,7 +16,7 @@ import time
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from dataclasses import dataclass
 
 logging.basicConfig(
@@ -25,6 +25,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
+
+
+class MaxPromptsReachedException(Exception):
+    """Raised when max_prompts limit is reached during GEPA optimization."""
+    pass
 
 
 @dataclass
@@ -51,11 +56,14 @@ class GSM8KEvaluator:
 
     def __init__(self, failure_score: float = 0.0):
         self.failure_score = failure_score
-        # Import EvaluationResult at init to avoid import issues
-        import importlib
-        gepa_pkg = importlib.import_module("gepa")
-        adapter_module = importlib.import_module("gepa.adapters.default_adapter.default_adapter")
-        self.EvaluationResult = adapter_module.EvaluationResult
+        self.EvaluationResult = None  # Lazy import
+
+    def _ensure_evaluation_result(self):
+        """Lazily import EvaluationResult from gepa package."""
+        if self.EvaluationResult is None:
+            import importlib
+            adapter_module = importlib.import_module("gepa.adapters.default_adapter.default_adapter")
+            self.EvaluationResult = adapter_module.EvaluationResult
 
     def _normalize(self, answer: str) -> str:
         if answer is None:
@@ -98,6 +106,7 @@ class GSM8KEvaluator:
 
     def __call__(self, data: GSM8KDataInst, response: str):
         """Evaluate response against ground truth."""
+        self._ensure_evaluation_result()
 
         gt = data.answer
         pred = self._extract_answer(response)
@@ -116,25 +125,156 @@ class GSM8KEvaluator:
         return self.EvaluationResult(score=score, feedback=feedback, objective_scores=None)
 
 
+class TrackingEvaluatorWrapper:
+    """
+    Wrapper around GSM8KEvaluator that tracks unique prompts evaluated.
+
+    This works by intercepting the evaluation calls and extracting the
+    current prompt from the context. GEPA calls the evaluator per data point,
+    so we accumulate results per prompt and save when a new prompt is seen.
+    """
+
+    def __init__(
+        self,
+        base_evaluator: GSM8KEvaluator,
+        max_prompts: Optional[int] = None,
+        incremental_saver: Optional[Any] = None,
+    ):
+        self.base_evaluator = base_evaluator
+        self.max_prompts = max_prompts
+        self.incremental_saver = incremental_saver
+
+        # Copy attributes from base (EvaluationResult is lazily loaded)
+        self.failure_score = base_evaluator.failure_score
+
+        # Tracking state
+        self.prompts_evaluated = 0
+        self.seen_prompts = {}  # prompt -> (total_correct, total_count, iteration)
+        self._current_iteration = 0
+
+        # Per-prompt batch accumulator
+        self._current_prompt = None
+        self._current_correct = 0
+        self._current_count = 0
+
+    @property
+    def EvaluationResult(self):
+        """Delegate to base evaluator's EvaluationResult (lazily loaded)."""
+        self.base_evaluator._ensure_evaluation_result()
+        return self.base_evaluator.EvaluationResult
+
+    def set_current_prompt(self, prompt: str):
+        """Set the current prompt being evaluated. Called before batch evaluation."""
+        # If switching to a new prompt, finalize the previous one
+        if self._current_prompt is not None and self._current_prompt != prompt:
+            self._finalize_prompt()
+
+        self._current_prompt = prompt
+        self._current_correct = 0
+        self._current_count = 0
+
+    def _finalize_prompt(self):
+        """Finalize tracking for the current prompt."""
+        if self._current_prompt is None or self._current_count == 0:
+            return
+
+        prompt = self._current_prompt
+        score = self._current_correct / self._current_count
+
+        # Only track new prompts
+        if prompt not in self.seen_prompts:
+            self.prompts_evaluated += 1
+            self.seen_prompts[prompt] = (self._current_correct, self._current_count, self._current_iteration)
+
+            # Save to incremental saver
+            if self.incremental_saver is not None:
+                self.incremental_saver.save_prompt(
+                    prompt=prompt,
+                    score=score,
+                    iteration=self._current_iteration,
+                )
+
+            logger.info(f"[PromptTracker] Prompt #{self.prompts_evaluated}: score={score:.4f} ({self._current_correct}/{self._current_count})")
+
+            # Check max_prompts limit
+            if self.max_prompts is not None and self.prompts_evaluated >= self.max_prompts:
+                logger.info(f"Max prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping.")
+                # Finalize saver before raising exception
+                if self.incremental_saver is not None:
+                    best_prompt, best_score = self._get_best_prompt()
+                    self.incremental_saver.finalize(best_prompt, best_score)
+                raise MaxPromptsReachedException(
+                    f"Reached max_prompts limit: {self.prompts_evaluated}/{self.max_prompts}"
+                )
+        else:
+            # Update existing prompt stats (for re-evaluations)
+            old_correct, old_count, iteration = self.seen_prompts[prompt]
+            self.seen_prompts[prompt] = (old_correct + self._current_correct, old_count + self._current_count, iteration)
+
+    def __call__(self, data: GSM8KDataInst, response: str):
+        """Delegate to base evaluator and track results."""
+        result = self.base_evaluator(data, response)
+
+        # Track this evaluation
+        self._current_count += 1
+        if result.score > 0.5:  # Correct answer
+            self._current_correct += 1
+
+        return result
+
+    def _get_best_prompt(self):
+        """Get the best prompt seen so far."""
+        if not self.seen_prompts:
+            return "", 0.0
+        best_prompt = max(self.seen_prompts.items(), key=lambda x: x[1][0] / x[1][1])
+        prompt, (total_correct, total_count, _) = best_prompt
+        return prompt, total_correct / total_count
+
+    def finalize(self):
+        """Finalize tracking - call after optimization completes."""
+        # Finalize current prompt if any
+        if self._current_prompt is not None:
+            self._finalize_prompt()
+
+        # Finalize incremental saver
+        if self.incremental_saver is not None:
+            best_prompt, best_score = self._get_best_prompt()
+            self.incremental_saver.finalize(best_prompt, best_score)
+
+
 class VLLMChatWrapper:
     """Wrapper to make vLLM client compatible with GEPA's ChatCompletionCallable."""
 
-    def __init__(self, llm_client):
+    def __init__(
+        self,
+        llm_client,
+        tracking_evaluator: Optional['TrackingEvaluatorWrapper'] = None,
+    ):
         self.llm_client = llm_client
         self.call_count = 0
+        self.tracking_evaluator = tracking_evaluator
+        self._last_system_prompt = None
 
     def __call__(self, messages: list[dict]) -> str:
         self.call_count += 1
 
         # Combine system and user messages into a single prompt
         prompt_parts = []
+        system_prompt = None
         for msg in messages:
             if msg["role"] == "system":
                 prompt_parts.append(msg["content"])
+                system_prompt = msg["content"]
             elif msg["role"] == "user":
                 prompt_parts.append(msg["content"])
 
         prompt = "\n\n".join(prompt_parts)
+
+        # Track the system prompt - notify evaluator when prompt changes
+        if system_prompt and system_prompt != self._last_system_prompt:
+            if self.tracking_evaluator is not None:
+                self.tracking_evaluator.set_current_prompt(system_prompt)
+            self._last_system_prompt = system_prompt
 
         # Log every 10th call for debugging
         if self.call_count <= 10 or self.call_count % 10 == 0:
@@ -230,9 +370,23 @@ def main():
         help="Enable prompt merging"
     )
 
+    # Benchmarking parameters
+    parser.add_argument(
+        "--max-prompts", type=int, default=None,
+        help="Max prompts to evaluate (for benchmarking). Stops after evaluating this many prompts."
+    )
+    parser.add_argument(
+        "--incremental-json", type=str, default=None,
+        help="Path to save incremental JSON with evaluated prompts (for benchmarking)."
+    )
+    parser.add_argument(
+        "--split", type=str, default="train", choices=["train", "test"],
+        help="Dataset split to use for evaluation (default: train). Use 'test' for final benchmarking."
+    )
+
     # Other options
     parser.add_argument(
-        "--results-dir", type=str, default="gepa/results",
+        "--results-dir", type=str, default="gepa_gsm8k/results",
         help="Results directory"
     )
     parser.add_argument(
@@ -264,6 +418,10 @@ def main():
     logger.info(f"Max metric calls: {max_metric_calls}")
     logger.info(f"Minibatch size: {args.minibatch_size}")
     logger.info(f"Frontier type: {args.frontier_type}")
+    logger.info(f"Split: {args.split}")
+    logger.info(f"Max prompts: {args.max_prompts if args.max_prompts else 'unlimited'}")
+    if args.incremental_json:
+        logger.info(f"Incremental JSON: {args.incremental_json}")
     logger.info("=" * 60)
 
     # Create results directory
@@ -272,8 +430,41 @@ def main():
 
     # Load dataset
     logger.info("Loading GSM8K dataset...")
-    trainset = load_gsm8k_dataset("datasets/gsm8k", "train")
-    logger.info(f"Loaded {len(trainset)} training examples")
+    trainset = load_gsm8k_dataset("datasets/gsm8k", args.split)
+    logger.info(f"Loaded {len(trainset)} {args.split} examples")
+
+    # Initialize incremental saver if requested
+    incremental_saver = None
+    if args.incremental_json:
+        from shared.incremental_saver import IncrementalPromptSaver
+        config = {
+            "max_calls": args.max_calls,
+            "minibatch_size": args.minibatch_size,
+            "frontier_type": args.frontier_type,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
+        }
+        incremental_saver = IncrementalPromptSaver(
+            output_path=args.incremental_json,
+            method="gepa",
+            model=args.model,
+            config=config,
+        )
+        logger.info(f"Incremental saver initialized: {args.incremental_json}")
+
+    # Create evaluator with optional tracking wrapper
+    # (Must be created before LLM client so we can pass tracking_evaluator to VLLMChatWrapper)
+    base_evaluator = GSM8KEvaluator()
+    if args.max_prompts is not None or incremental_saver is not None:
+        tracking_evaluator = TrackingEvaluatorWrapper(
+            base_evaluator=base_evaluator,
+            max_prompts=args.max_prompts,
+            incremental_saver=incremental_saver,
+        )
+        evaluator = tracking_evaluator
+    else:
+        evaluator = base_evaluator
+        tracking_evaluator = None
 
     # Initialize LLM client
     if args.backend == "vllm":
@@ -285,9 +476,10 @@ def main():
             backend="vllm",
             tensor_parallel_size=args.tensor_parallel_size
         )
-        task_lm = VLLMChatWrapper(llm_client)
+        # Pass tracking_evaluator to VLLMChatWrapper so it can notify when prompts change
+        task_lm = VLLMChatWrapper(llm_client, tracking_evaluator=tracking_evaluator)
 
-        # For reflection, use same client
+        # For reflection, use same client (no tracking needed for reflection)
         if args.reflection_model == args.model:
             reflection_lm = task_lm
         else:
@@ -312,9 +504,6 @@ def main():
         "system_prompt": "Solve this math problem step by step. Show your work and clearly state the final numeric answer."
     }
 
-    # Create evaluator
-    evaluator = GSM8KEvaluator()
-
     # Import GEPA package (not local module)
     import importlib
     gepa_pkg = importlib.import_module("gepa")
@@ -322,30 +511,48 @@ def main():
     logger.info("Starting GEPA optimization...")
     start_time = time.time()
 
-    # Run GEPA
-    result = gepa_pkg.optimize(
-        seed_candidate=seed_candidate,
-        trainset=trainset,
-        valset=None,
-        task_lm=task_lm,
-        evaluator=evaluator,
-        reflection_lm=reflection_lm,
-        candidate_selection_strategy="pareto",
-        frontier_type=args.frontier_type,
-        max_metric_calls=max_metric_calls,
-        reflection_minibatch_size=min(20, args.minibatch_size),
-        use_merge=args.use_merge,
-        display_progress_bar=True,
-        seed=args.seed,
-        run_dir=str(results_dir / "gepa_run"),
-    )
+    # Run GEPA with handling for max_prompts exception
+    result = None
+    best_prompt = None
+    best_score = 0.0
+    stopped_early = False
+
+    try:
+        result = gepa_pkg.optimize(
+            seed_candidate=seed_candidate,
+            trainset=trainset,
+            valset=None,
+            task_lm=task_lm,
+            evaluator=evaluator,
+            reflection_lm=reflection_lm,
+            candidate_selection_strategy="pareto",
+            frontier_type=args.frontier_type,
+            max_metric_calls=max_metric_calls,
+            reflection_minibatch_size=min(20, args.minibatch_size),
+            use_merge=args.use_merge,
+            display_progress_bar=True,
+            seed=args.seed,
+            run_dir=str(results_dir / "gepa_run"),
+        )
+        # Extract best prompt from result
+        best_candidate = result.best_candidate
+        best_prompt = best_candidate.get("system_prompt", str(best_candidate))
+        best_score = result.best_score
+    except MaxPromptsReachedException:
+        logger.info("Optimization stopped early due to max_prompts limit.")
+        stopped_early = True
+        # Get best from tracking evaluator
+        if tracking_evaluator is not None:
+            best_prompt, best_score = tracking_evaluator._get_best_prompt()
+        else:
+            best_prompt = seed_candidate["system_prompt"]
+            best_score = 0.0
 
     elapsed = time.time() - start_time
 
-    # Extract best prompt
-    best_candidate = result.best_candidate
-    best_prompt = best_candidate.get("system_prompt", str(best_candidate))
-    best_score = result.best_score
+    # Finalize tracking if not stopped early (early stop already finalizes)
+    if tracking_evaluator is not None and not stopped_early:
+        tracking_evaluator.finalize()
 
     logger.info("\n" + "=" * 60)
     logger.info("GEPA OPTIMIZATION RESULTS")
@@ -361,14 +568,20 @@ def main():
         "best_prompt": best_prompt,
         "best_score": best_score,
         "total_time": elapsed,
+        "stopped_early": stopped_early,
+        "prompts_evaluated": tracking_evaluator.prompts_evaluated if tracking_evaluator else "N/A",
         "config": {
             "model": args.model,
             "reflection_model": args.reflection_model,
             "max_calls": args.max_calls,
             "minibatch_size": args.minibatch_size,
             "frontier_type": args.frontier_type,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
         }
     }
+    if args.incremental_json:
+        results["incremental_json"] = args.incremental_json
 
     results_path = results_dir / f"gepa_{int(time.time())}.json"
     with open(results_path, "w") as f:

@@ -21,6 +21,7 @@ from datetime import datetime
 
 from shared.llm_client import create_llm_client
 from shared.gsm8k_evaluator import GSM8KEvaluator
+from shared.incremental_saver import IncrementalPromptSaver
 from protegi.protegi import ProTeGiOptimizer
 
 
@@ -144,6 +145,29 @@ def main():
         help="Total task LLM evaluation budget (None = unlimited)",
     )
 
+    # Benchmarking parameters
+    parser.add_argument(
+        "--max-prompts",
+        type=int,
+        default=None,
+        help="Max prompts to evaluate (for benchmarking). Stops after evaluating this many prompts.",
+    )
+
+    parser.add_argument(
+        "--incremental-json",
+        type=str,
+        default=None,
+        help="Path to save incremental JSON with evaluated prompts (for benchmarking).",
+    )
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train",
+        choices=["train", "test"],
+        help="Dataset split to use for evaluation (default: train). Use 'test' for final benchmarking.",
+    )
+
     # Generation params
     parser.add_argument(
         "--max-new-tokens",
@@ -214,6 +238,10 @@ def main():
     print(f"Max successors: {args.max_successors}")
     print(f"Minibatch: {args.minibatch_size}")
     print(f"Budget: {args.budget if args.budget else 'unlimited'}")
+    print(f"Split: {args.split}")
+    print(f"Max prompts: {args.max_prompts if args.max_prompts else 'unlimited'}")
+    if args.incremental_json:
+        print(f"Incremental JSON: {args.incremental_json}")
     print("="*60 + "\n")
 
     # Initialize LLM client
@@ -245,10 +273,31 @@ def main():
     print("Loading GSM8K dataset...")
     evaluator = GSM8KEvaluator(
         dataset_path="datasets/gsm8k",
-        split="train",
+        split=args.split,
         debug=args.debug,
     )
-    print(f"Training set: {len(evaluator)} examples\n")
+    print(f"{args.split.capitalize()} set: {len(evaluator)} examples\n")
+
+    # Initialize incremental saver if requested
+    incremental_saver = None
+    if args.incremental_json:
+        config = {
+            "beam_size": args.beam_size,
+            "num_steps": args.steps,
+            "gradients_per_group": args.gradients,
+            "mc_samples": args.mc_samples,
+            "max_successors": args.max_successors,
+            "minibatch_size": args.minibatch_size,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
+        }
+        incremental_saver = IncrementalPromptSaver(
+            output_path=args.incremental_json,
+            method="protegi",
+            model=args.model,
+            config=config,
+        )
+        print(f"Incremental saver initialized: {args.incremental_json}\n")
 
     # Initialize ProTeGi
     optimizer = ProTeGiOptimizer(
@@ -263,6 +312,8 @@ def main():
         minibatch_size=args.minibatch_size,
         task_max_tokens=args.max_new_tokens,
         total_budget=args.budget,
+        max_prompts=args.max_prompts,  # Max prompts to evaluate
+        incremental_saver=incremental_saver,  # Save prompts incrementally
     )
 
     # Set up detail output directory
@@ -327,6 +378,8 @@ def main():
             "mc_samples": args.mc_samples,
             "max_successors": args.max_successors,
             "minibatch_size": args.minibatch_size,
+            "max_prompts": args.max_prompts,
+            "split": args.split,
         },
         "budget": {
             "task_llm_evaluations": optimizer.task_budget_used,
@@ -335,12 +388,15 @@ def main():
             "meta_paraphrase_calls": optimizer.meta_calls_paraphrase,
             "total_meta_calls": optimizer.total_meta_calls,
         },
+        "prompts_evaluated": optimizer.prompts_evaluated,
         "best_prompt": best_prompt,
         "validation_accuracy": optimizer.beam[0].score if optimizer.beam else 0,
         "test_accuracy": test_accuracy,
         "test_error": test_error,
         "history": history,
     }
+    if args.incremental_json:
+        results["incremental_json"] = args.incremental_json
 
     # Save results with error handling
     import tempfile
