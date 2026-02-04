@@ -40,6 +40,8 @@ from gpytorch.kernels import MaternKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
+from rielbo.gp_diagnostics import GPDiagnostics, diagnose_gp_step
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -143,6 +145,10 @@ class TuRBOBaseline:
         # Trust region state
         self.turbo_state = None
 
+        # GP diagnostics
+        self.gp_diagnostics = GPDiagnostics(verbose=True)
+        self.diagnostic_history = []
+
     def cold_start(self, smiles_list: list, scores: list):
         """Initialize with cold start data."""
         logger.info(f"Cold start with {len(smiles_list)} molecules")
@@ -234,6 +240,7 @@ class TuRBOBaseline:
 
         self._y_mean = y_mean
         self._y_std = y_std
+        self._train_Z_norm = train_Z_norm  # Store for diagnostics
 
     def _generate_candidates(self) -> torch.Tensor:
         """Generate Sobol candidates in trust region around best point."""
@@ -270,13 +277,25 @@ class TuRBOBaseline:
 
         return z_opt_norm
 
-    def _step(self) -> Optional[float]:
+    def _step(self, iteration: int = 0) -> Optional[float]:
         """Single optimization step."""
         # Fit GP
         self._fit_gp()
 
         # Generate and select candidate
         z_cand_norm = self._generate_candidates()
+
+        # Run GP diagnostics (every 10 iterations to reduce overhead)
+        if iteration % 10 == 0:
+            metrics = self.gp_diagnostics.analyze(
+                self.gp,
+                self._train_Z_norm,
+                (self.train_Y - self._y_mean) / self._y_std,
+                z_cand_norm[:100],  # Sample of candidates for extrapolation check
+            )
+            self.gp_diagnostics.log_summary(metrics, prefix=f"[Iter {iteration}]")
+            self.diagnostic_history.append(self.gp_diagnostics.get_summary_dict(metrics))
+
         z_opt_norm = self._select_candidate(z_cand_norm)
 
         # Denormalize
@@ -321,7 +340,7 @@ class TuRBOBaseline:
         logger.info(f"Starting TuRBO optimization for {n_iterations} iterations")
 
         for i in range(1, n_iterations + 1):
-            score = self._step()
+            score = self._step(iteration=i)
 
             # Handle restart
             if self.turbo_state.restart_triggered:
@@ -413,6 +432,7 @@ def main():
         "best_smiles": optimizer.best_smiles,
         "n_evaluated": len(optimizer.smiles_observed),
         "history": optimizer.history,
+        "gp_diagnostics": optimizer.diagnostic_history,
         "args": vars(args),
     }
 

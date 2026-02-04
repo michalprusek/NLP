@@ -33,6 +33,8 @@ from botorch.models import SingleTaskGP
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
+from rielbo.gp_diagnostics import GPDiagnostics
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,6 +144,10 @@ class SphericalSubspaceBO:
             "embedding_norm": [],
         }
 
+        # GP diagnostics
+        self.gp_diagnostics = GPDiagnostics(verbose=True)
+        self.diagnostic_history = []
+
     def project_to_subspace(self, u: torch.Tensor) -> torch.Tensor:
         """Project from S^(D-1) to S^(d-1)."""
         v = u @ self.A
@@ -179,15 +185,15 @@ class SphericalSubspaceBO:
             fit_gpytorch_mll(mll)
             self.gp.eval()
 
-            # Diagnostics
-            if self.verbose:
-                with torch.no_grad():
-                    pred = self.gp.posterior(X).mean.squeeze(-1)
-                    corr = torch.corrcoef(torch.stack([pred, Y.squeeze(-1)]))[0, 1]
-                    logger.info(
-                        f"GP: corr={corr.item():.3f}, n={len(X)}, "
-                        f"noise={self.likelihood.noise.item():.4f}"
-                    )
+            # Full diagnostics with GPDiagnostics
+            if self.verbose and self.iteration % 10 == 0:
+                metrics = self.gp_diagnostics.analyze(
+                    self.gp, X.float(), Y.squeeze(-1).float()
+                )
+                self.gp_diagnostics.log_summary(metrics, prefix=f"[Iter {self.iteration}]")
+                self.diagnostic_history.append(
+                    self.gp_diagnostics.get_summary_dict(metrics)
+                )
         except (RuntimeError, torch.linalg.LinAlgError) as e:
             # Numerical issues - use fallback
             self.fallback_count += 1
