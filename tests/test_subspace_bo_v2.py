@@ -108,7 +108,7 @@ class TestArcCosineKernels:
 
         # Order 2 should give higher similarity for nearby points
         # (smoother means slower decay)
-        assert k2 >= k0 - 0.1  # Allow some tolerance
+        assert k2 >= k0 - 0.01  # Order 2 should be at least as smooth
 
 
 class TestProductSphereKernel:
@@ -234,6 +234,7 @@ class TestGeodesicTrustRegion:
 
     def test_global_samples_distributed(self):
         """With global_fraction=1.0, samples should be uniformly distributed."""
+        torch.manual_seed(42)
         from rielbo.spherical_transforms import GeodesicTrustRegion
 
         tr = GeodesicTrustRegion(max_angle=0.5, global_fraction=1.0, device="cpu")
@@ -247,6 +248,7 @@ class TestGeodesicTrustRegion:
 
     def test_concentrated_samples(self):
         """Concentrated sampling should cluster near center."""
+        torch.manual_seed(42)
         from rielbo.spherical_transforms import GeodesicTrustRegion, geodesic_distance
 
         tr = GeodesicTrustRegion(max_angle=0.5, device="cpu")
@@ -267,6 +269,7 @@ class TestNormDistribution:
 
     def test_gaussian_fit(self):
         """Gaussian should capture mean and std."""
+        torch.manual_seed(42)
         from rielbo.norm_distribution import NormDistribution
 
         norms = torch.randn(1000) * 2 + 10  # mean=10, std=2
@@ -279,6 +282,7 @@ class TestNormDistribution:
 
     def test_samples_in_range(self):
         """Samples should be in reasonable range."""
+        torch.manual_seed(42)
         from rielbo.norm_distribution import NormDistribution
 
         norms = torch.rand(1000) * 5 + 5  # range [5, 10]
@@ -294,6 +298,7 @@ class TestNormDistribution:
 
     def test_histogram_samples(self):
         """Histogram should produce samples matching distribution."""
+        torch.manual_seed(42)
         from rielbo.norm_distribution import NormDistribution
 
         # Bimodal distribution

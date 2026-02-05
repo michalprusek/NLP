@@ -1,6 +1,7 @@
 """LLM client abstraction - vLLM for local, OpenAI/DeepInfra for API"""
 from abc import ABC, abstractmethod
 from typing import List
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -35,8 +36,8 @@ def _patch_vllm_platform():
         vllm.platforms.current_platform = cuda_platform
         vllm.platforms._current_platform = cuda_platform
     except (ImportError, AttributeError) as e:
-        print(
-            f"  Warning: Could not patch vLLM platform ({type(e).__name__}): {e}. "
+        logging.getLogger(__name__).warning(
+            f"Could not patch vLLM platform ({type(e).__name__}): {e}. "
             "This may cause device detection issues. If you see CUDA errors, "
             "try: pip install --upgrade vllm"
         )
@@ -202,7 +203,7 @@ class OpenAIClient(LLMClient):
                 )
                 if not response.choices:
                     print(f"[ERROR] OpenAI returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
-                    results.append(None)
+                    results.append("")
                 else:
                     results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
@@ -213,8 +214,8 @@ class OpenAIClient(LLMClient):
                 # Re-raise authentication errors - these are not recoverable
                 if "auth" in error_type.lower() or "401" in str(e):
                     raise
-                # For other errors, append None to signal failure (distinguishable from empty response)
-                results.append(None)
+                # For other errors, append empty string to signal failure
+                results.append("")
         return results
 
 
@@ -253,7 +254,7 @@ class DeepInfraClient(LLMClient):
                 )
                 if not response.choices:
                     print(f"[ERROR] DeepInfra returned empty choices on prompt {i+1}/{len(prompts)} - possible content filter")
-                    results.append(None)
+                    results.append("")
                 else:
                     results.append(response.choices[0].message.content)
             except KeyboardInterrupt:
@@ -264,8 +265,8 @@ class DeepInfraClient(LLMClient):
                 # Re-raise authentication errors - these are not recoverable
                 if "auth" in error_type.lower() or "401" in str(e):
                     raise
-                # For other errors, append None to signal failure (distinguishable from empty response)
-                results.append(None)
+                # For other errors, append empty string to signal failure
+                results.append("")
         return results
 
 class AnthropicClient(LLMClient):
@@ -300,7 +301,7 @@ class AnthropicClient(LLMClient):
                 )
                 if not response.content:
                     print(f"[ERROR] Anthropic returned empty content on prompt {i+1}/{len(prompts)}")
-                    results.append(None)
+                    results.append("")
                 else:
                     results.append(response.content[0].text)
             except KeyboardInterrupt:
@@ -310,7 +311,7 @@ class AnthropicClient(LLMClient):
                 print(f"[ERROR] Anthropic {error_type} on prompt {i+1}/{len(prompts)}: {e}")
                 if "auth" in error_type.lower() or "401" in str(e):
                     raise
-                results.append(None)
+                results.append("")
         return results
 
 

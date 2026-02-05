@@ -14,30 +14,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from conftest import MockCodec, MockOracle
 from rielbo.subspace_bo_v4 import SphericalSubspaceBOv4, geodesic_novelty
-
-
-class MockCodec:
-    """Mock codec for testing."""
-
-    def __init__(self, dim=256, device="cpu"):
-        self.dim = dim
-        self.device = device
-
-    def encode(self, smiles_list):
-        n = len(smiles_list)
-        return torch.randn(n, self.dim, device=self.device)
-
-    def decode(self, embeddings):
-        n = embeddings.shape[0]
-        return [f"SMILES_{i}_{torch.randint(0, 10000, (1,)).item()}" for i in range(n)]
-
-
-class MockOracle:
-    """Mock oracle that returns random scores."""
-
-    def score(self, smiles):
-        return torch.rand(1).item()
 
 
 # ─────────────────────────────────────────────────
@@ -391,8 +369,9 @@ class TestFullStep:
 
         result = opt.step()
 
-        assert "score" in result or "best_score" in result
-        assert "novelty_mean" in result or "is_duplicate" in result
+        assert "score" in result
+        assert "best_score" in result
+        assert "novelty_mean" in result or "is_duplicate" in result  # novelty only in non-dup steps
 
     def test_history_tracks_novelty(self):
         """History should include novelty metrics."""

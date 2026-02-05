@@ -218,8 +218,7 @@ class SphericalSubspaceBOv5:
         elif self.kernel == "matern":
             return create_kernel(kernel_type="matern", use_scale=True)
         else:
-            logger.warning(f"Unknown kernel '{self.kernel}', using arccosine")
-            return create_kernel(kernel_type="arccosine", kernel_order=0, use_scale=True)
+            raise ValueError(f"Unknown kernel '{self.kernel}'. Valid: arccosine, matern")
 
     def _select_window(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Select windowed training subset: K_local nearest + K_random random."""
@@ -289,8 +288,10 @@ class SphericalSubspaceBOv5:
                     self.gp_diagnostics.get_summary_dict(metrics)
                 )
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             self.fallback_count += 1
-            logger.warning(f"GP fit failed (fallback #{self.fallback_count}): {e}")
+            logger.error(f"GP fit failed (fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
                 X, Y_norm,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -361,7 +362,7 @@ class SphericalSubspaceBOv5:
             return u_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            logger.warning(f"Acquisition failed: {e}")
+            logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0, "is_fallback": True}
 
@@ -471,9 +472,10 @@ class SphericalSubspaceBOv5:
         smiles = smiles_list[0] if smiles_list else ""
 
         if not smiles:
+            logger.debug(f"Decode failed at iter {self.iteration}")
             self._update_trust_region(improved=False)
             return {"score": 0.0, "best_score": self.best_score, "smiles": "",
-                    "is_duplicate": True, **diag}
+                    "is_duplicate": True, "is_decode_failure": True, **diag}
 
         if smiles in self.smiles_observed:
             self._update_trust_region(improved=False)

@@ -110,22 +110,20 @@ results/
 **/data/*.bin
 **/data/*.safetensors
 
-# GSM8K dataset splits
-datasets/gsm8k/
+# Datasets (download/generate separately)
+datasets/
 
-# Large dataset files
-datasets/*.pt
-datasets/*.json
+# Papers (PDFs, share via cloud/NFS)
+papers/
+
+# Planning artifacts (Claude Code internal)
+.planning/
 
 # Weights & Biases
 wandb/
 
 # GuacaMol SELFIES VAE models
 shared/guacamol/minicddd_models/
-
-# GuacaMol and ZINC datasets (large, download separately)
-datasets/guacamol/
-datasets/zinc/
 
 # RieLBO local-only files
 rielbo/best_so_far/

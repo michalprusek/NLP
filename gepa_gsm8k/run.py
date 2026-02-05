@@ -284,7 +284,7 @@ class VLLMChatWrapper:
         # Track the system prompt - notify evaluator when prompt changes
         if system_prompt and system_prompt != self._last_system_prompt:
             logger.info(f"[VLLMChat] NEW PROMPT detected, tracking_evaluator={self.tracking_evaluator is not None}")
-            logger.info(f"[VLLMChat] Prompt preview: {system_prompt[:100]}...")
+            logger.info(f"[VLLMChat] Prompt:\n{system_prompt}")
             if self.tracking_evaluator is not None:
                 self.tracking_evaluator.set_current_prompt(system_prompt)
             self._last_system_prompt = system_prompt
@@ -422,8 +422,8 @@ class BatchingVLLMWrapper:
                 self.tracking_evaluator.set_current_prompt(system_prompt)
 
             logger.info(
-                f"[BatchWrapper] New prompt detected (call #{self.call_count}): "
-                f"{system_prompt[:100]}..."
+                f"[BatchWrapper] New prompt detected (call #{self.call_count}):\n"
+                f"{system_prompt}"
             )
             self._prefetch(system_prompt)
 

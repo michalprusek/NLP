@@ -179,8 +179,10 @@ class VanillaBO:
                 )
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             self.fallback_count += 1
-            logger.warning(f"GP fit failed (fallback #{self.fallback_count}): {e}")
+            logger.error(f"GP fit failed (fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
                 Z_norm, Y,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -258,7 +260,7 @@ class VanillaBO:
             return z_opt_raw, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            logger.warning(f"Acquisition failed: {e}")
+            logger.error(f"Acquisition failed: {e}")
             z_opt = self.best_z.unsqueeze(0) + 0.01 * torch.randn(
                 1, self.input_dim, device=self.device
             )
@@ -365,11 +367,13 @@ class VanillaBO:
         # Evaluate
         score = self.oracle.score(smiles)
 
-        # Update trust region BEFORE updating best
-        self._update_trust_region(score)
-
         # Update training data
         self.train_Z = torch.cat([self.train_Z, z_opt], dim=0)
+
+        # Update normalization bounds to cover new data
+        self._z_min = torch.min(self._z_min, z_opt.squeeze() - (self._z_max - self._z_min) * 0.05)
+        self._z_max = torch.max(self._z_max, z_opt.squeeze() + (self._z_max - self._z_min) * 0.05)
+
         self.train_Y = torch.cat([
             self.train_Y,
             torch.tensor([score], device=self.device, dtype=torch.float32),
@@ -381,6 +385,9 @@ class VanillaBO:
             self.best_smiles = smiles
             self.best_z = z_opt.squeeze().clone()
             logger.info(f"New best! {score:.4f}: {smiles}")
+
+        # Update trust region AFTER best_score update
+        self._update_trust_region(score)
 
         return {
             "score": score, "best_score": self.best_score,

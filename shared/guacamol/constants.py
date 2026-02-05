@@ -42,7 +42,7 @@ GUACAMOL_TASK_DESCRIPTIONS = {
 }
 
 # Default paths
-DEFAULT_DATA_PATH = Path("nfbo_original/data/guacamol/oracle/guacamol_train_data_first_20k.csv")
+DEFAULT_DATA_PATH = Path("datasets/guacamol/guacamol_train_data_first_20k.csv")
 
 # Column mapping in CSV
 CSV_COLUMNS = {

@@ -45,7 +45,7 @@ def main():
     else:
         logger.info("Loading GuacaMol dataset...")
         import pandas as pd
-        df = pd.read_csv("nfbo_original/data/guacamol/oracle/guacamol_train_data_first_20k.csv")
+        df = pd.read_csv("datasets/guacamol/guacamol_train_data_first_20k.csv")
         all_smiles = df["smile"].tolist()
 
     # Sample

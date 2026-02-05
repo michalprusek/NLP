@@ -107,9 +107,17 @@ def _penalized_logp(mol) -> float:
 
     This includes SA (synthetic accessibility) and ring penalties.
     """
-    from nfbo_original.objective.guacamol.utils.mol_utils.moses_metrics.SA_Score import (
-        sascorer,
-    )
+    try:
+        from rdkit.Chem import RDConfig
+        import os, sys
+        sa_path = os.path.join(RDConfig.RDContribDir, "SA_Score")
+        if sa_path not in sys.path:
+            sys.path.insert(0, sa_path)
+        import sascorer
+    except ImportError:
+        raise ImportError(
+            "SA_Score (sascorer) not found. Install RDKit with contrib for penalized logP."
+        )
 
     try:
         logp = Crippen.MolLogP(mol)

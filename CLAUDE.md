@@ -23,7 +23,7 @@ Notes:
 
 **Goal**: Outperform SOTA methods (TuRBO, NFBO, GEPA) in high-dimensional settings.
 
-**Reference Papers**: `papers/` contains 40 PDFs covering flow matching, high-D BO, prompt optimization, TuRBO, and related methods.
+**Reference Papers**: `papers/` contains 39 PDFs covering flow matching, high-D BO, prompt optimization, TuRBO, and related methods. (gitignored — share via NFS/cloud)
 
 ## Repository Structure
 
@@ -51,6 +51,10 @@ NLP/
 │   ├── turbo_baseline.py    # TuRBO baseline (R^256)
 │   ├── vanilla_bo.py        # Vanilla BO with Hvarfner priors (256D)
 │   ├── kernels.py           # ArcCosineKernel
+│   ├── spherical_transforms.py  # Spherical geometry utilities
+│   ├── norm_distribution.py # Norm distribution analysis
+│   ├── graph_laplacian_gp.py    # Graph Laplacian GP (experimental)
+│   ├── estimate_intrinsic_dim.py # Intrinsic dimensionality estimators
 │   ├── gp_diagnostics.py    # GP health monitoring
 │   ├── plot_convergence.py  # Convergence plots
 │   ├── run_guacamol_subspace.py    # CLI: Subspace BO v1
@@ -59,6 +63,17 @@ NLP/
 │   ├── run_guacamol_subspace_v4.py # CLI: Subspace BO v4
 │   ├── run_guacamol_subspace_v5.py # CLI: Subspace BO v5
 │   ├── run_guacamol_vanilla.py     # CLI: Vanilla BO
+│   ├── run_guacamol_graph.py       # CLI: Graph Laplacian GP
+│   ├── benchmark/           # Benchmarking infrastructure
+│   │   ├── runner.py        # BenchmarkRunner orchestrator
+│   │   ├── base.py          # BaseMethod ABC
+│   │   ├── plotting.py      # Benchmark plots
+│   │   ├── aggregate_v2_results.py  # Result aggregation
+│   │   ├── run_v2_benchmark.sh      # Multi-seed benchmark script
+│   │   └── methods/         # Method adapters
+│   │       ├── subspace.py, subspace_v3-v5.py
+│   │       ├── turbo.py, vanilla.py, lolbo.py
+│   │       └── __init__.py
 │   └── results/
 │
 ├── shared/                  # Shared infrastructure
@@ -68,16 +83,17 @@ NLP/
 │   └── guacamol/            # GuacaMol codec, oracle, data loaders
 │       ├── codec.py         # SELFIES VAE (256D latent)
 │       ├── oracle.py        # GuacaMol scoring
+│       ├── constants.py     # Shared constants
 │       └── data.py          # Data loaders (GuacaMol CSV, ZINC)
 │
-├── datasets/                # Data files (read-only)
-├── papers/                  # Reference papers (40 PDFs)
+├── datasets/                # Data files (gitignored, download separately)
+├── papers/                  # Reference papers (gitignored, 39 PDFs)
 ├── tests/                   # Test suite
 └── pyproject.toml           # Project configuration
 ```
 
 **Kept but not actively developed**:
-- `instructzero/`, `instructzero_gsm8k/` — InstructZero
+- `instructzero/`, `instructzero_gsm8k/` — InstructZero (on disk, not tracked)
 
 ---
 
@@ -241,6 +257,22 @@ for task in adip med2; do
   done
 done
 ```
+
+### Benchmark Runner
+
+```bash
+# Run full benchmark suite (all methods, multiple seeds)
+CUDA_VISIBLE_DEVICES=0 bash rielbo/benchmark/run_v2_benchmark.sh
+
+# Or use Python runner directly
+CUDA_VISIBLE_DEVICES=0 uv run python -c "
+from rielbo.benchmark.runner import BenchmarkRunner
+runner = BenchmarkRunner(task_id='adip', seeds=[42,43,44,45,46])
+runner.run_all()
+"
+```
+
+Key files: `rielbo/benchmark/runner.py` (orchestrator), `rielbo/benchmark/base.py` (BaseMethod ABC), `rielbo/benchmark/methods/` (per-method adapters).
 
 ### Benchmark Results (2026-02-05)
 

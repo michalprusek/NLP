@@ -197,6 +197,8 @@ class SphericalSubspaceBOv4:
         self._window_V = None  # Windowed subspace points [W, d]
         self._window_Y = None  # Windowed scores [W]
         self._window_indices = None
+        self._y_mean = None
+        self._y_std = None
 
         # ALL observed points in current subspace (for novelty)
         self._all_V = None  # [N, d] — all points projected, updated each step
@@ -249,8 +251,7 @@ class SphericalSubspaceBOv4:
         elif self.kernel == "matern":
             return create_kernel(kernel_type="matern", use_scale=True)
         else:
-            logger.warning(f"Unknown kernel '{self.kernel}', using arccosine")
-            return create_kernel(kernel_type="arccosine", kernel_order=0, use_scale=True)
+            raise ValueError(f"Unknown kernel '{self.kernel}'. Valid: arccosine, matern")
 
     def _select_window(self, A: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Select windowed training subset: K_local nearest + K_random random."""
@@ -334,8 +335,10 @@ class SphericalSubspaceBOv4:
                     self.gp_diagnostics.get_summary_dict(metrics)
                 )
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             self.fallback_count += 1
-            logger.warning(f"GP fit failed (fallback #{self.fallback_count}): {e}")
+            logger.error(f"GP fit failed (fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
                 X, Y_norm,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -418,7 +421,11 @@ class SphericalSubspaceBOv4:
             mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
             fit_gpytorch_mll(mll)
             gp.eval()
-        except (RuntimeError, torch.linalg.LinAlgError):
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
+            self.fallback_count += 1
+            logger.error(f"GP fit failed for projection (fallback #{self.fallback_count}): {e}")
             gp = SingleTaskGP(
                 X, Y_norm,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -484,11 +491,8 @@ class SphericalSubspaceBOv4:
             u_opt = u_cand[best_idx:best_idx + 1]
             diag["novelty_selected"] = novelty_ensemble[best_idx].item()
 
-            # Diagnostics from first GP
-            A0 = self.projections[0]
-            v_opt_0 = self.project_to_subspace(u_opt, A0)
+            # Diagnostics from ensemble
             with torch.no_grad():
-                gp_0 = f_samples[0]  # Already have samples
                 diag["gp_mean"] = f_ensemble[best_idx].item()
                 diag["gp_std"] = torch.stack(f_samples).std(dim=0)[best_idx].item()
                 diag["nearest_train_cos"] = (u_opt @ self.train_U.T).squeeze().max().item()
@@ -496,7 +500,7 @@ class SphericalSubspaceBOv4:
             return u_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            logger.warning(f"Ensemble acquisition failed: {e}")
+            logger.error(f"Ensemble acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {
                 "gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0,
@@ -565,7 +569,7 @@ class SphericalSubspaceBOv4:
             return u_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            logger.warning(f"Acquisition failed: {e}")
+            logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {
                 "gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0,
@@ -633,8 +637,9 @@ class SphericalSubspaceBOv4:
         smiles = smiles_list[0] if smiles_list else ""
 
         if not smiles:
+            logger.debug(f"Decode failed at iter {self.iteration}")
             return {"score": 0.0, "best_score": self.best_score, "smiles": "",
-                    "is_duplicate": True, **diag}
+                    "is_duplicate": True, "is_decode_failure": True, **diag}
 
         if smiles in self.smiles_observed:
             return {"score": 0.0, "best_score": self.best_score, "smiles": smiles,

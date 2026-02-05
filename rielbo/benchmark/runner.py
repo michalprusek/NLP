@@ -213,6 +213,7 @@ def run_benchmark_suite(
     logger.info(f"Seeds: {seeds}")
 
     all_results = []
+    failures = []
     completed = 0
 
     for method_name in methods:
@@ -239,15 +240,22 @@ def run_benchmark_suite(
                         verbose=verbose,
                     )
                     all_results.append(result)
+                except KeyboardInterrupt:
+                    logger.info("Benchmark interrupted by user")
+                    raise
                 except Exception as e:
                     logger.error(f"Failed {method_name}/{task_id}/seed{seed}: {e}")
                     import traceback
                     traceback.print_exc()
+                    failures.append({"method": method_name, "task": task_id, "seed": seed, "error": str(e)})
 
                 completed += 1
                 logger.info(f"Progress: {completed}/{total_runs}")
 
-    logger.info(f"Benchmark suite complete: {len(all_results)} successful runs")
+    logger.info(f"Benchmark suite complete: {len(all_results)} successful, {len(failures)} failed")
+    if failures:
+        for f in failures:
+            logger.error(f"  FAILED: {f['method']}/{f['task']}/seed{f['seed']}: {f['error']}")
     return all_results
 
 
@@ -271,11 +279,14 @@ def generate_summary_table(
     # Load all results
     results_by_method_task = defaultdict(list)
     for filepath in Path(results_dir).glob("*.json"):
-        with open(filepath) as f:
-            result = json.load(f)
-
-        method = result["method"]
-        task = result["task_id"]
+        try:
+            with open(filepath) as f:
+                result = json.load(f)
+            method = result["method"]
+            task = result["task_id"]
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Skipping malformed result file {filepath}: {e}")
+            continue
 
         if methods and method not in methods:
             continue

@@ -8,11 +8,14 @@ Important: For fair comparison, we:
 3. Use single-step interface (bsz=1) to match other methods
 """
 
+import logging
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 
 # Fix gpytorch compatibility: LazyTensor -> LinearOperator
 try:
@@ -24,7 +27,7 @@ except ImportError:
         from linear_operator.operators import LinearOperator
         gpytorch.lazy.LazyTensor = LinearOperator
     except ImportError:
-        pass
+        logging.getLogger(__name__).warning("Could not patch gpytorch.lazy.LazyTensor — LOLBO may fail")
 
 # Add lolbo_ref to path for imports
 lolbo_path = Path(__file__).parent.parent.parent.parent / "lolbo_ref"
@@ -103,7 +106,8 @@ class SharedCodecObjective(LatentSpaceObjective):
         try:
             score = self.oracle.score(x)
             return float(score)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Oracle scoring failed for '{x[:50]}...': {e}")
             return np.nan
 
     def vae_forward(self, xs_batch: list[str]) -> tuple[torch.Tensor, torch.Tensor]:

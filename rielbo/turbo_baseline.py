@@ -26,21 +26,17 @@ import logging
 import os
 import random
 from datetime import datetime
-from typing import Optional
-
 import numpy as np
 import torch
-import torch.nn.functional as F
 from botorch.acquisition import qExpectedImprovement
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP
 from botorch.sampling import SobolQMCNormalSampler
-from botorch.optim import optimize_acqf
 from gpytorch.kernels import MaternKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
-from rielbo.gp_diagnostics import GPDiagnostics, diagnose_gp_step
+from rielbo.gp_diagnostics import GPDiagnostics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,15 +223,30 @@ class TuRBOBaseline:
         y_std = self.train_Y.std().clamp(min=1e-6)
         train_Y_norm = (self.train_Y - y_mean) / y_std
 
-        # Fit GP with Matern kernel (standard for BO)
-        self.gp = SingleTaskGP(
-            train_Z_norm.double(),
-            train_Y_norm.double().unsqueeze(-1),
-            covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
-        )
+        try:
+            # Fit GP with Matern kernel (standard for BO)
+            self.gp = SingleTaskGP(
+                train_Z_norm.double(),
+                train_Y_norm.double().unsqueeze(-1),
+                covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
+            )
 
-        mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
-        fit_gpytorch_mll(mll)
+            mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
+            fit_gpytorch_mll(mll)
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
+            logger.error(f"TuRBO GP fit failed: {e}")
+            import gpytorch
+            self.gp = SingleTaskGP(
+                train_Z_norm.double(),
+                train_Y_norm.double().unsqueeze(-1),
+                covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
+                likelihood=gpytorch.likelihoods.GaussianLikelihood(
+                    noise_constraint=gpytorch.constraints.GreaterThan(1e-2)
+                ),
+            )
+            self.gp.likelihood.noise = 0.1
 
         self._y_mean = y_mean
         self._y_std = y_std

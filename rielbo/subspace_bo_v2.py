@@ -316,8 +316,10 @@ class SphericalSubspaceBOv2:
                     self.gp_diagnostics.get_summary_dict(metrics)
                 )
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             self.fallback_count += 1
-            logger.warning(f"GP fit failed (fallback #{self.fallback_count}): {e}")
+            logger.error(f"GP fit failed (fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
                 X, Y,
                 likelihood=gpytorch.likelihoods.GaussianLikelihood(
@@ -398,7 +400,7 @@ class SphericalSubspaceBOv2:
             return u_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            logger.warning(f"Acquisition failed: {e}")
+            logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0, "is_fallback": True}
 
@@ -487,8 +489,9 @@ class SphericalSubspaceBOv2:
         smiles = smiles_list[0] if smiles_list else ""
 
         if not smiles:
+            logger.debug(f"Decode failed at iter {self.iteration}")
             return {"score": 0.0, "best_score": self.best_score, "smiles": "",
-                    "is_duplicate": True, **diag}
+                    "is_duplicate": True, "is_decode_failure": True, **diag}
 
         if smiles in self.smiles_observed:
             return {"score": 0.0, "best_score": self.best_score, "smiles": smiles,
