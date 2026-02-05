@@ -28,7 +28,7 @@ MODEL_ALIASES = {
     "llama": "meta-llama/Llama-3.1-8B-Instruct",
     "saul": "Equall/Saul-7B-Instruct-v1",
     "haiku": "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-5-20251022",
+    "sonnet": "claude-sonnet-4-5-20250929",
 }
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-7B-Instruct"
@@ -190,7 +190,11 @@ def main():
         args.meta_model = resolve_model_alias(args.meta_model)
 
     if args.meta_backend is None:
-        args.meta_backend = args.backend
+        # If meta-model differs from task model, auto-detect backend
+        if args.meta_model != args.model:
+            args.meta_backend = "auto"
+        else:
+            args.meta_backend = args.backend
 
     # Set GPU visibility
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids

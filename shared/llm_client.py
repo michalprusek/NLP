@@ -268,6 +268,52 @@ class DeepInfraClient(LLMClient):
                 results.append(None)
         return results
 
+class AnthropicClient(LLMClient):
+    """LLM client using Anthropic API (Claude models)"""
+
+    def __init__(self, model_name: str):
+        from anthropic import Anthropic
+
+        self.model_name = model_name
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY not found in environment")
+
+        self.client = Anthropic(api_key=api_key)
+        print(f"Initialized Anthropic client: {model_name}")
+
+    def generate(self, prompt: str, **kwargs) -> str:
+        return self.generate_batch([prompt], **kwargs)[0]
+
+    def generate_batch(self, prompts: List[str], **kwargs) -> List[str]:
+        max_new_tokens = kwargs.get('max_new_tokens', 512)
+        temperature = kwargs.get('temperature', 0.0)
+
+        results = []
+        for i, prompt in enumerate(prompts):
+            try:
+                response = self.client.messages.create(
+                    model=self.model_name,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                if not response.content:
+                    print(f"[ERROR] Anthropic returned empty content on prompt {i+1}/{len(prompts)}")
+                    results.append(None)
+                else:
+                    results.append(response.content[0].text)
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                error_type = type(e).__name__
+                print(f"[ERROR] Anthropic {error_type} on prompt {i+1}/{len(prompts)}: {e}")
+                if "auth" in error_type.lower() or "401" in str(e):
+                    raise
+                results.append(None)
+        return results
+
+
 class TransformersClient(LLMClient):
     """LLM client using HuggingFace Transformers (Standard PyTorch)"""
 
@@ -327,7 +373,7 @@ def create_llm_client(model_name: str, backend: str = "auto", **kwargs) -> LLMCl
 
     Args:
         model_name: Model identifier or alias
-        backend: 'vllm', 'openai', 'deepinfra', or 'auto'
+        backend: 'vllm', 'openai', 'deepinfra', 'anthropic', or 'auto'
 
     Aliases:
         - 'gpt-3.5' -> gpt-3.5-turbo (OpenAI)
@@ -349,6 +395,8 @@ def create_llm_client(model_name: str, backend: str = "auto", **kwargs) -> LLMCl
     if backend == "auto":
         if "gpt" in model_name.lower():
             backend = "openai"
+        elif "claude" in model_name.lower():
+            backend = "anthropic"
         elif model_name.startswith("google/"):
             backend = "deepinfra"
         else:
@@ -364,5 +412,7 @@ def create_llm_client(model_name: str, backend: str = "auto", **kwargs) -> LLMCl
         return OpenAIClient(model_name)
     elif backend == "deepinfra":
         return DeepInfraClient(model_name)
+    elif backend == "anthropic":
+        return AnthropicClient(model_name)
     else:
-        raise ValueError(f"Unknown backend: {backend}. Use: vllm, transformers, openai, deepinfra")
+        raise ValueError(f"Unknown backend: {backend}. Use: vllm, transformers, openai, deepinfra, anthropic")

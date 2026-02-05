@@ -209,9 +209,8 @@ class TuRBOBaseline:
 
     def _normalize_z(self, z: torch.Tensor) -> torch.Tensor:
         """Normalize latent vectors to zero mean, unit variance for GP."""
-        if not hasattr(self, '_z_mean'):
-            self._z_mean = self.train_Z.mean(dim=0)
-            self._z_std = self.train_Z.std(dim=0).clamp(min=1e-6)
+        self._z_mean = self.train_Z.mean(dim=0)
+        self._z_std = self.train_Z.std(dim=0).clamp(min=1e-6)
         return (z - self._z_mean) / self._z_std
 
     def _denormalize_z(self, z_norm: torch.Tensor) -> torch.Tensor:
@@ -277,8 +276,13 @@ class TuRBOBaseline:
 
         return z_opt_norm
 
-    def _step(self, iteration: int = 0) -> Optional[float]:
-        """Single optimization step."""
+    def _step(self, iteration: int = 0) -> tuple[float | None, str]:
+        """Single optimization step.
+
+        Returns:
+            Tuple of (score, smiles). Score is None if duplicate/decode failed.
+            SMILES is empty string if decode failed.
+        """
         # Fit GP
         self._fit_gp()
 
@@ -307,14 +311,14 @@ class TuRBOBaseline:
         except (ValueError, RuntimeError, IndexError) as e:
             # Expected decoding failures
             logger.info(f"Decode failed: {e}")
-            return None
+            return None, ""
         except (torch.cuda.OutOfMemoryError, MemoryError):
             # Critical memory errors - re-raise
             raise
 
         # Skip if already evaluated
         if smiles in self.smiles_observed:
-            return None
+            return None, smiles  # Return smiles even for duplicates
 
         # Evaluate
         score = self.oracle.score(smiles)
@@ -322,7 +326,7 @@ class TuRBOBaseline:
 
         # Update data
         self.train_Z = torch.cat([self.train_Z, z_opt], dim=0)
-        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device)])
+        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device, dtype=torch.float32)])
 
         # Update best
         if score > self.best_score:
@@ -333,14 +337,14 @@ class TuRBOBaseline:
         # Update trust region
         self.turbo_state.update(score)
 
-        return score
+        return score, smiles
 
     def optimize(self, n_iterations: int, log_interval: int = 10):
         """Run optimization loop."""
         logger.info(f"Starting TuRBO optimization for {n_iterations} iterations")
 
         for i in range(1, n_iterations + 1):
-            score = self._step(iteration=i)
+            score, _smiles = self._step(iteration=i)
 
             # Handle restart
             if self.turbo_state.restart_triggered:

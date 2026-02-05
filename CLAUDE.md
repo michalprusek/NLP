@@ -4,47 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Hardware Environment
 
-**GPUs: 2x NVIDIA L40S (48GB VRAM each, 96GB total)**
+- **GPU 0**: NVIDIA A100 80GB PCIe (main compute)
+- **GPU 1**: NVIDIA RTX A5000 24GB (secondary, used for vLLM task model when GPU 0 is busy)
 
-Always optimize for this hardware:
-- Use DDP (DistributedDataParallel) for multi-GPU training with `torchrun --nproc_per_node=2`
-- Maximize batch sizes to utilize 48GB VRAM per GPU (e.g., batch_size=1024-2048 for embeddings)
+Notes:
+- GPUs are heterogeneous — do NOT use DDP/torchrun across them
+- Use `CUDA_VISIBLE_DEVICES=0` or `CUDA_VISIBLE_DEVICES=1` to target a specific GPU
 - Use `pin_memory=True` and `num_workers=8` for DataLoaders
-- Enable mixed precision (fp16/bf16) when appropriate
-
-## Overview
-
-CRITICAL: before each new implementation proposal retrieve more information from context7 MCP and web search - be as much informed and updated as possible. Propose new features to the implementation to keep up with the latest research of 2026.
+- Enable mixed precision (bf16) when appropriate
 
 ## Research Context (NeurIPS Submission)
 
 **Core Problem**: Sample-efficient optimization in high-dimensional latent spaces.
 
-**Key Constraints**:
-- **Extremely limited evaluation budget**: 6-25 full-fidelity evaluations (e.g., 25 prompts, 6 protein samples)
-- **High-dimensional search space**: 1024D+ from pretrained autoencoders (SONAR, vec2text, ESM-C)
-- **Expensive oracle**: Each evaluation costs significant compute (LLM inference, wet lab, simulation)
+**Current Focus**:
+- **Molecular optimization** (GuacaMol): Subspace BO on SELFIES VAE (256D latent → 16D subspace)
+- **Prompt optimization** (GSM8K): OPRO, ProTeGi, GEPA benchmarks
 
-**Goal**: Outperform SOTA methods (ZeroInstruct, NFBO, GEPA, TuRBO) in low-sample regimes.
+**Goal**: Outperform SOTA methods (TuRBO, NFBO, GEPA) in high-dimensional settings.
 
-**Design Principles**:
-- Every method must work with n < 30 observations
-- Leverage pretrained encoder structure (manifold, semantics)
-- Prioritize sample efficiency over wall-clock time
-- Report results with statistical significance across random seeds
-
-**Domains**: Prompt optimization (GSM8K), protein engineering (ESM-C), text-to-text (vec2text)
-
-**Reference Papers**: `papers/` contains 40 PDFs covering flow matching, high-D BO, prompt optimization (OPRO, ProTeGi, MIPRO), TuRBO, SONAR, CFG-Zero*, and related SOTA methods. Read these before proposing new techniques.
-
-This repository contains six prompt optimization methods:
-
-1. **OPRO** (`opro/`) - Optimization by PROmpting for meta-optimization
-2. **ProTeGi** (`protegi/`) - Prompt Optimization with Textual Gradients
-3. **GEPA** (`gepa_gsm8k/`) - Genetic-Pareto Prompt Adaptation (GSM8K-specific)
-4. **RieLBO** (`rielbo/`) - Guided flow matching in SONAR embedding space
-5. **NFBO** (`nfbo_gsm8k/`) - Normalizing Flow Bayesian Optimization (GSM8K-specific)
-6. **InstructZero** (`instructzero/`, `instructzero_gsm8k/`) - Soft prompt optimization with GP
+**Reference Papers**: `papers/` contains 40 PDFs covering flow matching, high-D BO, prompt optimization, TuRBO, and related methods.
 
 ## Repository Structure
 
@@ -53,59 +32,55 @@ NLP/
 ├── opro/                    # OPRO optimization method
 │   ├── opro.py              # OPROOptimizer class
 │   ├── run.py               # CLI entry point
-│   ├── prompts/             # opro_meta.txt
-│   └── results/             # Output directory
+│   └── results/
 │
 ├── protegi/                 # ProTeGi optimization method
 │   ├── protegi.py           # ProTeGiOptimizer class
 │   ├── run.py               # CLI entry point
-│   ├── prompts/             # gradient.txt, edit.txt, etc.
 │   └── results/
 │
-├── gepa_gsm8k/              # GEPA for GSM8K task
+├── gepa_gsm8k/              # GEPA for GSM8K task (with BatchingVLLMWrapper)
 │   └── run.py               # CLI entry point with integrated optimizer
 │
-├── rielbo/                 # Flow matching + BO
-│   ├── velocity_network.py  # DiT-style velocity network
-│   ├── flow_model.py        # FlowMatchingModel
-│   ├── guided_flow.py       # GuidedFlowSampler with CFG-Zero*
-│   ├── gp_surrogate.py      # GP surrogate for 1024D optimization
-│   ├── decoder.py           # SonarDecoder
-│   ├── optimization_loop.py # BOOptimizationLoop
-│   ├── run.py               # CLI entry point
+├── rielbo/                  # Subspace BO for molecular optimization
+│   ├── subspace_bo.py       # SphericalSubspaceBO (v1, ArcCosine/Hvarfner)
+│   ├── subspace_bo_v2.py    # V2: geodesic/novelty presets
+│   ├── subspace_bo_v3.py    # V3: multi-projection rotation
+│   ├── subspace_bo_v4.py    # V4: novelty-weighted acquisition
+│   ├── subspace_bo_v5.py    # V5: latest variant
+│   ├── turbo_baseline.py    # TuRBO baseline (R^256)
+│   ├── vanilla_bo.py        # Vanilla BO with Hvarfner priors (256D)
+│   ├── kernels.py           # ArcCosineKernel
+│   ├── gp_diagnostics.py    # GP health monitoring
+│   ├── plot_convergence.py  # Convergence plots
+│   ├── run_guacamol_subspace.py    # CLI: Subspace BO v1
+│   ├── run_guacamol_subspace_v2.py # CLI: Subspace BO v2
+│   ├── run_guacamol_subspace_v3.py # CLI: Subspace BO v3
+│   ├── run_guacamol_subspace_v4.py # CLI: Subspace BO v4
+│   ├── run_guacamol_subspace_v5.py # CLI: Subspace BO v5
+│   ├── run_guacamol_vanilla.py     # CLI: Vanilla BO
+│   ├── run_guacamol_direct.py      # CLI: Direct Sphere BO (legacy)
 │   └── results/
 │
-├── nfbo_gsm8k/              # NFBO for GSM8K task
-│   ├── run.py               # CLI entry point
-│   ├── train_textflow.py    # TextFlow model training
-│   └── textflow/            # Discrete normalizing flow implementation
-│
-├── nfbo_original/           # Reference NFBO implementation from paper
-│
-├── instructzero/            # InstructZero core implementation
-│   ├── gp_optimizer.py      # Gaussian Process optimizer
-│   ├── loop.py              # Optimization loop
-│   ├── soft_prompt.py       # Soft prompt handling
-│   └── run.py               # CLI entry point
-│
-├── instructzero_gsm8k/      # InstructZero for GSM8K task
-│   └── run.py               # CLI entry point
-│
-├── study/                   # Flow matching architecture study
-│   ├── data/                # Data pipeline utilities
-│   ├── flow_matching/       # Training, models, evaluation
-│   └── run_all_experiments.py
-│
 ├── shared/                  # Shared infrastructure
-│   ├── llm_client.py        # LLMClient ABC + implementations
-│   └── gsm8k_evaluator.py   # GSM8K evaluation utilities
+│   ├── llm_client.py        # LLMClient ABC (vLLM, Anthropic, OpenAI)
+│   ├── gsm8k_evaluator.py   # GSM8K evaluation utilities
+│   ├── incremental_saver.py # JSON incremental checkpointing
+│   └── guacamol/            # GuacaMol codec, oracle, data loaders
+│       ├── codec.py         # SELFIES VAE (256D latent)
+│       ├── oracle.py        # GuacaMol scoring
+│       └── data.py          # Data loaders (GuacaMol CSV, ZINC)
 │
 ├── datasets/                # Data files (read-only)
 ├── papers/                  # Reference papers (40 PDFs)
 ├── tests/                   # Test suite
-├── CLAUDE.md                # This file
 └── pyproject.toml           # Project configuration
 ```
+
+**Legacy modules** (exist but not actively developed):
+- `nfbo_gsm8k/` — Normalizing Flow BO
+- `instructzero/`, `instructzero_gsm8k/` — InstructZero
+- `study/` — Flow matching architecture study (concluded: OT-CFM best, spherical-OT broken)
 
 ---
 
@@ -117,11 +92,10 @@ NLP/
 # Quick run
 uv run python -m opro.run --model qwen --iterations 10
 
-# Production run in tmux
-tmux new-session -d -s opro_run \
-  "CUDA_VISIBLE_DEVICES=0 uv run python -m opro.run \
-  --model qwen --backend vllm --iterations 200 \
-  2>&1 | tee opro/results/opro_$(date +%Y%m%d_%H%M%S).log; exec bash"
+# With Sonnet meta-model (Qwen evaluates, Sonnet generates candidates)
+CUDA_VISIBLE_DEVICES=1 uv run python -m opro.run \
+  --model qwen --backend vllm --meta-model sonnet \
+  --gpu-ids 1 --iterations 200 --max-prompts 100 --split test
 ```
 
 ### ProTeGi
@@ -140,46 +114,40 @@ uv run python -m protegi.run --model qwen --meta-model sonnet --steps 10
 # Quick run
 uv run python -m gepa_gsm8k.run --model qwen --budget 10000
 
-# Production run
+# Production run (uses BatchingVLLMWrapper for ~100x speedup)
 tmux new-session -d -s gepa_run \
   "uv run python -m gepa_gsm8k.run --model qwen --budget 150000 \
   2>&1 | tee gepa_gsm8k/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
-### RieLBO
+### Subspace BO (GuacaMol)
 
 ```bash
-# Train flow model
-uv run python -m rielbo.train_flow \
-  --data datasets/sonar_embeddings.pt \
-  --epochs 50 --batch-size 1024
+# Run Subspace BO v1
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+    --subspace-dim 16 --task-id adip --n-cold-start 100 --iterations 500
 
-# Run BO optimization
-uv run python -m rielbo.run \
-  --flow-checkpoint path/to/flow.pt \
-  --iterations 100
+# With Hvarfner kernel (RBF + LogNormal + ARD, BoTorch defaults)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
+    --subspace-dim 16 --kernel hvarfner --task-id adip --iterations 500
+
+# Run Subspace BO v2 (geodesic preset, recommended)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
+    --preset geodesic --task-id adip --n-cold-start 100 --iterations 500
 ```
 
-### NFBO (GSM8K)
+### Vanilla BO (Hvarfner, 256D)
 
 ```bash
-# Train TextFlow model first
-uv run python -m nfbo_gsm8k.train_textflow --data datasets/gsm8k
-
-# Run NF-BO optimization
-uv run python -m nfbo_gsm8k.run --iterations 50 --n-initial 20
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_vanilla \
+    --task-id adip --n-cold-start 100 --iterations 500 --acqf ts
 ```
 
-### InstructZero
+### TuRBO Baseline
 
 ```bash
-# Quick run (GSM8K)
-uv run python -m instructzero_gsm8k.run --model qwen --iterations 20
-
-# Production run
-tmux new-session -d -s instructzero_run \
-  "uv run python -m instructzero_gsm8k.run --model qwen --iterations 100 \
-  2>&1 | tee instructzero_gsm8k/results/iz_$(date +%Y%m%d_%H%M%S).log; exec bash"
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
+    --task-id adip --n-cold-start 100 --iterations 500 --seed 42
 ```
 
 ---
@@ -192,13 +160,16 @@ tmux new-session -d -s instructzero_run \
 from shared.llm_client import create_llm_client
 
 # Factory function with auto-detection
-client = create_llm_client("qwen", backend="vllm")  # Resolves to Qwen/Qwen2.5-7B-Instruct
+client = create_llm_client("qwen", backend="vllm")
 
 # Model aliases
 # "qwen"   → Qwen/Qwen2.5-7B-Instruct
 # "llama"  → meta-llama/Llama-3.1-8B-Instruct
 # "haiku"  → claude-haiku-4-5-20251001
-# "sonnet" → claude-sonnet-4-5-20251022
+# "sonnet" → claude-sonnet-4-5-20250929
+
+# Backends: vllm, anthropic, openai, deepinfra, auto
+# Auto-detect: "claude" → anthropic, "gpt" → openai, else → vllm
 ```
 
 ### GSM8K Evaluator (`shared/gsm8k_evaluator.py`)
@@ -219,158 +190,9 @@ A:
 
 ---
 
-## Algorithm Comparison
+## RieLBO Subspace BO
 
-| Algorithm | Type | Strengths | Limitations |
-|-----------|------|-----------|-------------|
-| **OPRO** | Meta-optimization | Simple, interpretable | Requires many LLM calls |
-| **ProTeGi** | Gradient-based | Directed search, beam search | Gradient quality varies |
-| **GEPA** | Evolutionary | Pareto diversity, reflection | Complex, slower convergence |
-| **RieLBO** | Flow + BO | Continuous space, GP-guided | Requires pretrained flow |
-| **NFBO** | Normalizing Flow | Adaptive density modeling | Training overhead per step |
-| **InstructZero** | GP + Soft Prompts | Sample-efficient, continuous | Requires soft prompt support |
-
----
-
-## Key Parameters
-
-### All Methods
-- `--model`: Task model for evaluation
-- `--meta-model`: Meta-optimizer model (default: same as --model)
-- `--backend`: `vllm` (default), `openai`, `deepinfra`, `auto`
-- `--tensor-parallel-size`: GPU count for vLLM
-
-### OPRO
-- `--iterations`: Optimization iterations (default: 200)
-- `--minibatch-size`: Examples per evaluation (default: 261)
-- `--num-candidates`: Candidates per iteration (default: 8)
-
-### ProTeGi
-- `--steps`: Optimization steps (default: 6)
-- `--beam-size`: Beam width (default: 4)
-- `--gradients`: Gradients per error group (default: 4)
-- `--mc-samples`: Monte Carlo paraphrases (default: 2)
-
-### GEPA (GSM8K)
-- `--budget`: Total task LLM call budget (default: 150000)
-- `--pareto-size`: Max Pareto front size (default: 10)
-- `--mutations`: Mutations per iteration (default: 4)
-
-### RieLBO
-- `--guidance-strength`: LCB guidance λ (default: 1.0)
-- `--alpha`: LCB exploration weight (default: 1.0)
-- `--n-candidates`: Candidates to generate (default: 64)
-
-### InstructZero
-- `--iterations`: Optimization iterations (default: 100)
-- `--n-initial`: Initial random samples (default: 5)
-- `--prompt-length`: Soft prompt token length (default: 10)
-
----
-
-## Datasets
-
-- `datasets/gsm8k/`: GSM8K math reasoning (train/test splits)
-- `datasets/sonar_embeddings.pt`: 1.5M SONAR embeddings (1024D)
-- `datasets/hbbops/`: Hyperband baseline prompts
-
----
-
-## Ablation Study Results (2026-02-02)
-
-### Flow Model Quality Comparison
-
-| Model | L2-r ↓ | Cosine to Test ↑ | Cosine to Good ↑ | Text Quality |
-|-------|--------|------------------|------------------|--------------|
-| **U-Net + OT-CFM + mixup+noise** | **0.15** | **0.59** | **0.28** | Coherent |
-| DiT + OT-CFM + mixup+noise | 0.15 | 0.58 | 0.26 | Coherent |
-| U-Net + Spherical-OT (FIXED) | 0.27 | 0.51 | 0.25 | Coherent |
-| ~~U-Net + Spherical-OT (OLD)~~ | 0.31 | 0.03 | 0.08 | Broken |
-
-**WINNER: U-Net + OT-CFM** - Best round-trip fidelity and cosine similarity.
-
-**Spherical-OT FIXED**: Now produces coherent prompts after training with `--no-normalize` flag.
-- Previous bug: double normalization (mean/std then unit sphere) lost semantic direction
-- Fix: train spherical flows on raw SONAR embeddings (no z-score normalization)
-
-### Best Checkpoints
-
-```
-# RECOMMENDED for RieLBO BO (best quality):
-study/checkpoints/unet-otcfm-10k-mixup+noise/best.pt  # L2-r=0.15, coherent
-
-# ALTERNATIVE (spherical geometry):
-study/checkpoints/unet-spherical-ot-10k-none/best.pt  # L2-r=0.27, fixed
-```
-
-### Spherical Flow Training
-
-For spherical flows (spherical, spherical-ot), use `--no-normalize` to skip z-score normalization:
-```bash
-CUDA_VISIBLE_DEVICES=1 uv run python -m study.flow_matching.train \
-  --arch unet --flow spherical-ot --dataset 10k --aug none \
-  --group spherical-fixed --no-normalize --epochs 2000
-```
-
-### Best GP Configuration
-- **RiemannianGP + arccosine kernel** - Spearman=0.44, ECE=0.012
-- ArcCosine kernel has NO lengthscale parameter
-- Kernel normalizes inputs: `k(x,y) = 1 - arccos(x̂·ŷ)/π`
-
-### Flow Matching Methods
-
-| Method | Coupling | L2-r | Status |
-|--------|----------|------|--------|
-| `otcfm` | Optimal Transport | 0.15 | **BEST** |
-| `icfm` | Random pairing | 0.18 | Good |
-| `si-gvp` | Stochastic Interpolant | 0.17 | Good |
-| `spherical-ot` | OT + SLERP | 0.31 | BROKEN |
-
-**Note on Spherical Flow**: While mathematically elegant (geodesic paths on hypersphere), current implementation produces samples in wrong region of the sphere. Needs investigation.
-
----
-
-## RieLBO GuacaMol Molecular Optimization
-
-### Main Approach
-- **Subspace BO** (`rielbo/run_guacamol_subspace.py`): Projects S^255 → S^15 for tractable GP
-- **Direct Sphere BO** (`rielbo/run_guacamol_direct.py`): GP directly on unit sphere (no flow)
-
-### Key Components
-- `rielbo/velocity_network.py` - DiT-style velocity network (256D, 6 layers)
-- `rielbo/norm_predictor.py` - MLP predicting magnitude from direction
-- `shared/guacamol/codec.py` - SELFIES VAE (256D latent space)
-- `shared/guacamol/data.py` - Data loaders for GuacaMol CSV and ZINC
-
-### Datasets
-- GuacaMol: `nfbo_original/data/guacamol/oracle/guacamol_train_data_first_20k.csv` (20K molecules)
-- ZINC: `datasets/zinc/zinc_all.txt` (249K molecules) - use for larger training
-
-### Training Commands
-```bash
-# Train spherical flow on ZINC (250K)
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.train_flow_guacamol \
-    --spherical --zinc --n-samples 250000 --epochs 500 \
-    --output-dir rielbo/checkpoints/guacamol_flow_zinc_250k
-
-# Train NormPredictor on ZINC
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.norm_predictor \
-    --zinc --n-samples 250000 --epochs 200 \
-    --output rielbo/checkpoints/guacamol_flow_zinc_250k/norm_predictor.pt
-
-# Run Direct Sphere BO (recommended - faster, comparable results)
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_direct \
-    --norm-predictor rielbo/checkpoints/guacamol_flow_zinc_250k/norm_predictor.pt \
-    --task-id adip --n-cold-start 100 --iterations 500
-```
-
-### Key Findings (2026-02-02)
-- **OT-CFM invertibility broken**: z→u→z round-trip has ~0.50 cosine (should be >0.95)
-- **Direct Sphere BO preferred**: Faster (~3 it/s vs 0.3 it/s) with comparable results
-- **ArcCosine kernel**: `k(x,y) = 1 - arccos(x·y)/π` for GP on unit sphere (no lengthscale)
-- **Best results**: Direct BO achieved 0.5419 on adip task (vs 0.4910 cold start)
-
-### Subspace BO Design Pattern
+### Design Pattern
 
 **Problem**: GP in 256D with ~100 points overfits (correlation=1.0, no generalization).
 
@@ -382,25 +204,12 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_direct \
 
 **Key files**: `rielbo/subspace_bo.py`, `rielbo/run_guacamol_subspace.py`
 
-```bash
-# Run Subspace BO (no flow, no norm_predictor needed)
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
-    --subspace-dim 16 --task-id pdop --n-cold-start 100 --iterations 500
-
-# With Matern kernel
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
-    --subspace-dim 16 --kernel matern --task-id pdop --iterations 500
-
-# With UCB acquisition
-CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
-    --subspace-dim 16 --acqf ucb --ucb-beta 2.0 --task-id pdop --iterations 500
-```
-
 ### CLI Options
 
 **Kernel options** (`--kernel`):
-- `arccosine` (default): k(x,y) = 1 - arccos(x·y)/π (no lengthscale)
+- `arccosine` (default): k(x,y) = 1 - arccos(x·y)/π (no lengthscale, natural for spherical data)
 - `matern`: Matern-5/2 kernel
+- `hvarfner`: BoTorch defaults (RBF + LogNormal + ARD + Standardize). Remaps S^(d-1) from [-1,1] to [0,1]
 
 **Acquisition Functions** (`--acqf`):
 - `ts` (default): Thompson Sampling
@@ -413,12 +222,12 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
 - **Cold start**: 100 molecules
 - **Iterations**: 500
 - **Seeds**: 42, 43, 44, 45, 46 (5 runs)
-- **Tasks**: adip, med2 (NOT pdop - pdop is solved, focus on harder tasks)
+- **Tasks**: adip, med2 only
 
-**IMPORTANT: Do NOT benchmark on pdop. Focus experiments on med2 and adip.**
+**IMPORTANT: Do NOT benchmark on pdop — it is solved. Focus experiments on adip and med2.**
 
 ```bash
-# Run Subspace BO benchmark on hard tasks
+# Benchmark Subspace BO
 for task in adip med2; do
   for seed in 42 43 44 45 46; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
@@ -427,7 +236,7 @@ for task in adip med2; do
   done
 done
 
-# Run TuRBO baseline for comparison
+# Benchmark TuRBO baseline
 for task in adip med2; do
   for seed in 42 43 44 45 46; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
@@ -436,36 +245,47 @@ for task in adip med2; do
 done
 ```
 
-### Benchmark Results (2026-02-03)
+### Benchmark Results (2026-02-05)
 
-| Task | Cold Start | Subspace BO (5 seeds) | TuRBO (5 seeds) | Improvement |
-|------|------------|----------------------|-----------------|-------------|
-| pdop | 0.4558 | **0.5676 ± 0.033** | 0.5587 ± 0.011 | **+24.5%** |
-| adip | 0.4910 | **0.5447 ± 0.008** | - | **+10.9%** |
-| med2 | 0.1856 | 0.1856 ± 0.000 | - | +0.0%* |
+| Task | Cold Start | Subspace v2 (30 seeds) | Subspace v3 (10 seeds) | Vanilla BO (Hvarfner) | TuRBO | Best |
+|------|------------|------------------------|------------------------|-----------------------|-------|------|
+| adip | 0.4910 | **0.5475 ± 0.018** | 0.5465 ± 0.030 | 0.5022 (20 iter test) | 0.5044 ± 0.003 | **+11.5%** |
+| med2 | 0.1856 | 0.1859 ± 0.002 | 0.1856 ± 0.000 | - | - | +0.0%* |
 
-*Med2 showed no improvement - score range is extremely narrow [0.02, 0.19], and cold start already found near-optimal molecule.
+*Med2: only 0.6% of 20K molecules beat cold start best. Score range [0.02, 0.19] is extremely narrow.
 
 **Key findings**:
-- Subspace BO (S^15) outperforms TuRBO (R^256) on pdop by +1.6%
-- Both methods significantly improve over cold start (~+23% on pdop)
-- Med2 is fundamentally hard: only 0.6% of 20K molecules beat cold start best
+- Subspace BO (S^15) consistently outperforms TuRBO (R^256)
+- Vanilla BO (256D Hvarfner): ~25x slower due to 256D ARD fitting, marginal improvement
+- SAASBO: ~25s/iter due to MCMC — impractical
+- PCA/Active Subspace: linear projections lose nonlinear VAE structure, no improvement over random
+- PLS BO: supervised projection nearly identical to random Subspace BO (0.5576 vs 0.5582)
+- Intrinsic dimensionality: TwoNN=16.8, DANCo=11.3, FisherS=18.9 → validates d=16
 
----
+### Vanilla BO (Hvarfner)
 
-## Training → BO Automation
+**Full 256D GP with BoTorch default Hvarfner priors** — no subspace projection.
+- `rielbo/vanilla_bo.py` / `rielbo/run_guacamol_vanilla.py`
+- **CRITICAL**: Must use [0,1]^D min-max normalization, NOT z-score. Z-score causes GP degeneration (pairwise distances ~16 vs median lengthscale 65.8 → singular kernel)
+- ~33s/iteration vs ~1.3s for Subspace BO
 
-Use monitoring scripts to auto-start BO after training completes:
+### Prompt Optimization Benchmark (2026-02-05)
 
-```bash
-# Pattern: pgrep to detect training, then launch next step
-scripts/run_bo_spherical.sh    # Monitors spherical training, auto-starts BO
-scripts/run_bo_after_training.sh  # Monitors U-Net training, auto-starts BO
+100 prompts evaluated, test split (1319 examples), Qwen2.5-7B:
 
-# Manual monitoring pattern
-while pgrep -f "study.flow_matching.train.*<model>" > /dev/null; do sleep 30; done
-# Then run BO with the trained checkpoint
-```
+| Method | Best Score | Prompts | Notes |
+|--------|-----------|---------|-------|
+| **ProTeGi** | **88.9%** | 100 | Sonnet meta-model |
+| OPRO | 81.9% | 100 | Sonnet meta-model |
+| GEPA | in progress | - | BatchingVLLMWrapper for ~100x speedup |
+
+### GEPA Batching (Performance Fix)
+
+GEPA's default adapter calls `task_lm(messages)` sequentially per example.
+`BatchingVLLMWrapper` in `gepa_gsm8k/run.py` prefetches ALL trainset responses
+in one `generate_batch()` call when a new prompt is detected. ~100-200x speedup.
+- Use `--no-batch` to disable (for debugging)
+- GEPA message format: `[{system: candidate_prompt}, {user: data["input"]}]`
 
 ---
 
@@ -475,18 +295,12 @@ while pgrep -f "study.flow_matching.train.*<model>" > /dev/null; do sleep 30; do
 **NEVER truncate prompts in log output or print statements.** Always output the full prompt text.
 
 ```python
-# BAD - truncated output
-log(f"Generated: {prompt[:80]}...")
-print(f"Prompt: {prompt[:100]}...")
-logger.info(f"  Prompt: {result['prompt'][:200]}...")
+# BAD
+logger.info(f"Prompt: {result['prompt'][:200]}...")
 
-# GOOD - full prompt
-log(f"Generated:\n{prompt}")
-print(f"Prompt:\n{prompt}")
+# GOOD
 logger.info(f"Prompt:\n{result['prompt']}")
 ```
-
-This applies to ALL prompt output: logs, prints, debug messages, result summaries.
 
 ### Long-Running Processes
 **Always run processes >30 seconds in tmux** with logging:
@@ -508,8 +322,7 @@ uv run pytest tests/ -x -q
 ## Constraints
 
 - vLLM requires CUDA GPU; Claude API requires `ANTHROPIC_API_KEY`
-- Models <3B struggle with meta-optimization tasks
-- **Always use `--backend vllm`** unless explicitly told otherwise
+- **Always use `--backend vllm`** for task model unless explicitly told otherwise
 - **NEVER stop/kill running processes** unless user explicitly asks
 
 ## Autonomous Work Mode

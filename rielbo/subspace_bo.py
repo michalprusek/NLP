@@ -34,31 +34,9 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
 from rielbo.gp_diagnostics import GPDiagnostics
+from rielbo.kernels import ArcCosineKernel
 
 logger = logging.getLogger(__name__)
-
-
-class ArcCosineKernel(gpytorch.kernels.Kernel):
-    """ArcCosine kernel for unit sphere data.
-
-    k(x, y) = 1 - arccos(x·y) / π
-
-    Measures geodesic distance on the sphere.
-    """
-
-    has_lengthscale = False
-
-    def forward(self, x1, x2, diag=False, **params):
-        x1_norm = x1 / (x1.norm(dim=-1, keepdim=True) + 1e-8)
-        x2_norm = x2 / (x2.norm(dim=-1, keepdim=True) + 1e-8)
-
-        if diag:
-            cos_sim = (x1_norm * x2_norm).sum(dim=-1)
-        else:
-            cos_sim = x1_norm @ x2_norm.transpose(-2, -1)
-
-        cos_sim = cos_sim.clamp(-1 + 1e-6, 1 - 1e-6)
-        return 1.0 - torch.arccos(cos_sim) / torch.pi
 
 
 class SphericalSubspaceBO:
@@ -166,6 +144,8 @@ class SphericalSubspaceBO:
             return gpytorch.kernels.ScaleKernel(
                 gpytorch.kernels.MaternKernel(nu=2.5)
             )
+        elif self.kernel == "hvarfner":
+            return None  # Use BoTorch defaults (RBF + LogNormal + ARD)
         else:
             logger.warning(f"Unknown kernel '{self.kernel}', using arccosine")
             return gpytorch.kernels.ScaleKernel(ArcCosineKernel())
@@ -177,9 +157,17 @@ class SphericalSubspaceBO:
         X = self.train_V.double()
         Y = self.train_Y.double().unsqueeze(-1)
 
+        # For Hvarfner defaults: remap S^(d-1) coordinates from [-1,1] to [0,1]
+        if self.kernel == "hvarfner":
+            X = (X + 1) / 2
+
         try:
             covar_module = self._create_kernel()
-            self.gp = SingleTaskGP(X, Y, covar_module=covar_module).to(self.device)
+            if covar_module is not None:
+                self.gp = SingleTaskGP(X, Y, covar_module=covar_module).to(self.device)
+            else:
+                # BoTorch defaults: RBF + LogNormal(√2+log(d)/2, √3) + ARD + Standardize
+                self.gp = SingleTaskGP(X, Y).to(self.device)
             self.likelihood = self.gp.likelihood
             mll = ExactMarginalLogLikelihood(self.likelihood, self.gp)
             fit_gpytorch_mll(mll)
@@ -231,6 +219,12 @@ class SphericalSubspaceBO:
 
         return v_cand
 
+    def _to_gp_space(self, v: torch.Tensor) -> torch.Tensor:
+        """Map subspace coords to GP input space (identity or [0,1] remap)."""
+        if self.kernel == "hvarfner":
+            return (v + 1) / 2
+        return v
+
     def _optimize_acquisition(self) -> tuple[torch.Tensor, dict]:
         """Find optimal v* using Thompson Sampling, EI, or UCB."""
         diag = {}
@@ -239,28 +233,40 @@ class SphericalSubspaceBO:
             if self.acqf == "ts":
                 # Thompson Sampling with Sobol candidates
                 v_cand = self._generate_sobol_candidates(self.n_candidates)
+                x_cand = self._to_gp_space(v_cand)
 
-                thompson = MaxPosteriorSampling(model=self.gp, replacement=False)
-                v_opt = thompson(v_cand.double().unsqueeze(0), num_samples=1)
-                v_opt = v_opt.squeeze(0).float()
-                v_opt = F.normalize(v_opt, p=2, dim=-1)
+                if self.kernel == "hvarfner":
+                    # Direct posterior sampling (avoids MaxPosteriorSampling shape issues)
+                    with torch.no_grad():
+                        post = self.gp.posterior(x_cand.double())
+                        samples = post.rsample()  # [1, n_cand, 1]
+                        best_idx = samples.squeeze().argmax()
+                    v_opt = v_cand[best_idx:best_idx+1]
+                    v_opt = F.normalize(v_opt, p=2, dim=-1)
+                else:
+                    thompson = MaxPosteriorSampling(model=self.gp, replacement=False)
+                    v_opt = thompson(x_cand.double().unsqueeze(0), num_samples=1)
+                    v_opt = v_opt.squeeze(0).float()
+                    v_opt = F.normalize(v_opt, p=2, dim=-1)
 
             elif self.acqf == "ei":
                 # Expected Improvement with Sobol candidates
                 v_cand = self._generate_sobol_candidates(self.n_candidates)
+                x_cand = self._to_gp_space(v_cand)
 
                 ei = qExpectedImprovement(self.gp, best_f=self.train_Y.max().double())
                 with torch.no_grad():
-                    ei_vals = ei(v_cand.double().unsqueeze(-2))
+                    ei_vals = ei(x_cand.double().unsqueeze(-2))
                 best_idx = ei_vals.argmax()
                 v_opt = v_cand[best_idx:best_idx+1]
 
             elif self.acqf == "ucb":
                 # UCB with Sobol candidates
                 v_cand = self._generate_sobol_candidates(self.n_candidates)
+                x_cand = self._to_gp_space(v_cand)
 
                 with torch.no_grad():
-                    post = self.gp.posterior(v_cand.double())
+                    post = self.gp.posterior(x_cand.double())
                     ucb_vals = post.mean.squeeze() + self.ucb_beta * post.variance.sqrt().squeeze()
                 best_idx = ucb_vals.argmax()
                 v_opt = v_cand[best_idx:best_idx+1]
@@ -269,8 +275,9 @@ class SphericalSubspaceBO:
                 raise ValueError(f"Unknown acquisition function: {self.acqf}")
 
             # Diagnostics
+            x_opt = self._to_gp_space(v_opt)
             with torch.no_grad():
-                post = self.gp.posterior(v_opt.double())
+                post = self.gp.posterior(x_opt.double())
                 diag["gp_mean"] = post.mean.item()
                 diag["gp_std"] = post.variance.sqrt().item()
                 cos_sims = (v_opt @ self.train_V.T).squeeze()
@@ -350,7 +357,8 @@ class SphericalSubspaceBO:
         # Update
         self.train_X = torch.cat([self.train_X, x_opt], dim=0)
         self.train_U = torch.cat([self.train_U, u_opt], dim=0)
-        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device)])
+        self.train_V = torch.cat([self.train_V, self.project_to_subspace(u_opt)], dim=0)
+        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device, dtype=torch.float32)])
         self.smiles_observed.append(smiles)
 
         if self.iteration % 10 == 0:
