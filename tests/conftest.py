@@ -1,4 +1,4 @@
-"""Pytest configuration for ecoflow tests."""
+"""Pytest configuration for RieLBO tests."""
 
 import sys
 from pathlib import Path

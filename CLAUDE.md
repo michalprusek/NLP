@@ -59,7 +59,6 @@ NLP/
 │   ├── run_guacamol_subspace_v4.py # CLI: Subspace BO v4
 │   ├── run_guacamol_subspace_v5.py # CLI: Subspace BO v5
 │   ├── run_guacamol_vanilla.py     # CLI: Vanilla BO
-│   ├── run_guacamol_direct.py      # CLI: Direct Sphere BO (legacy)
 │   └── results/
 │
 ├── shared/                  # Shared infrastructure
@@ -77,10 +76,8 @@ NLP/
 └── pyproject.toml           # Project configuration
 ```
 
-**Legacy modules** (exist but not actively developed):
-- `nfbo_gsm8k/` — Normalizing Flow BO
+**Kept but not actively developed**:
 - `instructzero/`, `instructzero_gsm8k/` — InstructZero
-- `study/` — Flow matching architecture study (concluded: OT-CFM best, spherical-OT broken)
 
 ---
 
