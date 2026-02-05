@@ -168,6 +168,11 @@ class TrackingEvaluatorWrapper:
         # If switching to a new prompt, finalize the previous one
         if self._current_prompt is not None and self._current_prompt != prompt:
             self._finalize_prompt()
+        # If re-evaluating the same prompt but we have accumulated results, finalize first
+        # This handles the case where GEPA re-evaluates prompts in multiple batches
+        elif self._current_prompt == prompt and self._current_count > 0:
+            logger.info(f"[PromptTracker] Re-evaluation of same prompt detected, finalizing batch of {self._current_count} examples")
+            self._finalize_prompt()
 
         self._current_prompt = prompt
         self._current_correct = 0
@@ -219,6 +224,12 @@ class TrackingEvaluatorWrapper:
         self._current_count += 1
         if result.score > 0.5:  # Correct answer
             self._current_correct += 1
+
+        # Auto-finalize after a reasonable batch size (GEPA uses varying batch sizes)
+        # We use 100 as threshold - this captures partial batches but still groups evaluations
+        # A full test set is 1319, minibatch default is 150
+        if self._current_count >= 100 and self._current_count % 100 == 0:
+            logger.info(f"[PromptTracker] Auto-checkpoint at {self._current_count} evaluations")
 
         return result
 
@@ -272,9 +283,13 @@ class VLLMChatWrapper:
 
         # Track the system prompt - notify evaluator when prompt changes
         if system_prompt and system_prompt != self._last_system_prompt:
+            logger.info(f"[VLLMChat] NEW PROMPT detected, tracking_evaluator={self.tracking_evaluator is not None}")
+            logger.info(f"[VLLMChat] Prompt preview: {system_prompt[:100]}...")
             if self.tracking_evaluator is not None:
                 self.tracking_evaluator.set_current_prompt(system_prompt)
             self._last_system_prompt = system_prompt
+        elif self.call_count <= 3:
+            logger.info(f"[VLLMChat] Same prompt (call #{self.call_count}), system_prompt={system_prompt is not None}")
 
         # Log every 10th call for debugging
         if self.call_count <= 10 or self.call_count % 10 == 0:

@@ -673,7 +673,11 @@ class ProTeGiOptimizer:
         # =====================================================================
         # MAIN OPTIMIZATION LOOP
         # =====================================================================
-        for step in range(self.num_steps):
+        # If max_prompts is set, run until we reach it (ignore num_steps limit)
+        # Otherwise, run for num_steps iterations
+        max_steps = self.num_steps if self.max_prompts is None else 10000
+
+        for step in range(max_steps):
             self._current_iteration = step + 1
 
             if self._is_budget_exhausted():
@@ -686,9 +690,16 @@ class ProTeGiOptimizer:
                     print(f"\nMax prompts reached ({self.prompts_evaluated}/{self.max_prompts}). Stopping.")
                 break
 
+            # Also stop at num_steps if max_prompts not set
+            if self.max_prompts is None and step >= self.num_steps:
+                if verbose:
+                    print(f"\nCompleted {self.num_steps} steps. Stopping.")
+                break
+
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"Step {step + 1}/{self.num_steps}")
+                step_display = f"Step {step + 1}" + (f"/{self.num_steps}" if self.max_prompts is None else "")
+                print(step_display)
                 if self.total_budget:
                     print(f"Budget: {self.task_budget_used}/{self.total_budget} | Meta calls: {self.total_meta_calls}")
                 if self.max_prompts:
