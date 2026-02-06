@@ -89,7 +89,7 @@ class SonarCodec:
 
         Args:
             embeddings: Embeddings tensor [N, 1024]
-            temperature: Kept for interface compatibility with MolecularCodec (SONAR is deterministic)
+            temperature: Unused — SONAR uses greedy decoding. Kept for interface compatibility with MolecularCodec.
             max_seq_len: Maximum sequence length for decoded text
 
         Returns:

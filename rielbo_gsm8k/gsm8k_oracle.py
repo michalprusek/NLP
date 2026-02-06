@@ -34,7 +34,7 @@ class GSM8KOracle:
         self,
         llm_client,
         evaluator: GSM8KEvaluator,
-        eval_set_size: int = 261,  # 20% sample for quick iteration; CLI overrides to 1319 for benchmarking
+        eval_set_size: int = 261,  # ~20% sample for quick iteration; CLI overrides to 1319 for benchmarking
         seed: int = 42,
     ):
         self.llm_client = llm_client
@@ -90,6 +90,12 @@ class GSM8KOracle:
             outputs = self.llm_client.generate_batch(
                 formatted, temperature=0.0, max_new_tokens=512
             )
+        except torch.cuda.OutOfMemoryError:
+            logger.error(
+                f"CUDA OOM during LLM generation (oracle call #{self.num_calls}, "
+                f"batch size {len(formatted)}). Try reducing --eval-size."
+            )
+            raise
         except Exception as e:
             logger.error(f"LLM generation failed during oracle call #{self.num_calls}: {e}")
             raise RuntimeError(

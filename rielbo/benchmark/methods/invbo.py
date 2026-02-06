@@ -258,7 +258,7 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 raise
             except Exception as e:
                 logger.warning(f"InvBO inversion failed: {e}")
-                # Don't reset counter — allow escalation if inversion is systematically broken
+                # Continue incrementing counter to detect systematic inversion failures
                 self.invbo_state.progress_fails_since_last_e2e += 1
                 if self.invbo_state.progress_fails_since_last_e2e == self.e2e_freq * 3:
                     logger.error(

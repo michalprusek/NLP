@@ -274,8 +274,8 @@ def main():
             with open(partial_path, "w") as f:
                 json.dump(partial, f, indent=2)
             logger.info(f"Partial results saved to {partial_path}")
-        except Exception:
-            logger.warning("Could not save partial results")
+        except Exception as save_err:
+            logger.warning(f"Could not save partial results: {type(save_err).__name__}: {save_err}")
         raise
 
     # 10. Report results
@@ -368,6 +368,10 @@ def main():
         except Exception as e:
             logger.error(f"Full test evaluation failed: {e}")
             logger.info("Optimization results were saved successfully; only full-test eval failed.")
+            results["test_accuracy"] = None
+            results["test_accuracy_error"] = str(e)
+            with open(results_path, "w") as f:
+                json.dump(results, f, indent=2)
 
     return optimizer.best_score
 

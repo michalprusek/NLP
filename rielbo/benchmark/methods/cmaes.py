@@ -120,6 +120,8 @@ class CMAESBenchmark(BaseBenchmarkMethod):
         z_tensor = torch.tensor(z, dtype=torch.float32, device=self.device).unsqueeze(0)
         try:
             smiles = self.codec.decode(z_tensor)[0]
+        except torch.cuda.OutOfMemoryError:
+            raise
         except Exception as e:
             logger.warning(f"CMA-ES decode failed: {e}")
             self._pending_fitnesses.append(0.0)  # Zero score for decode failure

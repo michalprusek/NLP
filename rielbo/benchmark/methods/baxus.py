@@ -256,6 +256,7 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         self._t_max: torch.Tensor | None = None
 
         self._iteration = 0
+        self._gp_fallback_count = 0
 
     def _normalize(self, z: torch.Tensor) -> torch.Tensor:
         """Min-max normalize to [-1, 1]^D."""
@@ -353,7 +354,12 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             except torch.cuda.OutOfMemoryError:
                 raise
             except Exception as fallback_err:
-                logger.error(f"BAxUS fallback GP fit also failed, using untrained model: {fallback_err}")
+                self._gp_fallback_count += 1
+                logger.error(
+                    f"BAxUS fallback GP fit also failed (iter {self._iteration}, "
+                    f"total fallbacks: {self._gp_fallback_count}), "
+                    f"using untrained model: {fallback_err}"
+                )
 
         model.eval()
 

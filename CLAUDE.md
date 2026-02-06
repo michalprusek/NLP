@@ -334,7 +334,7 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.benchmark.runner \
 | med2 | 0.1856 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | +0.0%* |
 
 *Med2: only 0.6% of 20K molecules beat cold start best. Score range [0.02, 0.19] is extremely narrow.
-BAxUS: excluded — expands from 1D→243D, becomes Vanilla BO speed (~30s/iter) and OOMs.
+BAxUS: excluded — starts at 1D and expands through bin splitting (capped at 64D by max_target_dim), but becomes impractically slow as dimension grows and OOMs.
 
 **Key findings**:
 - Subspace BO (S^15) consistently outperforms TuRBO (R^256) and LOL-BO
