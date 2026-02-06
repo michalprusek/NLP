@@ -248,6 +248,7 @@ class TuRBOBaseline:
             )
             self.gp.likelihood.noise = 0.1
 
+        self.gp.eval()
         self._y_mean = y_mean
         self._y_std = y_std
         self._train_Z_norm = train_Z_norm  # Store for diagnostics

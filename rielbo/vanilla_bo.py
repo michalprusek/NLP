@@ -380,14 +380,15 @@ class VanillaBO:
         ])
         self.smiles_observed.append(smiles)
 
+        # Update trust region BEFORE best_score update so the comparison
+        # score > self.best_score uses the pre-update value
+        self._update_trust_region(score)
+
         if score > self.best_score:
             self.best_score = score
             self.best_smiles = smiles
             self.best_z = z_opt.squeeze().clone()
             logger.info(f"New best! {score:.4f}: {smiles}")
-
-        # Update trust region AFTER best_score update
-        self._update_trust_region(score)
 
         return {
             "score": score, "best_score": self.best_score,
