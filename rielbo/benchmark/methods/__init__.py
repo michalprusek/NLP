@@ -1,22 +1,22 @@
 """Method wrappers for benchmark framework."""
 
 from rielbo.benchmark.methods.subspace import SubspaceBOBenchmark
-from rielbo.benchmark.methods.subspace_v3 import SubspaceBOv3Benchmark
-from rielbo.benchmark.methods.subspace_v4 import SubspaceBOv4Benchmark
-from rielbo.benchmark.methods.subspace_v5 import SubspaceBOv5Benchmark
 from rielbo.benchmark.methods.turbo import TuRBOBenchmark
 from rielbo.benchmark.methods.lolbo import LOLBOBenchmark
 from rielbo.benchmark.methods.vanilla import VanillaBOBenchmark
+from rielbo.benchmark.methods.baxus import BAxUSBenchmark
+from rielbo.benchmark.methods.cmaes import CMAESBenchmark
+from rielbo.benchmark.methods.invbo import InvBOBenchmark
 
 # Registry of available methods
 METHODS = {
     "subspace": SubspaceBOBenchmark,
-    "subspace_v3": SubspaceBOv3Benchmark,
-    "subspace_v4": SubspaceBOv4Benchmark,
-    "subspace_v5": SubspaceBOv5Benchmark,
     "turbo": TuRBOBenchmark,
     "lolbo": LOLBOBenchmark,
     "vanilla": VanillaBOBenchmark,
+    "baxus": BAxUSBenchmark,
+    "cmaes": CMAESBenchmark,
+    "invbo": InvBOBenchmark,
 }
 
 
@@ -27,4 +27,8 @@ def get_method(name: str):
     return METHODS[name]
 
 
-__all__ = ["SubspaceBOBenchmark", "SubspaceBOv3Benchmark", "SubspaceBOv4Benchmark", "SubspaceBOv5Benchmark", "TuRBOBenchmark", "LOLBOBenchmark", "VanillaBOBenchmark", "METHODS", "get_method"]
+__all__ = [
+    "SubspaceBOBenchmark", "TuRBOBenchmark", "LOLBOBenchmark", "VanillaBOBenchmark",
+    "BAxUSBenchmark", "CMAESBenchmark", "InvBOBenchmark",
+    "METHODS", "get_method",
+]

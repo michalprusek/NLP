@@ -42,28 +42,28 @@ NLP/
 ├── gepa_gsm8k/              # GEPA for GSM8K task (with BatchingVLLMWrapper)
 │   └── run.py               # CLI entry point with integrated optimizer
 │
+├── rielbo_gsm8k/            # RieLBO for GSM8K prompt optimization (SONAR)
+│   ├── sonar_codec.py       # SonarCodec (1024D text embeddings)
+│   ├── gsm8k_oracle.py      # GSM8KOracle (prompt → accuracy scorer)
+│   ├── seed_prompts.py      # Diverse seed prompts for cold start
+│   ├── run.py               # CLI entry point
+│   └── results/
+│
 ├── rielbo/                  # Subspace BO for molecular optimization
 │   ├── subspace_bo.py       # SphericalSubspaceBO (v1, ArcCosine/Hvarfner)
-│   ├── subspace_bo_v2.py    # V2: geodesic/novelty presets
-│   ├── subspace_bo_v3.py    # V3: multi-projection rotation
-│   ├── subspace_bo_v4.py    # V4: novelty-weighted acquisition
-│   ├── subspace_bo_v5.py    # V5: latest variant
+│   ├── subspace_bo_v2.py    # V2: geodesic preset (BEST, with adaptive TR + restart)
 │   ├── turbo_baseline.py    # TuRBO baseline (R^256)
 │   ├── vanilla_bo.py        # Vanilla BO with Hvarfner priors (256D)
-│   ├── kernels.py           # ArcCosineKernel
-│   ├── spherical_transforms.py  # Spherical geometry utilities
+│   ├── kernels.py           # ArcCosineKernel, ArcCosineKernelOrder2, ProductSphereKernel
+│   ├── spherical_transforms.py  # SphericalWhitening, GeodesicTrustRegion
 │   ├── norm_distribution.py # Norm distribution analysis
-│   ├── graph_laplacian_gp.py    # Graph Laplacian GP (experimental)
 │   ├── estimate_intrinsic_dim.py # Intrinsic dimensionality estimators
 │   ├── gp_diagnostics.py    # GP health monitoring
 │   ├── plot_convergence.py  # Convergence plots
+│   ├── pipeline.md          # Detailed V2 geodesic pipeline documentation
 │   ├── run_guacamol_subspace.py    # CLI: Subspace BO v1
-│   ├── run_guacamol_subspace_v2.py # CLI: Subspace BO v2
-│   ├── run_guacamol_subspace_v3.py # CLI: Subspace BO v3
-│   ├── run_guacamol_subspace_v4.py # CLI: Subspace BO v4
-│   ├── run_guacamol_subspace_v5.py # CLI: Subspace BO v5
+│   ├── run_guacamol_subspace_v2.py # CLI: Subspace BO v2 (recommended)
 │   ├── run_guacamol_vanilla.py     # CLI: Vanilla BO
-│   ├── run_guacamol_graph.py       # CLI: Graph Laplacian GP
 │   ├── benchmark/           # Benchmarking infrastructure
 │   │   ├── runner.py        # BenchmarkRunner orchestrator
 │   │   ├── base.py          # BaseMethod ABC
@@ -71,7 +71,7 @@ NLP/
 │   │   ├── aggregate_v2_results.py  # Result aggregation
 │   │   ├── run_v2_benchmark.sh      # Multi-seed benchmark script
 │   │   └── methods/         # Method adapters
-│   │       ├── subspace.py, subspace_v3-v5.py
+│   │       ├── subspace.py
 │   │       ├── turbo.py, vanilla.py, lolbo.py
 │   │       └── __init__.py
 │   └── results/
@@ -131,6 +131,37 @@ uv run python -m gepa_gsm8k.run --model qwen --budget 10000
 tmux new-session -d -s gepa_run \
   "uv run python -m gepa_gsm8k.run --model qwen --budget 150000 \
   2>&1 | tee gepa_gsm8k/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
+```
+
+### RieLBO-GSM8K (Prompt Optimization)
+
+```bash
+# Pilot run (quick test, ~5 min)
+CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --n-cold-start 10 --iterations 10 --eval-size 50 --split test
+
+# Full benchmark (30 seed + 70 BO = 100 prompts, ~50 min)
+CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --subspace-dim 16 \
+    --n-cold-start 30 --iterations 70 --seed 42 \
+    --split test --incremental-json rielbo_gsm8k/results/rielbo_s42.json
+
+# Multi-seed benchmark
+for seed in 42 43 44 45 46; do
+  tmux new-session -d -s rielbo_gsm8k_s${seed} \
+    "CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --subspace-dim 16 \
+    --n-cold-start 30 --iterations 70 --seed $seed \
+    --split test --incremental-json rielbo_gsm8k/results/rielbo_s${seed}.json \
+    2>&1 | tee rielbo_gsm8k/results/rielbo_s${seed}_\$(date +%Y%m%d_%H%M%S).log; exec bash"
+done
+```
+
+### Convergence Plot (Prompt Methods)
+
+```bash
+uv run python -m shared.plot_prompt_convergence
+# Outputs: shared/results/plots/prompt_convergence.{png,pdf}
 ```
 
 ### Subspace BO (GuacaMol)
@@ -274,17 +305,18 @@ runner.run_all()
 
 Key files: `rielbo/benchmark/runner.py` (orchestrator), `rielbo/benchmark/base.py` (BaseMethod ABC), `rielbo/benchmark/methods/` (per-method adapters).
 
-### Benchmark Results (2026-02-05)
+### Benchmark Results (2026-02-06)
 
-| Task | Cold Start | Subspace v2 (30 seeds) | Subspace v3 (10 seeds) | Vanilla BO (Hvarfner) | TuRBO | Best |
-|------|------------|------------------------|------------------------|-----------------------|-------|------|
-| adip | 0.4910 | **0.5475 ± 0.018** | 0.5465 ± 0.030 | 0.5022 (20 iter test) | 0.5044 ± 0.003 | **+11.5%** |
-| med2 | 0.1856 | 0.1859 ± 0.002 | 0.1856 ± 0.000 | - | - | +0.0%* |
+| Task | Cold Start | V2 Geodesic (10 seeds) | LOL-BO (10 seeds) | TuRBO (10 seeds) | Best |
+|------|------------|------------------------|--------------------|--------------------|------|
+| adip | 0.4910 | **0.5581 ± 0.022** | 0.5228 ± 0.019 | 0.5060 ± 0.007 | **+13.6%** |
+| med2 | 0.1856 | 0.1856 ± 0.000 | 0.1856 ± 0.000 | 0.1856 ± 0.000 | +0.0%* |
 
 *Med2: only 0.6% of 20K molecules beat cold start best. Score range [0.02, 0.19] is extremely narrow.
 
 **Key findings**:
-- Subspace BO (S^15) consistently outperforms TuRBO (R^256)
+- Subspace BO (S^15) consistently outperforms TuRBO (R^256) and LOL-BO
+- Geodesic trust region is the most impactful V2 improvement
 - Vanilla BO (256D Hvarfner): ~25x slower due to 256D ARD fitting, marginal improvement
 - SAASBO: ~25s/iter due to MCMC — impractical
 - PCA/Active Subspace: linear projections lose nonlinear VAE structure, no improvement over random
@@ -368,3 +400,69 @@ uv run pytest tests/ -x -q
 - **Run tests**: `uv run pytest tests/ -x -q`
 - **Version control**: Commit working configurations before major refactors
 - **Documentation**: Update this file when adding new parameters, models, or workflows
+
+---
+
+## Experiment Log & Lessons Learned
+
+### What Was Tried
+
+#### Subspace BO Variants (v1–v5)
+
+| Variant | Key Feature | Result | Status |
+|---------|-------------|--------|--------|
+| v1 | Basic ArcCosine + Sobol TR | Baseline | Kept |
+| **v2 Geodesic** | **Geodesic TR + adaptive TR + restart** | **Best: 0.5581** | **Active** |
+| v2 Order-2 | Smoother ArcCosine kernel | Worse than v2 baseline | Removed |
+| v2 Whitening | Spherical whitening only | Marginal | Available as preset |
+| v3 | Multi-projection rotation | ~Same as v2 | Removed |
+| v4 | Novelty-weighted acquisition | ~Same as v2 | Removed |
+| v5 | Windowed GP + adaptive TR | Good but complex | Removed (features in v2) |
+
+#### Pullback Metric Experiment (PM-LSBO, 2026-02-06)
+
+Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J) to guide subspace selection.
+
+| Config | Score (5 seeds, 500 iter) | Finding |
+|--------|---------------------------|---------|
+| A0: Random QR + ArcCosine | 0.5069 (100 iter) | V5 baseline |
+| A1: Metric eigvecs + ArcCosine | 0.4910 = cold start | **Complete failure** |
+| A3: Metric eigvecs + MetricArcCosine | 0.4910 = cold start | **Complete failure** |
+| A5: Full (metric + decoder features) | 0.4910 = cold start | **Complete failure** |
+| B0: Random QR + restart fix | 0.5531 ± 0.018 | Restart fix is key |
+| B2: Score-weighted metric | 0.5422 ± 0.014 | Worse than random |
+| B6: Hybrid 75% metric | 0.5336 ± 0.006 | Lowest variance, low mean |
+
+**Conclusion**: Pullback metric was removed. See "Key Lesson" below.
+
+#### Other Approaches Tested
+
+- **Vanilla BO (Hvarfner, 256D)**: 0.5022 in 20 iter, ~33s/iter. Impractical.
+- **SAASBO**: ~25s/iter due to MCMC. Impractical.
+- **PCA subspace**: No improvement over random projection.
+- **Active Subspace**: No improvement (linear projections miss nonlinear VAE structure).
+- **PLS BO**: Supervised projection nearly identical to random (0.5576 vs 0.5582).
+- **Graph Laplacian GP**: Experimental, no clear benefit. Removed.
+
+### Key Lessons
+
+1. **Decoder sensitivity ≠ objective sensitivity**: The pullback metric G = J^T J captures which latent directions change the decoded output the most, NOT which directions improve the optimization objective. These are fundamentally different — a direction might drastically change molecular structure while making the score worse. Random QR projection is actually better because it provides unbiased exploration.
+
+2. **Random restart on TR collapse is the most impactful fix**: When the trust region shrinks to minimum, the current 16D subspace is exhausted. Generating a fresh random QR basis lets the optimizer explore a completely different 16D slice of the 256D space. This single mechanism drove PM-LSBO B0 from ~0.5069 to 0.5531.
+
+3. **Simpler is better for subspace selection**: Score-weighted metrics, hybrid bases, and Jacobian-based projections all underperformed random QR. The intrinsic dimensionality (~16) means that almost any 16D random subspace captures useful structure.
+
+4. **ArcCosine order 0 > order 2**: The rougher kernel (order 0, like Matern-1/2) outperforms the smoother order 2 (like Matern-5/2). Chemical property landscapes have sharp transitions.
+
+5. **Z-score normalization breaks Hvarfner GP priors**: For full-dimensional BO, min-max normalization to [0,1]^D is required. Z-score causes pairwise distances ~16 vs median lengthscale 65.8, leading to singular kernels.
+
+6. **Med2 is effectively unsolvable**: Only 0.6% of 20K molecules beat cold start best. The score range [0.02, 0.19] is so narrow that BO has no signal to exploit. Don't waste compute on it.
+
+### Best Practices for Future Experiments
+
+- **Always benchmark with 5+ seeds** (42-46). Single-seed results are unreliable.
+- **Run 100-iter pilot first** before committing to 500-iter benchmarks. If a method doesn't show promise in 100 iterations, it won't catch up in 500.
+- **Focus on adip** — it's the most informative benchmark task (wide score range, meaningful optimization signal).
+- **Keep the pipeline simple**: Random QR + ArcCosine + geodesic TR is hard to beat. New features must show clear improvement over this baseline.
+- **Track GP diagnostics**: Monitor train correlation, posterior std, lengthscales. If correlation is 1.0, the GP is overfitting.
+- **Document negative results**: They save future effort. The pullback metric failure is valuable knowledge.

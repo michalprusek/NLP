@@ -68,6 +68,17 @@ class V2Config:
     norm_method: str = "gaussian"  # "gaussian", "histogram", "gmm"
     norm_n_candidates: int = 5
 
+    # Adaptive trust region (TuRBO-style)
+    adaptive_tr: bool = False
+    tr_init: float = 0.4
+    tr_min: float = 0.02
+    tr_max: float = 0.8
+    tr_success_tol: int = 3
+    tr_fail_tol: int = 10
+    tr_grow_factor: float = 1.5
+    tr_shrink_factor: float = 0.5
+    max_restarts: int = 5
+
     @classmethod
     def from_preset(cls, preset: str) -> "V2Config":
         """Create config from preset name."""
@@ -75,7 +86,7 @@ class V2Config:
             "baseline": cls(),
             "order2": cls(kernel_order=2),
             "whitening": cls(whitening=True),
-            "geodesic": cls(geodesic_tr=True),
+            "geodesic": cls(geodesic_tr=True, adaptive_tr=True),
             "adaptive": cls(adaptive_dim=True),
             "prob_norm": cls(prob_norm=True),
             "product": cls(product_space=True),
@@ -172,6 +183,18 @@ class SphericalSubspaceBOv2:
                 device=device,
             )
 
+        # Adaptive trust region state
+        if config.adaptive_tr:
+            self.tr_length = config.tr_init
+            self._tr_success_count = 0
+            self._tr_fail_count = 0
+            self.n_restarts = 0
+        else:
+            self.tr_length = None
+            self._tr_success_count = 0
+            self._tr_fail_count = 0
+            self.n_restarts = 0
+
         # GP
         self.gp = None
         self.likelihood = None
@@ -198,6 +221,8 @@ class SphericalSubspaceBOv2:
             "nearest_train_cos": [],
             "embedding_norm": [],
             "subspace_dim": [],
+            "tr_length": [],
+            "n_restarts": [],
         }
 
         self.gp_diagnostics = GPDiagnostics(verbose=True)
@@ -222,6 +247,8 @@ class SphericalSubspaceBOv2:
             features.append(f"prob_norm({cfg.norm_method})")
         if cfg.product_space:
             features.append(f"product({cfg.n_spheres} spheres)")
+        if cfg.adaptive_tr:
+            features.append("adaptive_tr")
 
         if not features:
             features = ["baseline"]
@@ -330,17 +357,76 @@ class SphericalSubspaceBOv2:
             self.likelihood.noise = 0.1
             self.gp.eval()
 
+    def _update_trust_region(self, improved: bool):
+        """Update adaptive trust region length (TuRBO-style)."""
+        if not self.config.adaptive_tr:
+            return
+
+        cfg = self.config
+        if improved:
+            self._tr_success_count += 1
+            self._tr_fail_count = 0
+        else:
+            self._tr_success_count = 0
+            self._tr_fail_count += 1
+
+        if self._tr_success_count >= cfg.tr_success_tol:
+            self.tr_length = min(self.tr_length * cfg.tr_grow_factor, cfg.tr_max)
+            self._tr_success_count = 0
+            if self.verbose:
+                logger.info(f"TR grow → {self.tr_length:.4f}")
+
+        elif self._tr_fail_count >= cfg.tr_fail_tol:
+            self.tr_length *= cfg.tr_shrink_factor
+            self._tr_fail_count = 0
+
+            if self.tr_length < cfg.tr_min:
+                self._restart_subspace()
+            elif self.verbose:
+                logger.info(f"TR shrink → {self.tr_length:.4f}")
+
+    def _restart_subspace(self):
+        """Restart with fresh random QR projection when TR collapses."""
+        cfg = self.config
+        if self.n_restarts >= cfg.max_restarts:
+            self.tr_length = cfg.tr_init
+            logger.info(f"Max restarts ({cfg.max_restarts}) reached, resetting TR to {cfg.tr_init}")
+            return
+
+        self.n_restarts += 1
+        self.tr_length = cfg.tr_init
+        self._tr_success_count = 0
+        self._tr_fail_count = 0
+
+        # Fresh random basis for exploration diversity
+        torch.manual_seed(self.seed + self.n_restarts * 1000)
+        self._init_projection()
+
+        # Re-project training data and refit GP
+        if self.train_U is not None:
+            self.train_V = self.project_to_subspace(self.train_U)
+            self._fit_gp()
+
+        logger.info(
+            f"Subspace restart #{self.n_restarts}: "
+            f"random projection, TR reset to {cfg.tr_init}"
+        )
+
     def _generate_candidates(self, n_candidates: int) -> torch.Tensor:
         """Generate candidates in subspace."""
         best_idx = self.train_Y.argmax()
         v_best = self.train_V[best_idx:best_idx+1]
 
         if self.geodesic_tr is not None:
-            # Use geodesic trust region
+            # Adaptive TR radius if enabled, otherwise static
+            if self.config.adaptive_tr:
+                radius = self.config.geodesic_max_angle * self.tr_length
+            else:
+                radius = self.config.geodesic_max_angle * self.trust_region
             v_cand = self.geodesic_tr.sample(
                 center=v_best,
                 n_samples=n_candidates,
-                adaptive_radius=self.config.geodesic_max_angle * self.trust_region,
+                adaptive_radius=radius,
             )
         else:
             # Original Sobol + box trust region
@@ -490,10 +576,12 @@ class SphericalSubspaceBOv2:
 
         if not smiles:
             logger.debug(f"Decode failed at iter {self.iteration}")
+            self._update_trust_region(improved=False)
             return {"score": 0.0, "best_score": self.best_score, "smiles": "",
                     "is_duplicate": True, "is_decode_failure": True, **diag}
 
         if smiles in self.smiles_observed:
+            self._update_trust_region(improved=False)
             return {"score": 0.0, "best_score": self.best_score, "smiles": smiles,
                     "is_duplicate": True, **diag}
 
@@ -510,10 +598,13 @@ class SphericalSubspaceBOv2:
         if self.iteration % 10 == 0:
             self._fit_gp()
 
-        if score > self.best_score:
+        improved = score > self.best_score
+        if improved:
             self.best_score = score
             self.best_smiles = smiles
             logger.info(f"New best! {score:.4f}: {smiles}")
+
+        self._update_trust_region(improved=improved)
 
         return {"score": score, "best_score": self.best_score, "smiles": smiles,
                 "is_duplicate": False, **diag}
@@ -542,16 +633,22 @@ class SphericalSubspaceBOv2:
             self.history["nearest_train_cos"].append(result.get("nearest_train_cos", 0))
             self.history["embedding_norm"].append(result.get("embedding_norm", self.mean_norm))
             self.history["subspace_dim"].append(result.get("subspace_dim", self._current_dim))
+            self.history["tr_length"].append(self.tr_length if self.tr_length is not None else self.trust_region)
+            self.history["n_restarts"].append(self.n_restarts)
 
             if result["is_duplicate"]:
                 n_dup += 1
 
-            pbar.set_postfix({
+            postfix = {
                 "best": f"{self.best_score:.4f}",
                 "curr": f"{result['score']:.4f}",
                 "dim": self._current_dim,
                 "dup": n_dup,
-            })
+            }
+            if self.config.adaptive_tr:
+                postfix["tr"] = f"{self.tr_length:.3f}"
+                postfix["rst"] = self.n_restarts
+            pbar.set_postfix(postfix)
 
             if (i + 1) % log_interval == 0 and self.verbose:
                 logger.info(

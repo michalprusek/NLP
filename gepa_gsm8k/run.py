@@ -266,20 +266,24 @@ class VLLMChatWrapper:
         self.tracking_evaluator = tracking_evaluator
         self._last_system_prompt = None
 
-    def __call__(self, messages: list[dict]) -> str:
+    def __call__(self, messages) -> str:
         self.call_count += 1
 
-        # Combine system and user messages into a single prompt
-        prompt_parts = []
-        system_prompt = None
-        for msg in messages:
-            if msg["role"] == "system":
-                prompt_parts.append(msg["content"])
-                system_prompt = msg["content"]
-            elif msg["role"] == "user":
-                prompt_parts.append(msg["content"])
-
-        prompt = "\n\n".join(prompt_parts)
+        # Handle both string input (reflective mutation) and list[dict] (task evaluation)
+        if isinstance(messages, str):
+            prompt = messages
+            system_prompt = None
+        else:
+            # Combine system and user messages into a single prompt
+            prompt_parts = []
+            system_prompt = None
+            for msg in messages:
+                if msg["role"] == "system":
+                    prompt_parts.append(msg["content"])
+                    system_prompt = msg["content"]
+                elif msg["role"] == "user":
+                    prompt_parts.append(msg["content"])
+            prompt = "\n\n".join(prompt_parts)
 
         # Track the system prompt - notify evaluator when prompt changes
         if system_prompt and system_prompt != self._last_system_prompt:
@@ -399,8 +403,22 @@ class BatchingVLLMWrapper:
             f"({len(all_responses) / max(elapsed, 0.1):.0f} req/s)"
         )
 
-    def __call__(self, messages: list[dict]) -> str:
+    def __call__(self, messages) -> str:
         self.call_count += 1
+
+        # Handle both string input (reflective mutation) and list[dict] (task evaluation)
+        if isinstance(messages, str):
+            # Reflective mutation passes a plain string prompt
+            try:
+                response = self.llm_client.generate(
+                    messages,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=self.temperature,
+                )
+            except Exception as e:
+                logger.error(f"[BatchWrapper] String call #{self.call_count} failed: {e}")
+                raise
+            return response
 
         # Parse messages (same format as VLLMChatWrapper)
         system_prompt = None
@@ -718,7 +736,9 @@ def main():
         # Extract best prompt from result
         best_candidate = result.best_candidate
         best_prompt = best_candidate.get("system_prompt", str(best_candidate))
-        best_score = result.best_score
+        best_score = result.val_aggregate_scores[result.best_idx]
+        logger.info(f"GEPA found {result.num_candidates} candidates, best_idx={result.best_idx}")
+        logger.info(f"Total metric calls: {result.total_metric_calls}")
     except MaxPromptsReachedException:
         logger.info("Optimization stopped early due to max_prompts limit.")
         stopped_early = True
@@ -820,8 +840,8 @@ def main():
             gt_match = re.search(r'####\s*(-?[\d,]+\.?\d*)', item["answer"])
             gt = gt_match.group(1).replace(',', '') if gt_match else "0"
 
-            pred = evaluator._extract_answer(response)
-            if evaluator._compare(pred, gt):
+            pred = base_evaluator._extract_answer(response)
+            if base_evaluator._compare(pred, gt):
                 correct += 1
 
         test_accuracy = correct / len(test_data)

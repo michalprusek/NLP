@@ -29,12 +29,18 @@ METHOD_COLORS = {
     "subspace": "#2ecc71",  # Green
     "turbo": "#3498db",     # Blue
     "lolbo": "#e74c3c",     # Red
+    "baxus": "#9b59b6",     # Purple
+    "cmaes": "#f39c12",     # Orange
+    "invbo": "#1abc9c",     # Teal
 }
 
 METHOD_LABELS = {
     "subspace": "Subspace BO (S^15)",
     "turbo": "TuRBO (R^256)",
     "lolbo": "LOLBO (DKL)",
+    "baxus": "BAxUS (Adaptive)",
+    "cmaes": "CMA-ES (R^256)",
+    "invbo": "InvBO (DKL+Inv)",
 }
 
 

@@ -22,9 +22,10 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 # Add lolbo_ref to path for imports
-LOLBO_REF_PATH = Path(__file__).parent.parent.parent / "lolbo_ref"
-if str(LOLBO_REF_PATH) not in sys.path:
-    sys.path.insert(0, str(LOLBO_REF_PATH))
+LOLBO_REF_PATH = (Path(__file__).parent.parent.parent / "lolbo_ref").resolve()
+_lolbo_path_str = str(LOLBO_REF_PATH)
+if _lolbo_path_str not in sys.path:
+    sys.path.insert(0, _lolbo_path_str)
 
 # Default path to SELFIES VAE weights
 DEFAULT_SELFIES_VAE_WEIGHTS = (
