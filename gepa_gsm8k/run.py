@@ -168,6 +168,11 @@ class TrackingEvaluatorWrapper:
         # If switching to a new prompt, finalize the previous one
         if self._current_prompt is not None and self._current_prompt != prompt:
             self._finalize_prompt()
+        # If re-evaluating the same prompt but we have accumulated results, finalize first
+        # This handles the case where GEPA re-evaluates prompts in multiple batches
+        elif self._current_prompt == prompt and self._current_count > 0:
+            logger.info(f"[PromptTracker] Re-evaluation of same prompt detected, finalizing batch of {self._current_count} examples")
+            self._finalize_prompt()
 
         self._current_prompt = prompt
         self._current_correct = 0
@@ -219,6 +224,12 @@ class TrackingEvaluatorWrapper:
         self._current_count += 1
         if result.score > 0.5:  # Correct answer
             self._current_correct += 1
+
+        # Auto-finalize after a reasonable batch size (GEPA uses varying batch sizes)
+        # We use 100 as threshold - this captures partial batches but still groups evaluations
+        # A full test set is 1319, minibatch default is 150
+        if self._current_count >= 100 and self._current_count % 100 == 0:
+            logger.info(f"[PromptTracker] Auto-checkpoint at {self._current_count} evaluations")
 
         return result
 
@@ -272,9 +283,13 @@ class VLLMChatWrapper:
 
         # Track the system prompt - notify evaluator when prompt changes
         if system_prompt and system_prompt != self._last_system_prompt:
+            logger.info(f"[VLLMChat] NEW PROMPT detected, tracking_evaluator={self.tracking_evaluator is not None}")
+            logger.info(f"[VLLMChat] Prompt:\n{system_prompt}")
             if self.tracking_evaluator is not None:
                 self.tracking_evaluator.set_current_prompt(system_prompt)
             self._last_system_prompt = system_prompt
+        elif self.call_count <= 3:
+            logger.info(f"[VLLMChat] Same prompt (call #{self.call_count}), system_prompt={system_prompt is not None}")
 
         # Log every 10th call for debugging
         if self.call_count <= 10 or self.call_count % 10 == 0:
@@ -291,6 +306,154 @@ class VLLMChatWrapper:
 
         if self.call_count <= 5:
             logger.info(f"Response #{self.call_count}:\n{response}")
+
+        return response
+
+
+class BatchingVLLMWrapper:
+    """Batches sequential GEPA task_lm calls for massive speedup.
+
+    GEPA's default adapter calls task_lm(messages) once per example
+    sequentially: `[self.model(m) for m in requests]`. With N=7473
+    trainset examples and ~6s per call, one prompt evaluation takes ~12h.
+
+    This wrapper detects when a new candidate prompt is being evaluated
+    (system_prompt changes), pre-generates responses for ALL trainset
+    examples in one generate_batch() call, and serves from cache.
+
+    Expected speedup: ~100-200x (batch of N in ~30s vs N×6s sequential).
+    """
+
+    def __init__(
+        self,
+        llm_client,
+        trainset: list,
+        tracking_evaluator: Optional['TrackingEvaluatorWrapper'] = None,
+        max_new_tokens: int = 512,
+        temperature: float = 0.0,
+        gen_batch_size: int = 256,
+    ):
+        self.llm_client = llm_client
+        self.trainset = trainset
+        self.tracking_evaluator = tracking_evaluator
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        self.gen_batch_size = gen_batch_size
+
+        self.call_count = 0
+        self._current_system_prompt = None
+        self._response_cache: dict[str, str] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._prefetch_count = 0
+
+    def _build_prompt(self, system_prompt: str | None, user_content: str) -> str:
+        """Join system + user into single prompt (same logic as VLLMChatWrapper)."""
+        parts = [p for p in [system_prompt, user_content] if p]
+        return "\n\n".join(parts)
+
+    def _prefetch(self, system_prompt: str):
+        """Batch-generate responses for all trainset examples with this prompt.
+
+        GEPA sends messages as:
+            [{"role": "system", "content": candidate_prompt},
+             {"role": "user", "content": data["input"]}]
+
+        We pre-compute: system_prompt + "\\n\\n" + inst.input for each instance.
+        """
+        self._prefetch_count += 1
+        self._response_cache.clear()
+
+        all_prompts = []
+        for inst in self.trainset:
+            full_prompt = self._build_prompt(system_prompt, inst.input)
+            all_prompts.append(full_prompt)
+
+        logger.info(
+            f"[BatchWrapper] Prefetching {len(all_prompts)} responses "
+            f"(prefetch #{self._prefetch_count})..."
+        )
+
+        t0 = time.time()
+        all_responses = []
+        for i in range(0, len(all_prompts), self.gen_batch_size):
+            batch = all_prompts[i:i + self.gen_batch_size]
+            responses = self.llm_client.generate_batch(
+                batch,
+                max_new_tokens=self.max_new_tokens,
+                temperature=self.temperature,
+            )
+            all_responses.extend(responses)
+            if len(all_prompts) > self.gen_batch_size:
+                logger.info(
+                    f"[BatchWrapper] Sub-batch {i // self.gen_batch_size + 1}: "
+                    f"{len(all_responses)}/{len(all_prompts)}"
+                )
+
+        for prompt, response in zip(all_prompts, all_responses):
+            self._response_cache[prompt] = response
+
+        elapsed = time.time() - t0
+        logger.info(
+            f"[BatchWrapper] Prefetched {len(all_responses)} responses in {elapsed:.1f}s "
+            f"({len(all_responses) / max(elapsed, 0.1):.0f} req/s)"
+        )
+
+    def __call__(self, messages: list[dict]) -> str:
+        self.call_count += 1
+
+        # Parse messages (same format as VLLMChatWrapper)
+        system_prompt = None
+        user_parts = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_prompt = msg["content"]
+            elif msg["role"] == "user":
+                user_parts.append(msg["content"])
+
+        user_content = "\n\n".join(user_parts) if user_parts else ""
+        full_prompt = self._build_prompt(system_prompt, user_content)
+
+        # Detect new candidate prompt → prefetch all trainset responses
+        if system_prompt and system_prompt != self._current_system_prompt:
+            self._current_system_prompt = system_prompt
+
+            if self.tracking_evaluator is not None:
+                self.tracking_evaluator.set_current_prompt(system_prompt)
+
+            logger.info(
+                f"[BatchWrapper] New prompt detected (call #{self.call_count}):\n"
+                f"{system_prompt}"
+            )
+            self._prefetch(system_prompt)
+
+        # Serve from cache
+        if full_prompt in self._response_cache:
+            self._cache_hits += 1
+            if self._cache_hits <= 3 or self._cache_hits % 200 == 0:
+                logger.info(
+                    f"[BatchWrapper] Cache: {self._cache_hits} hits, "
+                    f"{self._cache_misses} misses"
+                )
+            return self._response_cache.pop(full_prompt)
+
+        # Cache miss → direct call (reflection calls, unexpected formats)
+        self._cache_misses += 1
+        if self._cache_misses <= 5 or self._cache_misses % 50 == 0:
+            logger.info(
+                f"[BatchWrapper] Cache miss #{self._cache_misses} "
+                f"(prompt_len={len(full_prompt)}, hits={self._cache_hits})"
+            )
+
+        try:
+            response = self.llm_client.generate(
+                full_prompt,
+                max_new_tokens=self.max_new_tokens,
+                temperature=self.temperature,
+            )
+        except Exception as e:
+            logger.error(f"[BatchWrapper] Call #{self.call_count} failed: {e}")
+            raise
 
         return response
 
@@ -397,6 +560,10 @@ def main():
         "--seed", type=int, default=42,
         help="Random seed"
     )
+    parser.add_argument(
+        "--no-batch", action="store_true",
+        help="Disable batching wrapper (use sequential calls like original)"
+    )
 
     args = parser.parse_args()
 
@@ -420,6 +587,7 @@ def main():
     logger.info(f"Frontier type: {args.frontier_type}")
     logger.info(f"Split: {args.split}")
     logger.info(f"Max prompts: {args.max_prompts if args.max_prompts else 'unlimited'}")
+    logger.info(f"Batching: {'disabled' if args.no_batch else 'enabled (prefetch)'}")
     if args.incremental_json:
         logger.info(f"Incremental JSON: {args.incremental_json}")
     logger.info("=" * 60)
@@ -476,12 +644,25 @@ def main():
             backend="vllm",
             tensor_parallel_size=args.tensor_parallel_size
         )
-        # Pass tracking_evaluator to VLLMChatWrapper so it can notify when prompts change
-        task_lm = VLLMChatWrapper(llm_client, tracking_evaluator=tracking_evaluator)
 
-        # For reflection, use same client (no tracking needed for reflection)
+        if args.no_batch:
+            # Original sequential mode
+            task_lm = VLLMChatWrapper(llm_client, tracking_evaluator=tracking_evaluator)
+        else:
+            # Batching mode: prefetch all trainset responses per prompt
+            task_lm = BatchingVLLMWrapper(
+                llm_client,
+                trainset=trainset,
+                tracking_evaluator=tracking_evaluator,
+            )
+            logger.info(
+                f"[BatchWrapper] Initialized with {len(trainset)} trainset examples "
+                f"(prefetch on prompt change)"
+            )
+
+        # Reflection always uses non-batching wrapper (different message patterns)
         if args.reflection_model == args.model:
-            reflection_lm = task_lm
+            reflection_lm = VLLMChatWrapper(llm_client)
         else:
             logger.info(f"Initializing {args.reflection_model} for reflection...")
             reflection_client = create_llm_client(
@@ -560,9 +741,26 @@ def main():
     logger.info(f"Best validation score: {best_score:.4f}")
     logger.info(f"Best prompt:\n{best_prompt}")
     logger.info(f"Total time: {elapsed:.1f}s")
+    # Log batching stats if available
+    if isinstance(task_lm, BatchingVLLMWrapper):
+        logger.info(
+            f"Batching stats: {task_lm._prefetch_count} prefetches, "
+            f"{task_lm._cache_hits} cache hits, "
+            f"{task_lm._cache_misses} cache misses "
+            f"({100 * task_lm._cache_hits / max(task_lm._cache_hits + task_lm._cache_misses, 1):.1f}% hit rate)"
+        )
     logger.info("=" * 60)
 
     # Save results
+    batch_stats = None
+    if isinstance(task_lm, BatchingVLLMWrapper):
+        batch_stats = {
+            "prefetch_count": task_lm._prefetch_count,
+            "cache_hits": task_lm._cache_hits,
+            "cache_misses": task_lm._cache_misses,
+            "total_calls": task_lm.call_count,
+        }
+
     results = {
         "method": "gepa",
         "best_prompt": best_prompt,
@@ -570,6 +768,7 @@ def main():
         "total_time": elapsed,
         "stopped_early": stopped_early,
         "prompts_evaluated": tracking_evaluator.prompts_evaluated if tracking_evaluator else "N/A",
+        "batch_stats": batch_stats,
         "config": {
             "model": args.model,
             "reflection_model": args.reflection_model,
@@ -578,6 +777,7 @@ def main():
             "frontier_type": args.frontier_type,
             "max_prompts": args.max_prompts,
             "split": args.split,
+            "batching": not args.no_batch,
         }
     }
     if args.incremental_json:

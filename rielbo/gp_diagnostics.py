@@ -191,7 +191,7 @@ class GPDiagnostics:
                 with torch.no_grad():
                     pred = loo_gp.posterior(X[i:i+1]).mean.squeeze()
                 loo_preds.append(pred.item())
-            except Exception:
+            except (RuntimeError, torch.linalg.LinAlgError):
                 loo_preds.append(Y.mean().item())
 
         loo_preds = torch.tensor(loo_preds, device=Y.device)
@@ -220,7 +220,7 @@ class GPDiagnostics:
 
             if hasattr(kernel, 'lengthscale'):
                 return kernel.lengthscale.detach().squeeze()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
         return None
 
@@ -229,7 +229,7 @@ class GPDiagnostics:
         try:
             if hasattr(gp.covar_module, 'outputscale'):
                 return gp.covar_module.outputscale.detach().item()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
         return 1.0
 
@@ -237,7 +237,7 @@ class GPDiagnostics:
         """Extract noise level from GP likelihood."""
         try:
             return gp.likelihood.noise.detach().item()
-        except Exception:
+        except (AttributeError, RuntimeError):
             return 0.0
 
     def _compute_distances(

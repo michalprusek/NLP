@@ -26,21 +26,17 @@ import logging
 import os
 import random
 from datetime import datetime
-from typing import Optional
-
 import numpy as np
 import torch
-import torch.nn.functional as F
 from botorch.acquisition import qExpectedImprovement
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP
 from botorch.sampling import SobolQMCNormalSampler
-from botorch.optim import optimize_acqf
 from gpytorch.kernels import MaternKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from torch.quasirandom import SobolEngine
 
-from rielbo.gp_diagnostics import GPDiagnostics, diagnose_gp_step
+from rielbo.gp_diagnostics import GPDiagnostics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -209,9 +205,8 @@ class TuRBOBaseline:
 
     def _normalize_z(self, z: torch.Tensor) -> torch.Tensor:
         """Normalize latent vectors to zero mean, unit variance for GP."""
-        if not hasattr(self, '_z_mean'):
-            self._z_mean = self.train_Z.mean(dim=0)
-            self._z_std = self.train_Z.std(dim=0).clamp(min=1e-6)
+        self._z_mean = self.train_Z.mean(dim=0)
+        self._z_std = self.train_Z.std(dim=0).clamp(min=1e-6)
         return (z - self._z_mean) / self._z_std
 
     def _denormalize_z(self, z_norm: torch.Tensor) -> torch.Tensor:
@@ -228,16 +223,32 @@ class TuRBOBaseline:
         y_std = self.train_Y.std().clamp(min=1e-6)
         train_Y_norm = (self.train_Y - y_mean) / y_std
 
-        # Fit GP with Matern kernel (standard for BO)
-        self.gp = SingleTaskGP(
-            train_Z_norm.double(),
-            train_Y_norm.double().unsqueeze(-1),
-            covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
-        )
+        try:
+            # Fit GP with Matern kernel (standard for BO)
+            self.gp = SingleTaskGP(
+                train_Z_norm.double(),
+                train_Y_norm.double().unsqueeze(-1),
+                covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
+            )
 
-        mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
-        fit_gpytorch_mll(mll)
+            mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
+            fit_gpytorch_mll(mll)
+        except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
+            logger.error(f"TuRBO GP fit failed: {e}")
+            import gpytorch
+            self.gp = SingleTaskGP(
+                train_Z_norm.double(),
+                train_Y_norm.double().unsqueeze(-1),
+                covar_module=ScaleKernel(MaternKernel(nu=2.5, ard_num_dims=self.input_dim)),
+                likelihood=gpytorch.likelihoods.GaussianLikelihood(
+                    noise_constraint=gpytorch.constraints.GreaterThan(1e-2)
+                ),
+            )
+            self.gp.likelihood.noise = 0.1
 
+        self.gp.eval()
         self._y_mean = y_mean
         self._y_std = y_std
         self._train_Z_norm = train_Z_norm  # Store for diagnostics
@@ -277,8 +288,13 @@ class TuRBOBaseline:
 
         return z_opt_norm
 
-    def _step(self, iteration: int = 0) -> Optional[float]:
-        """Single optimization step."""
+    def _step(self, iteration: int = 0) -> tuple[float | None, str]:
+        """Single optimization step.
+
+        Returns:
+            Tuple of (score, smiles). Score is None if duplicate/decode failed.
+            SMILES is empty string if decode failed.
+        """
         # Fit GP
         self._fit_gp()
 
@@ -307,14 +323,14 @@ class TuRBOBaseline:
         except (ValueError, RuntimeError, IndexError) as e:
             # Expected decoding failures
             logger.info(f"Decode failed: {e}")
-            return None
+            return None, ""
         except (torch.cuda.OutOfMemoryError, MemoryError):
             # Critical memory errors - re-raise
             raise
 
         # Skip if already evaluated
         if smiles in self.smiles_observed:
-            return None
+            return None, smiles  # Return smiles even for duplicates
 
         # Evaluate
         score = self.oracle.score(smiles)
@@ -322,7 +338,7 @@ class TuRBOBaseline:
 
         # Update data
         self.train_Z = torch.cat([self.train_Z, z_opt], dim=0)
-        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device)])
+        self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device, dtype=torch.float32)])
 
         # Update best
         if score > self.best_score:
@@ -333,14 +349,14 @@ class TuRBOBaseline:
         # Update trust region
         self.turbo_state.update(score)
 
-        return score
+        return score, smiles
 
     def optimize(self, n_iterations: int, log_interval: int = 10):
         """Run optimization loop."""
         logger.info(f"Starting TuRBO optimization for {n_iterations} iterations")
 
         for i in range(1, n_iterations + 1):
-            score = self._step(iteration=i)
+            score, _smiles = self._step(iteration=i)
 
             # Handle restart
             if self.turbo_state.restart_triggered:

@@ -372,9 +372,13 @@ class OPROOptimizer:
                 print(f"Score: {score:.1%} | {prompt if prompt else '(empty)'}{budget_str}{prompts_str}")
 
         # Optimization loop
+        # If max_prompts is set, run until we reach it (ignore num_iterations limit)
+        # Otherwise, run for num_iterations
+        max_iters = self.num_iterations if self.max_prompts is None else 10000
+
         budget_exhausted = False
         max_prompts_reached = False
-        for iteration in range(self.num_iterations):
+        for iteration in range(max_iters):
             # Check budget and max_prompts at start of iteration
             if self._is_budget_exhausted():
                 if verbose:
@@ -388,9 +392,16 @@ class OPROOptimizer:
                 max_prompts_reached = True
                 break
 
+            # Also stop at num_iterations if max_prompts not set
+            if self.max_prompts is None and iteration >= self.num_iterations:
+                if verbose:
+                    print(f"\nCompleted {self.num_iterations} iterations. Stopping.")
+                break
+
             if verbose:
                 print(f"\n{'='*60}")
-                print(f"Iteration {iteration + 1}/{self.num_iterations}")
+                iter_display = f"Iteration {iteration + 1}" + (f"/{self.num_iterations}" if self.max_prompts is None else "")
+                print(iter_display)
                 if self.total_budget:
                     print(f"Budget: {self.budget_used}/{self.total_budget}")
                 if self.max_prompts:

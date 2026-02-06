@@ -1,134 +1,82 @@
-# Prompt Optimization Framework
+# NLP: Prompt & Molecular Optimization Research
 
-Framework for automatic prompt optimization implementing **ProTeGi**, **OPRO**, **LIPO**, and **BOLT** algorithms for GSM8K math reasoning benchmark.
+Research framework for sample-efficient optimization in high-dimensional latent spaces, targeting NeurIPS submission.
 
-## Overview
+## Methods
 
-This project implements four prompt optimization techniques:
+### Prompt Optimization (GSM8K)
 
-### ProTeGi (Prompt Optimization with Textual Gradients)
-Based on ["Automatic Prompt Optimization with 'Gradient Descent' and Beam Search"](https://arxiv.org/abs/2305.03495)
-- Uses **textual gradients**: LLM-generated critiques that identify prompt weaknesses
-- Applies **beam search** to maintain multiple candidate prompts
-- Employs **UCB bandit algorithm** for exploration/exploitation balance
+| Method | Module | Description |
+|--------|--------|-------------|
+| **OPRO** | `opro/` | Optimization by PROmpting — LLM as meta-optimizer |
+| **ProTeGi** | `protegi/` | Textual gradients + beam search |
+| **GEPA** | `gepa_gsm8k/` | Genetic-Pareto prompt adaptation (with batching wrapper) |
 
-### OPRO (Optimization by PROmpting)
-Based on ["Large Language Models as Optimizers"](https://arxiv.org/abs/2309.03409)
-- Uses **LLM as meta-optimizer**: generates improved prompts by analyzing previous results
-- Maintains **top-k scored prompts** in memory
-- Evolutionary approach with temperature=1.0 for diversity
+### Molecular Optimization (GuacaMol)
 
-### LIPO (Latent Instruction Prompt Optimization)
-Instruction-only optimization using VAE latent space:
-- **VAE encoder**: 768D GTR embeddings → 32D latent space
-- **GP with ARD**: Direct Bayesian optimization on latent space
-- **Vec2Text inversion**: Converts optimized embeddings back to text
+| Method | Module | Description |
+|--------|--------|-------------|
+| **Subspace BO v1** | `rielbo/subspace_bo.py` | Spherical subspace projection S^255 → S^15 + GP |
+| **Subspace BO v2** | `rielbo/subspace_bo_v2.py` | Geodesic/novelty presets (recommended) |
+| **Subspace BO v3** | `rielbo/subspace_bo_v3.py` | Multi-projection rotation |
+| **Subspace BO v4** | `rielbo/subspace_bo_v4.py` | Novelty-weighted acquisition |
+| **Subspace BO v5** | `rielbo/subspace_bo_v5.py` | Latest variant |
+| **TuRBO** | `rielbo/turbo_baseline.py` | Trust region BO in R^256 (baseline) |
+| **Vanilla BO** | `rielbo/vanilla_bo.py` | Full 256D Hvarfner GP (baseline) |
 
-### BOLT (Bayesian Optimization over Latent Templates)
-Joint instruction + exemplar optimization:
-- **Structure-aware VAE**: Joint instruction (16D) + exemplar (8D) = 24D latent
-- **Set Transformer**: Permutation-invariant exemplar encoding
-- **Deep Kernel Learning GP**: Bayesian optimization on joint latent space
+## Key Results
 
-## Installation
+### Molecular Optimization (GuacaMol adip)
+
+| Method | Best Score | Seeds | vs Cold Start |
+|--------|-----------|-------|---------------|
+| Cold Start | 0.4910 | — | — |
+| **Subspace BO v2** | **0.5475 ± 0.018** | 30 | **+11.5%** |
+| Subspace BO v3 | 0.5465 ± 0.030 | 10 | +11.3% |
+| Vanilla BO (256D) | 0.5022 | 20 iter | +2.3% |
+| TuRBO (R^256) | 0.5044 ± 0.003 | 5 | +2.7% |
+
+Intrinsic dimensionality analysis validates d=16 subspace: TwoNN=16.8, DANCo=11.3, FisherS=18.9.
+
+### Prompt Optimization (GSM8K, 100 prompts, test split)
+
+| Method | Best Accuracy |
+|--------|--------------|
+| **ProTeGi** | **88.9%** |
+| OPRO | 81.9% |
+
+## Quick Start
 
 ```bash
-# Install dependencies with uv
+# Install
 uv sync
 
-# Configure API keys
-cp .env.example .env
-# Edit .env and add ANTHROPIC_API_KEY, OPENAI_API_KEY
-```
+# Prompt optimization
+uv run python -m opro.run --model qwen --iterations 10
+uv run python -m protegi.run --model qwen --steps 6
 
-## Usage
+# Molecular optimization (Subspace BO v2, recommended)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
+    --preset geodesic --task-id adip --n-cold-start 100 --iterations 500
 
-### OPRO Optimization
-```bash
-uv run python run_opro.py --model Qwen/Qwen2.5-7B-Instruct --iterations 10
-```
+# TuRBO baseline
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
+    --task-id adip --n-cold-start 100 --iterations 500 --seed 42
 
-### ProTeGi Optimization
-```bash
-uv run python run_protegi.py --model Qwen/Qwen2.5-7B-Instruct --iterations 10
-```
-
-### LIPO Optimization
-```bash
-# Using pre-evaluated results (no LLM needed)
-uv run python -m lipo.run --skip-hbbops --iterations 50
-
-# Full run with LLM evaluation
-uv run python -m lipo.run --iterations 10
-```
-
-### BOLT Optimization
-```bash
-# Using pre-evaluated Hyperband results (no LLM needed)
-uv run python -m bolt.run --load-hyperband bolt/data/hyperband_results.json --iterations 30
-
-# Full run with Hyperband evaluation
-uv run python -m bolt.run --iterations 30
-```
-
-## Model Aliases
-
-```python
-"haiku" → claude-haiku-4-5-20251001
-"sonnet" → claude-sonnet-4-5-20251022
-"qwen"  → Qwen/Qwen2.5-7B-Instruct
-```
-
-## Key Parameters
-
-- `--model`: Task evaluation model
-- `--meta-model`: Meta-optimization model (defaults to --model)
-- `--backend`: `vllm` (fast, requires CUDA), `openai`, `deepinfra`, `auto`
-- `--iterations`: Number of optimization iterations
-- `--minibatch-size`: Examples per evaluation
-
-## Project Structure
-
-```
-.
-├── src/                    # Core components
-│   ├── llm_client.py       # LLM client abstraction (vLLM, OpenAI, etc.)
-│   ├── opro.py             # OPRO optimizer
-│   ├── gsm8k_evaluator.py  # GSM8K evaluation
-│   └── prompts/            # Task-specific prompts
-├── lipo/                   # LIPO method
-│   ├── run.py              # Main entry point
-│   ├── vae.py              # VAE encoder
-│   ├── gp.py               # Gaussian Process
-│   └── inference.py        # BO inference
-├── bolt/                   # BOLT method
-│   ├── run.py              # Main entry point
-│   ├── vae.py              # Structure-aware VAE
-│   ├── gp.py               # Deep kernel GP
-│   └── inference.py        # BO inference
-├── datasets/               # Static datasets
-│   ├── gsm8k/              # GSM8K math problems
-│   ├── hbbops/             # HbBoPs data
-│   └── tos_local/          # ToS classification
-├── results/                # Experiment outputs
-├── run_opro.py             # OPRO runner
-├── run_protegi.py          # ProTeGi runner
-├── CLAUDE.md               # Claude Code instructions
-└── pyproject.toml          # Dependencies
+# Run full benchmark suite
+CUDA_VISIBLE_DEVICES=0 bash rielbo/benchmark/run_v2_benchmark.sh
 ```
 
 ## Requirements
 
 - Python 3.10+
-- CUDA GPU (for vLLM backend)
-- API keys for Claude/OpenAI (optional)
+- CUDA GPU (for vLLM backend and BO)
+- `ANTHROPIC_API_KEY` (for Claude meta-models)
 
 ## References
 
 - ProTeGi: [arXiv:2305.03495](https://arxiv.org/abs/2305.03495)
 - OPRO: [arXiv:2309.03409](https://arxiv.org/abs/2309.03409)
-- GSM8K: [arXiv:2110.14168](https://arxiv.org/abs/2110.14168)
+- TuRBO: [arXiv:1910.01739](https://arxiv.org/abs/1910.01739)
 
-## License
-
-MIT
+See `CLAUDE.md` for detailed documentation, benchmark results, and development guidelines.

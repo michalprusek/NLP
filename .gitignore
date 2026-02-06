@@ -55,24 +55,8 @@ coverage.xml
 *.mo
 *.pot
 
-# Django stuff:
+# Logs
 *.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -90,39 +74,12 @@ Pipfile.lock
 # PEP 582
 __pypackages__/
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
 # Environments
 .env
 .venv
 env/
 venv/
 ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
 
 # IDE
 .vscode/
@@ -140,36 +97,11 @@ dmypy.json
 # Cache
 .cache/
 
-# Model checkpoints (optional - comment out if you want to track them)
-# *.pt
-# *.pth
-# *.bin
-# *.safetensors
-
-# Visualization outputs
-visualizations/output/
-robust_vec2text/visualizations/
-
-# CatBoost training info
-catboost_info/
-
-# Vec2Text finetuning - large model checkpoints and training data
-lipo/vec2text_finetune/checkpoints*/
-lipo/vec2text_finetune/data*/
-lipo/vec2text_finetune/logs/
+# NFS temp files
 .nfs*
 
 # Experiment results
 results/
-bolt/results/
-bolt/tuning/test*
-bolt/tuning/full_run_*
-bolt/tuning_results*/
-
-# LID-O++ data and checkpoints
-lido_pp/checkpoints/
-lido_pp/data/
-lido_pp/results/
 
 # General checkpoints and data (all subprojects)
 **/checkpoints/
@@ -178,44 +110,22 @@ lido_pp/results/
 **/data/*.bin
 **/data/*.safetensors
 
-# FlowPO-HD specific
-flowpo_hd/results/*.log
-flowpo_hd/results/*.json
+# Datasets (download/generate separately)
+datasets/
 
-# GSM8K dataset splits
-datasets/gsm8k/
+# Papers (PDFs, share via cloud/NFS)
+papers/
 
-# Soft-Prompt VAE
-soft_prompt_vae/processed/
-soft_prompt_vae/checkpoints/
-soft_prompt_vae/logs/
-soft_prompt_vae/data/*.bin
-
-# Vec2Text VAE
-vec2text_vae/cache/
-
-# Large dataset files
-datasets/*.pt
-datasets/*.json
+# Planning artifacts (Claude Code internal)
+.planning/
 
 # Weights & Biases
 wandb/
 
-# Original reference implementations (untracked)
-nfbo_original/
-instructzero_original/
+# GuacaMol SELFIES VAE models
 shared/guacamol/minicddd_models/
 
-# LOLBO reference implementation (local dependency for SELFIES VAE)
-lolbo_ref/
-
-# GuacaMol and ZINC datasets (large, download separately)
-datasets/guacamol/
-datasets/zinc/
-
-# Best results archive (local analysis, not for version control)
+# RieLBO local-only files
 rielbo/best_so_far/
-
-# Debug and plotting scripts (local development)
 rielbo/plot_comparison.py
 rielbo/benchmark_acqf.py

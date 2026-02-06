@@ -26,7 +26,7 @@ def load_guacamol_data(
     """Load molecules and scores from GuacaMol CSV file.
 
     Args:
-        csv_path: Path to CSV file. Defaults to nfbo_original/data/guacamol/oracle/guacamol_train_data_first_20k.csv
+        csv_path: Path to CSV file. Defaults to datasets/guacamol/guacamol_train_data_first_20k.csv
         n_samples: Number of samples to load. None for all.
         task_id: Task to load scores for (column name in CSV)
         return_selfies: Whether to also return SELFIES strings
