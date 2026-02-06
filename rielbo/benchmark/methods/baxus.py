@@ -41,6 +41,7 @@ class BaxusState:
     dim: int                    # Original input dimension (256)
     eval_budget: int            # Total evaluation budget
     new_bins_on_split: int = 3  # New bins per split
+    max_target_dim: int = 64    # Cap expansion to keep GP tractable
     d_init: int = 0
     target_dim: int = 0
     n_splits: int = 0
@@ -176,6 +177,7 @@ def _baxus_candidate(
     elif hasattr(covar, 'lengthscale'):
         ls = covar.lengthscale.detach().view(-1)
     else:
+        logger.warning(f"BAxUS: covariance module {type(covar).__name__} has no lengthscale, using uniform weights")
         ls = torch.ones(dim, dtype=dtype, device=device)
     weights = ls / ls.mean()
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
@@ -212,11 +214,11 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
     """BAxUS benchmark wrapper.
 
     Bayesian Optimization in Adaptively Expanding Subspaces.
-    Starts in a low-D embedding (~2D) and expands as needed.
+    Starts in a very low-D embedding (1D for 256D input) and expands as needed.
 
     Key characteristics:
     - Random hash-based embedding from input to target space
-    - GP with Matern kernel in target space (adaptive dimensionality)
+    - GP with RBF kernel in target space (BoTorch default Hvarfner priors)
     - Trust region with expansion on exhaustion (bin splitting)
     - Thompson Sampling acquisition
     """
@@ -232,10 +234,12 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         verbose: bool = False,
         n_candidates: int = 5000,
         eval_budget: int = 500,
+        max_target_dim: int = 64,
     ):
         super().__init__(codec, oracle, seed, device, verbose)
         self.n_candidates = n_candidates
         self.eval_budget = eval_budget
+        self.max_target_dim = max_target_dim
         self.dtype = torch.double
 
         # BAxUS internals (initialized in cold_start)
@@ -293,7 +297,10 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
 
         # Initialize BAxUS state
         input_dim = Z.shape[1]  # 256
-        self.state = BaxusState(dim=input_dim, eval_budget=self.eval_budget)
+        self.state = BaxusState(
+            dim=input_dim, eval_budget=self.eval_budget,
+            max_target_dim=self.max_target_dim,
+        )
         logger.info(
             f"BAxUS: input_dim={input_dim}, d_init={self.state.d_init}, "
             f"n_splits={self.state.n_splits}"
@@ -332,12 +339,21 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             ).to(self.device)
             mll = ExactMarginalLogLikelihood(model.likelihood, model)
             fit_gpytorch_mll(mll)
+        except torch.cuda.OutOfMemoryError:
+            raise
         except Exception as e:
-            logger.warning(f"BAxUS GP fit failed: {e}, using fallback")
+            logger.error(f"BAxUS GP fit failed (using fallback): {e}")
             likelihood = GaussianLikelihood(noise_constraint=Interval(1e-4, 1.0))
             model = SingleTaskGP(
                 self.X_target, self.Y, likelihood=likelihood,
             ).to(self.device)
+            mll = ExactMarginalLogLikelihood(model.likelihood, model)
+            try:
+                fit_gpytorch_mll(mll)
+            except torch.cuda.OutOfMemoryError:
+                raise
+            except Exception as fallback_err:
+                logger.error(f"BAxUS fallback GP fit also failed, using untrained model: {fallback_err}")
 
         model.eval()
 
@@ -354,9 +370,8 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
 
         # Denormalize target → raw target → input space
         X_next_target_raw = self._denormalize_target(X_next_target_norm)
-        # Back-project: raw target → normalized input space via pseudoinverse
-        # For hash embedding S: x_input ≈ S.pinverse() @ x_target, but simpler:
-        # x_input = x_target @ S (since S is sparse with ±1)
+        # Back-project: target → input space using S as direct back-projection
+        # (standard BAxUS approach; lossy since multiple input dims map to each target dim)
         X_next_input = X_next_target_raw @ self.S
 
         # Clamp to [-1, 1] input space
@@ -369,11 +384,13 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         try:
             smiles = self.codec.decode(z_full)[0]
         except Exception as e:
-            logger.info(f"BAxUS decode failed: {e}")
+            logger.warning(f"BAxUS decode failed: {e}")
             self._handle_failure()
             return StepResult(
                 score=0.0, best_score=self.best_score, smiles="",
                 is_duplicate=True, is_valid=False,
+                trust_region_length=self.state.length,
+                extra={"target_dim": self.state.target_dim},
             )
 
         # Check duplicate
@@ -382,6 +399,8 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             return StepResult(
                 score=0.0, best_score=self.best_score, smiles=smiles or "",
                 is_duplicate=True,
+                trust_region_length=self.state.length,
+                extra={"target_dim": self.state.target_dim},
             )
 
         # Score
@@ -395,9 +414,9 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
 
         # Add to training data (input space + normalized target space)
         self.X_input = torch.cat([self.X_input, X_next_input], dim=0)
-        # Re-normalize the new target point using current bounds
-        X_next_target_renorm = self._normalize_target(X_next_target_raw)
-        self.X_target = torch.cat([self.X_target, X_next_target_renorm], dim=0)
+        # Update normalization bounds to include new point, then re-normalize all
+        self._update_target_bounds()
+        self.X_target = self._normalize_target(self.X_input @ self.S.T)
         self.Y = torch.cat([self.Y, Y_next], dim=0)
 
         # Update best
@@ -435,11 +454,14 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         """Expand the target subspace by splitting bins."""
         self.state.restart_triggered = False
 
-        if self.state.target_dim >= self.state.dim:
-            # Already full dimensional — just reset TR
+        if self.state.target_dim >= min(self.state.max_target_dim, self.state.dim):
+            # At cap or full dimensional — just reset TR
             self.state.length = self.state.length_init
             self.state.failure_counter = 0
             self.state.success_counter = 0
+            logger.info(
+                f"BAxUS at dim cap ({self.state.target_dim}D), resetting TR"
+            )
             return
 
         old_dim = self.state.target_dim
@@ -450,7 +472,16 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             self.S, X_target_raw, self.state.new_bins_on_split,
             self.device, self.dtype,
         )
-        self.state.target_dim = len(self.S)
+        new_dim = len(self.S)
+
+        # If expansion overshot the cap, truncate to max_target_dim
+        cap = min(self.state.max_target_dim, self.state.dim)
+        if new_dim > cap:
+            self.S = self.S[:cap]
+            X_target_raw_expanded = X_target_raw_expanded[:, :cap]
+            new_dim = cap
+
+        self.state.target_dim = new_dim
 
         # Re-normalize expanded target space to [-1, 1]
         self._update_target_bounds()
@@ -472,5 +503,6 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             "eval_budget": self.eval_budget,
             "input_dim": 256,
             "d_init": self.state.d_init if self.state else None,
+            "max_target_dim": self.max_target_dim,
         })
         return config

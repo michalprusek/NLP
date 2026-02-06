@@ -188,13 +188,17 @@ class InvBOBenchmark(BaseBenchmarkMethod):
 
         # Pre-populate smiles_to_selfies for inversion
         import selfies as sf
+        n_sf_failures = 0
         for smi in smiles_list:
             try:
                 selfies_str = sf.encoder(smi)
                 if selfies_str:
                     self.objective.smiles_to_selfies[smi] = selfies_str
-            except Exception:
-                pass
+            except Exception as e:
+                n_sf_failures += 1
+                logger.debug(f"SELFIES encoding failed for '{smi[:50]}': {e}")
+        if n_sf_failures > 0:
+            logger.warning(f"InvBO: {n_sf_failures}/{len(smiles_list)} SELFIES encodings failed in cold start")
 
         # Encode initial data
         train_x = list(smiles_list)
@@ -250,15 +254,41 @@ class InvBOBenchmark(BaseBenchmarkMethod):
             try:
                 self.invbo_state.inversion()
                 self.invbo_state.progress_fails_since_last_e2e = 0
+            except torch.cuda.OutOfMemoryError:
+                raise
             except Exception as e:
                 logger.warning(f"InvBO inversion failed: {e}")
-                self.invbo_state.progress_fails_since_last_e2e = 0
+                # Don't reset counter — allow escalation if inversion is systematically broken
+                self.invbo_state.progress_fails_since_last_e2e += 1
+                if self.invbo_state.progress_fails_since_last_e2e == self.e2e_freq * 3:
+                    logger.error(
+                        f"InvBO inversion has failed {self.invbo_state.progress_fails_since_last_e2e} "
+                        f"consecutive times — inversion may be systematically broken"
+                    )
 
         # Update surrogate model (GP only)
-        self.invbo_state.update_surrogate_model()
+        try:
+            self.invbo_state.update_surrogate_model()
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as e:
+            logger.warning(f"InvBO surrogate update failed: {e}, skipping acquisition")
+            return StepResult(
+                score=0.0, best_score=self.best_score, smiles="",
+                is_duplicate=True, is_valid=False,
+            )
 
         # Acquisition (potential-aware TS with trust region)
-        self.invbo_state.acquisition()
+        try:
+            self.invbo_state.acquisition()
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as e:
+            logger.warning(f"InvBO acquisition failed: {e}")
+            return StepResult(
+                score=0.0, best_score=self.best_score, smiles="",
+                is_duplicate=True, is_valid=False,
+            )
 
         # Handle trust region restart
         if self.invbo_state.tr_state.restart_triggered:
@@ -284,8 +314,8 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 s = sf.encoder(current_smiles)
                 if s:
                     self.objective.smiles_to_selfies[current_smiles] = s
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"SELFIES encoding failed for new molecule: {e}")
             is_duplicate = False
         else:
             current_score = 0.0
@@ -303,7 +333,7 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 "n_new_this_step": n_new,
                 "oracle_calls": self.objective.num_calls,
                 "progress_fails": self.invbo_state.progress_fails_since_last_e2e,
-                "n_e2e_updates": self.invbo_state.tot_num_e2e_updates,
+                "n_e2e_updates": self.invbo_state.tot_num_e2e_updates,  # Vestigial: always 0 (VAE frozen)
             },
         )
 

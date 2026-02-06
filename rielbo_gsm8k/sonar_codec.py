@@ -89,7 +89,7 @@ class SonarCodec:
 
         Args:
             embeddings: Embeddings tensor [N, 1024]
-            temperature: Not used (SONAR decoder is deterministic)
+            temperature: Kept for interface compatibility with MolecularCodec (SONAR is deterministic)
             max_seq_len: Maximum sequence length for decoded text
 
         Returns:
@@ -106,16 +106,26 @@ class SonarCodec:
                 target_lang="eng_Latn",
                 max_seq_len=max_seq_len,
             )
-        except Exception as e:
+        except (torch.cuda.OutOfMemoryError, KeyboardInterrupt, SystemExit):
+            raise
+        except RuntimeError as e:
             logger.warning(f"SONAR decode failed: {e}")
+            return [""] * embeddings.shape[0]
+        except Exception as e:
+            logger.error(f"SONAR decode unexpected error ({type(e).__name__}): {e}", exc_info=True)
             return [""] * embeddings.shape[0]
 
         # Filter garbled outputs (very short = likely decode failure)
         results = []
+        n_filtered = 0
         for text in decoded:
             if len(text.strip()) < 5:
                 results.append("")
+                n_filtered += 1
             else:
                 results.append(text.strip())
+
+        if n_filtered > 0:
+            logger.debug(f"SONAR: filtered {n_filtered}/{len(decoded)} short outputs (<5 chars)")
 
         return results

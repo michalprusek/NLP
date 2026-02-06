@@ -228,36 +228,12 @@ def plot_convergence():
     plt.tight_layout()
     out_path = OUTPUT_DIR / "prompt_convergence.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
     print(f"Saved: {out_path}")
 
-    # Also save as PDF for paper
+    # Also save as PDF for paper (reuse same figure)
     pdf_path = OUTPUT_DIR / "prompt_convergence.pdf"
-    fig2, ax2 = plt.subplots(1, 1, figsize=(8, 5))
-    for method, loader in loaders.items():
-        curves = loader()
-        if curves is None:
-            continue
-        x, mean, std = get_mean_std_curve(curves)
-        if len(x) == 0:
-            continue
-        c = METHOD_COLORS[method]
-        n_seeds = len(curves)
-        label = f"{METHOD_LABELS[method]} (n={n_seeds})"
-        lw = 2.5 if method == "rielbo" else 2.0
-        ax2.plot(x, mean * 100, color=c, linewidth=lw, label=label)
-        if n_seeds > 1:
-            ax2.fill_between(x, (mean - std) * 100, (mean + std) * 100, alpha=0.15, color=c)
-
-    ax2.set_xlabel("Prompts Evaluated")
-    ax2.set_ylabel("Best Accuracy (%)")
-    ax2.set_title("GSM8K Prompt Optimization — Convergence", fontweight="bold")
-    ax2.legend(loc="lower right", framealpha=0.9)
-    ax2.grid(True, alpha=0.3)
-    ax2.set_xlim(1, None)
-    plt.tight_layout()
-    fig2.savefig(pdf_path, bbox_inches="tight")
-    plt.close(fig2)
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
     print(f"Saved: {pdf_path}")
 
 

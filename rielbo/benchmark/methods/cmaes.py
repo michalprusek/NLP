@@ -55,6 +55,7 @@ class CMAESBenchmark(BaseBenchmarkMethod):
         self._es: cma.CMAEvolutionStrategy | None = None
         self._pending_solutions: list | None = None
         self._pending_idx: int = 0
+        self._pending_fitnesses: list = []
 
     def cold_start(self, smiles_list: list[str], scores: torch.Tensor) -> None:
         """Initialize CMA-ES at best cold-start point."""
@@ -106,9 +107,8 @@ class CMAESBenchmark(BaseBenchmarkMethod):
             )
             self._pending_solutions = self._es.ask()
             self._pending_idx = 0
-            self._pending_fitnesses = []
 
-        # Initialize fitness tracking for new batch
+        # Initialize fitness tracking at the start of each new population batch
         if self._pending_idx == 0:
             self._pending_fitnesses = []
 
@@ -121,8 +121,8 @@ class CMAESBenchmark(BaseBenchmarkMethod):
         try:
             smiles = self.codec.decode(z_tensor)[0]
         except Exception as e:
-            logger.info(f"CMA-ES decode failed: {e}")
-            self._pending_fitnesses.append(0.0)  # Bad fitness (negated 0)
+            logger.warning(f"CMA-ES decode failed: {e}")
+            self._pending_fitnesses.append(0.0)  # Zero score for decode failure
             return StepResult(
                 score=0.0, best_score=self.best_score, smiles="",
                 is_duplicate=True, is_valid=False,

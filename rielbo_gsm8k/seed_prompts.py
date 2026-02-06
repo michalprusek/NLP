@@ -55,7 +55,7 @@ DIVERSE_PROMPTS = [
 def get_seed_prompts() -> list[str]:
     """Return all seed prompts for cold start.
 
-    Returns ~30 diverse prompts covering:
+    Returns 26 diverse prompts covering:
     - Classic short instructions
     - Known high-performers from OPRO/ProTeGi
     - Structured format instructions

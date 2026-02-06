@@ -348,12 +348,145 @@ class TestV2Config:
         assert config.adaptive_dim
         assert config.prob_norm
 
+    def test_geodesic_preset(self):
+        """Geodesic preset should have geodesic_tr AND adaptive_tr enabled."""
+        from rielbo.subspace_bo_v2 import V2Config
+
+        config = V2Config.from_preset("geodesic")
+        assert config.geodesic_tr
+        assert config.adaptive_tr
+        assert not config.whitening
+        assert config.kernel_order == 0
+
+    def test_baseline_has_no_adaptive_tr(self):
+        """Baseline should not have adaptive_tr."""
+        from rielbo.subspace_bo_v2 import V2Config
+
+        config = V2Config.from_preset("baseline")
+        assert not config.adaptive_tr
+
     def test_unknown_preset_raises(self):
         """Unknown preset should raise error."""
         from rielbo.subspace_bo_v2 import V2Config
 
         with pytest.raises(ValueError):
             V2Config.from_preset("unknown_preset")
+
+
+class TestAdaptiveTrustRegion:
+    """Test adaptive trust region logic (TuRBO-style)."""
+
+    def _make_optimizer_with_adaptive_tr(self):
+        """Create a minimal optimizer with adaptive TR for testing."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+        from unittest.mock import MagicMock
+
+        config = V2Config.from_preset("geodesic")
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.verbose = False
+        opt.seed = 42
+        opt.n_restarts = 0
+        opt.tr_length = config.tr_init
+        opt._tr_success_count = 0
+        opt._tr_fail_count = 0
+        opt.train_U = None
+        opt.train_V = None
+        opt._init_projection = MagicMock()
+        opt._fit_gp = MagicMock()
+        return opt
+
+    def test_tr_grows_on_consecutive_successes(self):
+        """TR should grow after tr_success_tol consecutive improvements."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        initial_tr = opt.tr_length
+
+        for _ in range(opt.config.tr_success_tol):
+            opt._update_trust_region(improved=True)
+
+        assert opt.tr_length > initial_tr
+        expected = initial_tr * opt.config.tr_grow_factor
+        assert abs(opt.tr_length - expected) < 1e-8
+
+    def test_tr_shrinks_on_consecutive_failures(self):
+        """TR should shrink after tr_fail_tol consecutive failures."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        initial_tr = opt.tr_length
+
+        for _ in range(opt.config.tr_fail_tol):
+            opt._update_trust_region(improved=False)
+
+        expected = initial_tr * opt.config.tr_shrink_factor
+        assert abs(opt.tr_length - expected) < 1e-8
+
+    def test_tr_capped_at_max(self):
+        """TR length should never exceed tr_max."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        opt.tr_length = opt.config.tr_max - 0.01
+
+        for _ in range(opt.config.tr_success_tol):
+            opt._update_trust_region(improved=True)
+
+        assert opt.tr_length <= opt.config.tr_max
+
+    def test_restart_triggered_when_tr_below_min(self):
+        """_restart_subspace should be called when TR drops below tr_min."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        # Set TR so that after one shrink (× 0.5) it falls below tr_min
+        opt.tr_length = opt.config.tr_min * (1.0 / opt.config.tr_shrink_factor) - 1e-6
+
+        # This many failures should trigger a shrink that goes below tr_min
+        for _ in range(opt.config.tr_fail_tol):
+            opt._update_trust_region(improved=False)
+
+        # Should have restarted — tr_length reset to tr_init
+        assert opt.n_restarts == 1
+        assert abs(opt.tr_length - opt.config.tr_init) < 1e-8
+
+    def test_max_restarts_stops_restarting(self):
+        """After max_restarts, TR should reset to tr_init without restarting."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        opt.n_restarts = opt.config.max_restarts
+        opt.tr_length = opt.config.tr_min * 0.5  # Below minimum
+
+        opt._restart_subspace()
+
+        # Should NOT have incremented n_restarts
+        assert opt.n_restarts == opt.config.max_restarts
+        # But TR should be reset
+        assert abs(opt.tr_length - opt.config.tr_init) < 1e-8
+
+    def test_success_resets_failure_counter(self):
+        """A success should reset the failure counter to 0."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        opt._tr_fail_count = 5
+
+        opt._update_trust_region(improved=True)
+
+        assert opt._tr_fail_count == 0
+        assert opt._tr_success_count == 1
+
+    def test_failure_resets_success_counter(self):
+        """A failure should reset the success counter to 0."""
+        opt = self._make_optimizer_with_adaptive_tr()
+        opt._tr_success_count = 2
+
+        opt._update_trust_region(improved=False)
+
+        assert opt._tr_success_count == 0
+        assert opt._tr_fail_count == 1
+
+    def test_no_op_when_adaptive_tr_disabled(self):
+        """_update_trust_region should be a no-op when adaptive_tr=False."""
+        from rielbo.subspace_bo_v2 import V2Config
+        opt = self._make_optimizer_with_adaptive_tr()
+        opt.config = V2Config.from_preset("baseline")
+        original_tr = opt.tr_length
+
+        opt._update_trust_region(improved=True)
+        opt._update_trust_region(improved=False)
+
+        assert opt.tr_length == original_tr
 
 
 class TestKernelFactory:

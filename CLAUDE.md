@@ -72,7 +72,7 @@ NLP/
 │   │   ├── run_v2_benchmark.sh      # Multi-seed benchmark script
 │   │   └── methods/         # Method adapters
 │   │       ├── subspace.py
-│   │       ├── turbo.py, vanilla.py, lolbo.py
+│   │       ├── turbo.py, vanilla.py, lolbo.py, baxus.py, cmaes.py, invbo.py
 │   │       └── __init__.py
 │   └── results/
 │
@@ -305,14 +305,36 @@ runner.run_all()
 
 Key files: `rielbo/benchmark/runner.py` (orchestrator), `rielbo/benchmark/base.py` (BaseMethod ABC), `rielbo/benchmark/methods/` (per-method adapters).
 
+### Benchmark Runner CLI
+
+```bash
+# Run specific methods (10 seeds, 500 iter)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.benchmark.runner \
+    --methods baxus,cmaes,invbo --tasks adip --seeds 42-51 --iterations 500 \
+    --output-dir rielbo/results/benchmark/full --verbose
+```
+
+**CLI gotchas:**
+- No `--skip-existing` flag — skip is default; use `--no-skip-existing` to force re-run
+- Without `--verbose`, no per-iteration progress is logged (only start/completion)
+- Results saved as `{method}_{task}_seed{seed}.json` with column-oriented history dict
+
+### External Reference Repos
+
+- `invbo_ref/` — Cloned InvBO repo (NeurIPS 2024), used by `rielbo/benchmark/methods/invbo.py`
+- `lolbo_ref/` — Cloned LOLBO repo, provides SELFIES VAE model + dataset classes
+- Both are gitignored; adapters add them to `sys.path` at import time
+- **BoTorch API patch**: `GPyTorchPosterior(mvn=dist)` → `GPyTorchPosterior(distribution=dist)` needed for InvBO's ppgpr module
+
 ### Benchmark Results (2026-02-06)
 
-| Task | Cold Start | V2 Geodesic (10 seeds) | LOL-BO (10 seeds) | TuRBO (10 seeds) | Best |
-|------|------------|------------------------|--------------------|--------------------|------|
-| adip | 0.4910 | **0.5581 ± 0.022** | 0.5228 ± 0.019 | 0.5060 ± 0.007 | **+13.6%** |
-| med2 | 0.1856 | 0.1856 ± 0.000 | 0.1856 ± 0.000 | 0.1856 ± 0.000 | +0.0%* |
+| Task | Cold Start | V2 Geodesic | CMA-ES | InvBO | LOL-BO | TuRBO | Best |
+|------|------------|-------------|--------|-------|--------|-------|------|
+| adip | 0.4910 | **0.5581±0.022** | 0.5371±0.018 | 0.5255±0.017 | 0.5228±0.019 | 0.5060±0.007 | **+13.6%** |
+| med2 | 0.1856 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | 0.1856±0.000 | +0.0%* |
 
 *Med2: only 0.6% of 20K molecules beat cold start best. Score range [0.02, 0.19] is extremely narrow.
+BAxUS: excluded — expands from 1D→243D, becomes Vanilla BO speed (~30s/iter) and OOMs.
 
 **Key findings**:
 - Subspace BO (S^15) consistently outperforms TuRBO (R^256) and LOL-BO
@@ -457,6 +479,8 @@ Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J
 5. **Z-score normalization breaks Hvarfner GP priors**: For full-dimensional BO, min-max normalization to [0,1]^D is required. Z-score causes pairwise distances ~16 vs median lengthscale 65.8, leading to singular kernels.
 
 6. **Med2 is effectively unsolvable**: Only 0.6% of 20K molecules beat cold start best. The score range [0.02, 0.19] is so narrow that BO has no signal to exploit. Don't waste compute on it.
+
+7. **Hash embedding requires target-space normalization**: BAxUS-style hash embeddings map [-1,1]^D to an unbounded target space (values can reach ±20). Trust region bounds must be in the normalized target space, not raw. Always add `_normalize_target`/`_denormalize_target` when using non-orthogonal projections.
 
 ### Best Practices for Future Experiments
 

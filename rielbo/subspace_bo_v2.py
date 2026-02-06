@@ -1,25 +1,26 @@
-"""Spherical Subspace BO v2: Theoretical Improvements.
+"""Spherical Subspace BO v2: Geodesic Trust Region + Adaptive TR.
 
-Extends the base SphericalSubspaceBO with:
-1. ArcCosine Order 2 kernel (smoother GP)
-2. Spherical Whitening (center data at north pole)
-3. Geodesic Trust Region (proper Riemannian sampling)
-4. Adaptive Dimension (BAxUS-style d=8→16)
-5. Probabilistic Norm reconstruction
-6. Product Space geometry (S^3 × S^3 × S^3 × S^3)
+Extends the base SphericalSubspaceBO with configurable features via V2Config.
+Recommended preset: "geodesic" (geodesic TR + adaptive TR with random restart).
 
 Usage:
-    from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2
+    from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
 
+    config = V2Config.from_preset("geodesic")  # Recommended
     optimizer = SphericalSubspaceBOv2(
         codec=codec,
         oracle=oracle,
-        kernel_order=2,
-        whitening=True,
-        geodesic_tr=True,
-        adaptive_dim=True,
-        prob_norm=True,
+        config=config,
     )
+
+Available features (configurable via V2Config):
+1. ArcCosine kernel (order 0 recommended, order 2 available)
+2. Spherical Whitening (center data at north pole)
+3. Geodesic Trust Region (proper Riemannian sampling)
+4. Adaptive Trust Region (TuRBO-style grow/shrink + random restart)
+5. Adaptive Dimension (BAxUS-style d=8→16)
+6. Probabilistic Norm reconstruction
+7. Product Space geometry (S^3 × S^3 × S^3 × S^3)
 """
 
 import logging
@@ -106,15 +107,16 @@ class V2Config:
 
 
 class SphericalSubspaceBOv2:
-    """Spherical Subspace BO with theoretical improvements.
+    """Spherical Subspace BO with configurable geometric features.
 
-    Key innovations over v1:
-    1. Smoother GP with ArcCosine Order 2 kernel
-    2. Data centering with Spherical Whitening
-    3. Proper Riemannian sampling with Geodesic Trust Region
-    4. BAxUS-style adaptive dimension for exploration→exploitation
-    5. Probabilistic norm reconstruction for diversity
-    6. Product space geometry to avoid high-D sphere issues
+    Recommended configuration (geodesic preset):
+    - ArcCosine order 0 kernel (rougher, matches chemical landscape)
+    - Geodesic Trust Region (proper Riemannian sampling on S^d)
+    - Adaptive TR with random restart (TuRBO-style grow/shrink)
+
+    Additional features (retained for ablation, not recommended by default):
+    - ArcCosine Order 2 kernel, Spherical Whitening, Adaptive dimension,
+      Probabilistic norm reconstruction, Product space geometry
     """
 
     def __init__(
@@ -660,3 +662,5 @@ class SphericalSubspaceBOv2:
 
         logger.info(f"Done. Best: {self.best_score:.4f}")
         logger.info(f"Best SMILES: {self.best_smiles}")
+        if self.fallback_count > 0:
+            logger.warning(f"GP fallbacks: {self.fallback_count} iterations used untrained fallback GP")

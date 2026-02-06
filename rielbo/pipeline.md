@@ -100,10 +100,10 @@ Local candidates via exponential map on S^15:
 Global candidates: uniform random on S^15 (exploration).
 
 **Adaptive trust region** (TuRBO-style):
-- Start: radius = 0.4 * max_angle (0.5 rad)
-- On 3 consecutive improvements: grow by 1.5x (up to 0.8)
-- On 10 consecutive failures: shrink by 0.5x
-- When radius < 0.02: restart with fresh random basis
+- Start: tr_length = 0.4, giving radius = 0.2 rad (= 0.4 × 0.5 max_angle)
+- On 3 consecutive improvements: tr_length grows by 1.5× (capped at 0.8, radius capped at 0.4 rad)
+- On 10 consecutive failures: tr_length shrinks by 0.5×
+- When tr_length < 0.02 (radius < 0.01 rad): restart with fresh random basis
 
 ### 5. Acquisition: Thompson Sampling
 
@@ -185,7 +185,7 @@ Up to `max_restarts=5` allowed. After that, the TR just resets without changing 
 | File | Purpose |
 |------|---------|
 | `rielbo/subspace_bo_v2.py` | Main optimizer (`SphericalSubspaceBOv2`) |
-| `rielbo/kernels.py` | ArcCosine kernel (order 0, order 2), ProductSphereKernel |
+| `rielbo/kernels.py` | ArcCosine kernel (order 0, order 2), ProductSphereKernel, `create_kernel` factory |
 | `rielbo/spherical_transforms.py` | SphericalWhitening, GeodesicTrustRegion |
 | `rielbo/gp_diagnostics.py` | GP health monitoring |
 | `rielbo/run_guacamol_subspace_v2.py` | CLI entry point |

@@ -34,7 +34,7 @@ class GSM8KOracle:
         self,
         llm_client,
         evaluator: GSM8KEvaluator,
-        eval_set_size: int = 261,
+        eval_set_size: int = 261,  # 20% sample for quick iteration; CLI overrides to 1319 for benchmarking
         seed: int = 42,
     ):
         self.llm_client = llm_client
@@ -86,12 +86,25 @@ class GSM8KOracle:
         ]
 
         # Batch generate
-        outputs = self.llm_client.generate_batch(
-            formatted, temperature=0.0, max_new_tokens=512
-        )
+        try:
+            outputs = self.llm_client.generate_batch(
+                formatted, temperature=0.0, max_new_tokens=512
+            )
+        except Exception as e:
+            logger.error(f"LLM generation failed during oracle call #{self.num_calls}: {e}")
+            raise RuntimeError(
+                f"LLM generation failed during oracle call #{self.num_calls}. "
+                f"Check vLLM server status. Original error: {e}"
+            ) from e
 
         # Evaluate
-        results = self.evaluator.evaluate_batch(outputs, self.eval_indices)
+        try:
+            results = self.evaluator.evaluate_batch(outputs, self.eval_indices)
+        except Exception as e:
+            logger.error(f"Evaluation failed during oracle call #{self.num_calls}: {e}")
+            raise RuntimeError(
+                f"Evaluation failed during oracle call #{self.num_calls}: {e}"
+            ) from e
         accuracy = results["accuracy"]
 
         # Cache result

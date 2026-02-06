@@ -4,12 +4,12 @@ Uses the same SphericalSubspaceBOv2 optimizer as molecular optimization,
 but with SONAR text embeddings (1024D) instead of SELFIES VAE (256D).
 
 Usage:
-    # Pilot run (quick test)
-    CUDA_VISIBLE_DEVICES=0,1 uv run python -m rielbo_gsm8k.run \
+    # Pilot run (quick test, only vLLM needs GPU)
+    CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
         --preset geodesic --n-cold-start 10 --iterations 10
 
     # Full benchmark
-    CUDA_VISIBLE_DEVICES=0,1 uv run python -m rielbo_gsm8k.run \
+    CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
         --preset geodesic --subspace-dim 16 \
         --n-cold-start 30 --iterations 70 --seed 42 \
         --split test --incremental-json rielbo_gsm8k/results/rielbo_s42.json
@@ -214,49 +214,69 @@ def main():
     n_dup = 0
     n_decode_fail = 0
 
-    for i in pbar:
-        result = optimizer.step()
+    i = -1
+    try:
+        for i in pbar:
+            result = optimizer.step()
 
-        # Track history
-        optimizer.history["iteration"].append(i)
-        optimizer.history["best_score"].append(optimizer.best_score)
-        optimizer.history["current_score"].append(result["score"])
-        optimizer.history["n_evaluated"].append(len(optimizer.smiles_observed))
-        optimizer.history["gp_mean"].append(result.get("gp_mean", 0))
-        optimizer.history["gp_std"].append(result.get("gp_std", 0))
-        optimizer.history["nearest_train_cos"].append(result.get("nearest_train_cos", 0))
-        optimizer.history["embedding_norm"].append(result.get("embedding_norm", optimizer.mean_norm))
-        optimizer.history["subspace_dim"].append(result.get("subspace_dim", optimizer._current_dim))
-        optimizer.history["tr_length"].append(
-            optimizer.tr_length if optimizer.tr_length is not None else optimizer.trust_region
-        )
-        optimizer.history["n_restarts"].append(optimizer.n_restarts)
+            # Track history
+            optimizer.history["iteration"].append(i)
+            optimizer.history["best_score"].append(optimizer.best_score)
+            optimizer.history["current_score"].append(result["score"])
+            optimizer.history["n_evaluated"].append(len(optimizer.smiles_observed))
+            optimizer.history["gp_mean"].append(result.get("gp_mean", 0))
+            optimizer.history["gp_std"].append(result.get("gp_std", 0))
+            optimizer.history["nearest_train_cos"].append(result.get("nearest_train_cos", 0))
+            optimizer.history["embedding_norm"].append(result.get("embedding_norm", optimizer.mean_norm))
+            optimizer.history["subspace_dim"].append(result.get("subspace_dim", optimizer._current_dim))
+            optimizer.history["tr_length"].append(
+                optimizer.tr_length if optimizer.tr_length is not None else optimizer.trust_region
+            )
+            optimizer.history["n_restarts"].append(optimizer.n_restarts)
 
-        if result.get("is_decode_failure"):
-            n_decode_fail += 1
-        if result["is_duplicate"]:
-            n_dup += 1
+            if result.get("is_decode_failure"):
+                n_decode_fail += 1
+            if result["is_duplicate"]:
+                n_dup += 1
 
-        # Save incrementally
-        if incremental_saver is not None and not result["is_duplicate"]:
-            prompt = result.get("smiles", "")
-            if prompt:
-                incremental_saver.save_prompt(
-                    prompt=prompt,
-                    score=result["score"],
-                    iteration=i + 1,
-                )
+            # Save incrementally
+            if incremental_saver is not None and not result["is_duplicate"]:
+                prompt = result.get("smiles", "")
+                if prompt:
+                    incremental_saver.save_prompt(
+                        prompt=prompt,
+                        score=result["score"],
+                        iteration=i + 1,
+                    )
 
-        postfix = {
-            "best": f"{optimizer.best_score:.4f}",
-            "curr": f"{result['score']:.4f}",
-            "dup": n_dup,
-            "fail": n_decode_fail,
-        }
-        if config.adaptive_tr:
-            postfix["tr"] = f"{optimizer.tr_length:.3f}"
-            postfix["rst"] = optimizer.n_restarts
-        pbar.set_postfix(postfix)
+            postfix = {
+                "best": f"{optimizer.best_score:.4f}",
+                "curr": f"{result['score']:.4f}",
+                "dup": n_dup,
+                "fail": n_decode_fail,
+            }
+            if config.adaptive_tr:
+                postfix["tr"] = f"{optimizer.tr_length:.3f}"
+                postfix["rst"] = optimizer.n_restarts
+            pbar.set_postfix(postfix)
+    except Exception as e:
+        logger.error(f"Optimization failed at iteration {i}: {e}")
+        try:
+            partial_path = os.path.join(results_dir, f"rielbo_s{args.seed}_PARTIAL.json")
+            partial = {
+                "method": "rielbo_gsm8k", "status": "failed",
+                "failed_at_iteration": i,
+                "best_score": optimizer.best_score,
+                "best_prompt": optimizer.best_smiles,
+                "history": optimizer.history,
+                "error": str(e),
+            }
+            with open(partial_path, "w") as f:
+                json.dump(partial, f, indent=2)
+            logger.info(f"Partial results saved to {partial_path}")
+        except Exception:
+            logger.warning("Could not save partial results")
+        raise
 
     # 10. Report results
     logger.info("\n" + "=" * 60)
@@ -312,36 +332,42 @@ def main():
 
     # 12. Evaluate best prompt on full test set (skip if eval_size already covers it)
     if args.split == "test" and args.eval_size < len(evaluator):
-        logger.info("\nEvaluating best prompt on FULL test set...")
-        full_evaluator = GSM8KEvaluator(
-            dataset_path="datasets/gsm8k",
-            split="test",
-        )
-        all_indices = list(range(len(full_evaluator)))
-        questions = [full_evaluator.dataset[i]["question"] for i in all_indices]
-
-        formatted = [
-            f"Q: {q}\n{optimizer.best_smiles}\nA:" for q in questions
-        ]
-
-        from tqdm import tqdm
-        all_outputs = []
-        batch_size = 100
-        for j in tqdm(range(0, len(formatted), batch_size), desc="Full eval"):
-            batch = formatted[j:j + batch_size]
-            outputs = llm_client.generate_batch(
-                batch, temperature=0.0, max_new_tokens=512
+        try:
+            logger.info("\nEvaluating best prompt on FULL test set...")
+            full_evaluator = GSM8KEvaluator(
+                dataset_path="datasets/gsm8k",
+                split="test",
             )
-            all_outputs.extend(outputs)
+            all_indices = list(range(len(full_evaluator)))
+            questions = [full_evaluator.dataset[i]["question"] for i in all_indices]
 
-        full_results = full_evaluator.evaluate_batch(all_outputs, all_indices)
-        test_accuracy = full_results["accuracy"]
+            formatted = [
+                f"Q: {q}\n{optimizer.best_smiles}\nA:" for q in questions
+            ]
 
-        logger.info(f"Full test accuracy: {test_accuracy:.4f} ({full_results['correct']}/{full_results['total']})")
+            from tqdm import tqdm
+            all_outputs = []
+            batch_size = 100
+            for j in tqdm(range(0, len(formatted), batch_size), desc="Full eval"):
+                batch = formatted[j:j + batch_size]
+                outputs = llm_client.generate_batch(
+                    batch, temperature=0.0, max_new_tokens=512
+                )
+                all_outputs.extend(outputs)
 
-        results["test_accuracy"] = test_accuracy
-        with open(results_path, "w") as f:
-            json.dump(results, f, indent=2)
+            full_results = full_evaluator.evaluate_batch(all_outputs, all_indices)
+            test_accuracy = full_results["accuracy"]
+
+            logger.info(f"Full test accuracy: {test_accuracy:.4f} ({full_results['correct']}/{full_results['total']})")
+
+            results["test_accuracy"] = test_accuracy
+            with open(results_path, "w") as f:
+                json.dump(results, f, indent=2)
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as e:
+            logger.error(f"Full test evaluation failed: {e}")
+            logger.info("Optimization results were saved successfully; only full-test eval failed.")
 
     return optimizer.best_score
 
