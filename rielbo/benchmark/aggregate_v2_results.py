@@ -59,25 +59,16 @@ def compute_statistics(scores: list[float]) -> dict:
 
 def print_results_table(grouped: dict):
     """Print results as a markdown table."""
-    # Get all configs and tasks
     configs = sorted(set(k[0] for k in grouped.keys()))
     tasks = sorted(set(k[1] for k in grouped.keys()))
 
     print("\n## RieLBO v2 Benchmark Results\n")
 
-    # Header
-    header = "| Config |"
-    for task in tasks:
-        header += f" {task} |"
+    header = "| Config |" + "".join(f" {task} |" for task in tasks)
+    sep = "|--------|" + "----------|" * len(tasks)
     print(header)
-
-    # Separator
-    sep = "|--------|"
-    for _ in tasks:
-        sep += "----------|"
     print(sep)
 
-    # Data rows
     for config in configs:
         row = f"| {config} |"
         for task in tasks:
@@ -134,7 +125,6 @@ def compare_to_baseline(grouped: dict):
             improvement = ((stats["mean"] - baseline_mean) / baseline_mean) * 100
             improvements.append((config, stats["mean"], improvement, stats["n"]))
 
-        # Sort by improvement
         improvements.sort(key=lambda x: -x[2])
 
         print(f"Baseline: {baseline_mean:.4f}\n")

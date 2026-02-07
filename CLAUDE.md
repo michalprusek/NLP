@@ -42,28 +42,28 @@ NLP/
 ├── gepa_gsm8k/              # GEPA for GSM8K task (with BatchingVLLMWrapper)
 │   └── run.py               # CLI entry point with integrated optimizer
 │
+├── rielbo_gsm8k/            # RieLBO for GSM8K prompt optimization (SONAR)
+│   ├── sonar_codec.py       # SonarCodec (1024D text embeddings)
+│   ├── gsm8k_oracle.py      # GSM8KOracle (prompt → accuracy scorer)
+│   ├── seed_prompts.py      # Diverse seed prompts for cold start
+│   ├── run.py               # CLI entry point
+│   └── results/
+│
 ├── rielbo/                  # Subspace BO for molecular optimization
 │   ├── subspace_bo.py       # SphericalSubspaceBO (v1, ArcCosine/Hvarfner)
-│   ├── subspace_bo_v2.py    # V2: geodesic/novelty presets
-│   ├── subspace_bo_v3.py    # V3: multi-projection rotation
-│   ├── subspace_bo_v4.py    # V4: novelty-weighted acquisition
-│   ├── subspace_bo_v5.py    # V5: latest variant
+│   ├── subspace_bo_v2.py    # V2: geodesic preset (BEST, with adaptive TR + restart)
 │   ├── turbo_baseline.py    # TuRBO baseline (R^256)
 │   ├── vanilla_bo.py        # Vanilla BO with Hvarfner priors (256D)
-│   ├── kernels.py           # ArcCosineKernel
-│   ├── spherical_transforms.py  # Spherical geometry utilities
+│   ├── kernels.py           # ArcCosineKernel, ArcCosineKernelOrder2, ProductSphereKernel
+│   ├── spherical_transforms.py  # SphericalWhitening, GeodesicTrustRegion
 │   ├── norm_distribution.py # Norm distribution analysis
-│   ├── graph_laplacian_gp.py    # Graph Laplacian GP (experimental)
 │   ├── estimate_intrinsic_dim.py # Intrinsic dimensionality estimators
 │   ├── gp_diagnostics.py    # GP health monitoring
 │   ├── plot_convergence.py  # Convergence plots
+│   ├── pipeline.md          # Detailed V2 geodesic pipeline documentation
 │   ├── run_guacamol_subspace.py    # CLI: Subspace BO v1
-│   ├── run_guacamol_subspace_v2.py # CLI: Subspace BO v2
-│   ├── run_guacamol_subspace_v3.py # CLI: Subspace BO v3
-│   ├── run_guacamol_subspace_v4.py # CLI: Subspace BO v4
-│   ├── run_guacamol_subspace_v5.py # CLI: Subspace BO v5
+│   ├── run_guacamol_subspace_v2.py # CLI: Subspace BO v2 (recommended)
 │   ├── run_guacamol_vanilla.py     # CLI: Vanilla BO
-│   ├── run_guacamol_graph.py       # CLI: Graph Laplacian GP
 │   ├── benchmark/           # Benchmarking infrastructure
 │   │   ├── runner.py        # BenchmarkRunner orchestrator
 │   │   ├── base.py          # BaseMethod ABC
@@ -71,8 +71,8 @@ NLP/
 │   │   ├── aggregate_v2_results.py  # Result aggregation
 │   │   ├── run_v2_benchmark.sh      # Multi-seed benchmark script
 │   │   └── methods/         # Method adapters
-│   │       ├── subspace.py, subspace_v3-v5.py
-│   │       ├── turbo.py, vanilla.py, lolbo.py
+│   │       ├── subspace.py
+│   │       ├── turbo.py, vanilla.py, lolbo.py, baxus.py, cmaes.py, invbo.py
 │   │       └── __init__.py
 │   └── results/
 │
@@ -133,6 +133,37 @@ tmux new-session -d -s gepa_run \
   2>&1 | tee gepa_gsm8k/results/gepa_$(date +%Y%m%d_%H%M%S).log; exec bash"
 ```
 
+### RieLBO-GSM8K (Prompt Optimization)
+
+```bash
+# Pilot run (quick test, ~5 min)
+CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --n-cold-start 10 --iterations 10 --eval-size 50 --split test
+
+# Full benchmark (30 seed + 70 BO = 100 prompts, ~50 min)
+CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --subspace-dim 16 \
+    --n-cold-start 30 --iterations 70 --seed 42 \
+    --split test --incremental-json rielbo_gsm8k/results/rielbo_s42.json
+
+# Multi-seed benchmark
+for seed in 42 43 44 45 46; do
+  tmux new-session -d -s rielbo_gsm8k_s${seed} \
+    "CUDA_VISIBLE_DEVICES=1 uv run python -m rielbo_gsm8k.run \
+    --preset geodesic --subspace-dim 16 \
+    --n-cold-start 30 --iterations 70 --seed $seed \
+    --split test --incremental-json rielbo_gsm8k/results/rielbo_s${seed}.json \
+    2>&1 | tee rielbo_gsm8k/results/rielbo_s${seed}_\$(date +%Y%m%d_%H%M%S).log; exec bash"
+done
+```
+
+### Convergence Plot (Prompt Methods)
+
+```bash
+uv run python -m shared.plot_prompt_convergence
+# Outputs: shared/results/plots/prompt_convergence.{png,pdf}
+```
+
 ### Subspace BO (GuacaMol)
 
 ```bash
@@ -147,6 +178,11 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
 # Run Subspace BO v2 (geodesic preset, recommended)
 CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
     --preset geodesic --task-id adip --n-cold-start 100 --iterations 500
+
+# Kernel override flags (work with any preset):
+#   --kernel-type geodesic_matern  (with --kernel-order: 0→ν=0.5, 2→ν=2.5)
+#   --kernel-ard                   Per-dimension lengthscales (ARD)
+#   --adaptive-tr                  TuRBO-style adaptive TR (without preset)
 ```
 
 ### Vanilla BO (Hvarfner, 256D)
@@ -234,7 +270,7 @@ A:
 **Always use this setup for benchmarking:**
 - **Cold start**: 100 molecules
 - **Iterations**: 500
-- **Seeds**: 42, 43, 44, 45, 46 (5 runs)
+- **Seeds**: 42, 43, 44, 45, 46, 47, 48, 49, 50, 51 (10 runs)
 - **Tasks**: adip, med2 only
 
 **IMPORTANT: Do NOT benchmark on pdop — it is solved. Focus experiments on adip and med2.**
@@ -242,7 +278,7 @@ A:
 ```bash
 # Benchmark Subspace BO
 for task in adip med2; do
-  for seed in 42 43 44 45 46; do
+  for seed in 42 43 44 45 46 47 48 49 50 51; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace \
       --task-id $task --subspace-dim 16 --acqf ts --trust-region 0.8 \
       --n-cold-start 100 --iterations 500 --seed $seed
@@ -251,7 +287,7 @@ done
 
 # Benchmark TuRBO baseline
 for task in adip med2; do
-  for seed in 42 43 44 45 46; do
+  for seed in 42 43 44 45 46 47 48 49 50 51; do
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
       --task-id $task --n-cold-start 100 --iterations 500 --seed $seed
   done
@@ -267,29 +303,80 @@ CUDA_VISIBLE_DEVICES=0 bash rielbo/benchmark/run_v2_benchmark.sh
 # Or use Python runner directly
 CUDA_VISIBLE_DEVICES=0 uv run python -c "
 from rielbo.benchmark.runner import BenchmarkRunner
-runner = BenchmarkRunner(task_id='adip', seeds=[42,43,44,45,46])
+runner = BenchmarkRunner(task_id='adip', seeds=[42,43,44,45,46,47,48,49,50,51])
 runner.run_all()
 "
 ```
 
 Key files: `rielbo/benchmark/runner.py` (orchestrator), `rielbo/benchmark/base.py` (BaseMethod ABC), `rielbo/benchmark/methods/` (per-method adapters).
 
-### Benchmark Results (2026-02-05)
+### Benchmark Runner CLI
 
-| Task | Cold Start | Subspace v2 (30 seeds) | Subspace v3 (10 seeds) | Vanilla BO (Hvarfner) | TuRBO | Best |
-|------|------------|------------------------|------------------------|-----------------------|-------|------|
-| adip | 0.4910 | **0.5475 ± 0.018** | 0.5465 ± 0.030 | 0.5022 (20 iter test) | 0.5044 ± 0.003 | **+11.5%** |
-| med2 | 0.1856 | 0.1859 ± 0.002 | 0.1856 ± 0.000 | - | - | +0.0%* |
+```bash
+# Run specific methods (10 seeds, 500 iter)
+CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.benchmark.runner \
+    --methods baxus,cmaes,invbo --tasks adip --seeds 42-51 --iterations 500 \
+    --output-dir rielbo/results/benchmark/full --verbose
+```
 
-*Med2: only 0.6% of 20K molecules beat cold start best. Score range [0.02, 0.19] is extremely narrow.
+**CLI gotchas:**
+- No `--skip-existing` flag — skip is default; use `--no-skip-existing` to force re-run
+- Without `--verbose`, no per-iteration progress is logged (only start/completion)
+- Results saved as `{method}_{task}_seed{seed}.json` with column-oriented history dict
+
+### Pre-Launch Verification Protocol (MANDATORY)
+
+**Before launching ANY GuacaMol benchmark run**, spawn verifier agents to check:
+1. **Implementation correctness**: Run `uv run pytest tests/ -x -q` and review the method adapter code for bugs, off-by-one errors, and correct API usage.
+2. **Preset correctness**: Verify that the preset/CLI flags match the intended configuration (kernel type, trust region params, subspace dim, normalization). Cross-check against the documented baseline config in this file.
+
+Only proceed with the benchmark launch after both verifiers confirm correctness. This prevents wasting hours of GPU compute on misconfigured runs.
+
+### External Reference Repos
+
+- `invbo_ref/` — Cloned InvBO repo (NeurIPS 2024), used by `rielbo/benchmark/methods/invbo.py`
+- `lolbo_ref/` — Cloned LOLBO repo, provides SELFIES VAE model + dataset classes
+- Both are gitignored; adapters add them to `sys.path` at import time
+- **BoTorch API patch**: `GPyTorchPosterior(mvn=dist)` → `GPyTorchPosterior(distribution=dist)` needed for InvBO's ppgpr module
+
+### Benchmark Results (2026-02-07)
+
+| Method | adip Mean±Std | adip Max | Notes |
+|--------|--------------|----------|-------|
+| **V2 explore (NEW SOTA)** | **0.5555±0.013** | **0.5867** | LASS+UR-TR+acqf, p=0.021 vs 0207 geodesic (0.5424). REPRODUCIBILITY: batch 2 gives 0.5445±0.008 — verify acqf_schedule enabled. |
+| V2 lass_ur | 0.5453±0.016 | 0.5722 | LASS+UR-TR, no acqf |
+| V1 Subspace | 0.5440±0.006 | — | benchmark runner |
+| V2 geodesic (baseline) | 0.5424±0.017 | 0.5701 | reproducible 0207 batch |
+| Ensemble (K=6) | 0.5422±0.009 | — | halves variance, same mean |
+| CMA-ES | 0.5371±0.018 | — | |
+| InvBO | 0.5255±0.017 | — | |
+| LOL-BO | 0.5228±0.019 | — | |
+| TuRBO | 0.5060±0.007 | — | |
+
+Med2: effectively unsolvable (only 0.6% of 20K beat cold start). BAxUS: excluded (OOM).
+
+**Best config**: `--preset explore --ur-std-low 0.05` (LASS 50 candidates + UR-TR + acquisition schedule)
 
 **Key findings**:
-- Subspace BO (S^15) consistently outperforms TuRBO (R^256)
+- **explore preset beats 0207 geodesic** (0.5424) by +0.013 (p=0.021, paired t-test, 7/10 seeds). NOT significant vs 0205 geodesic (0.5581, p=0.80). Batch 2 gives lower 0.5445 — reproducibility needs verification.
+- acqf_schedule contributes +0.010 (explore vs lass_ur), UR-TR provides subspace rotation on GP collapse
+- LASS criterion must be GP log marginal likelihood (NOT posterior std — that picks flat landscapes)
+- Subspace BO (S^15) consistently outperforms TuRBO (R^256) and LOL-BO
+- Geodesic trust region is the most impactful V2 improvement
 - Vanilla BO (256D Hvarfner): ~25x slower due to 256D ARD fitting, marginal improvement
 - SAASBO: ~25s/iter due to MCMC — impractical
 - PCA/Active Subspace: linear projections lose nonlinear VAE structure, no improvement over random
 - PLS BO: supervised projection nearly identical to random Subspace BO (0.5576 vs 0.5582)
-- Intrinsic dimensionality: TwoNN=16.8, DANCo=11.3, FisherS=18.9 → validates d=16
+- Intrinsic dimensionality: TwoNN=16.8, DANCo=11.3, FisherS=18.9 (global, task-independent)
+- **IMPORTANT: ID estimation must use a large pre-scored dataset, NOT cold-start samples.** Random 100 cold-start molecules give inflated TwoNN≈33 (they span full structural diversity). Top-100 from scored 10K gives TwoNN≈20, stable across all sample sizes (100-1000). At N=100 cold start, use N//6 cap → d=16.
+- **Score-conditioned ID is task-specific and lower than global ID**. Full results in `scripts/id_all_tasks_results.md`. Per-task ID (top-100 from 250K ZINC, TwoNN): adip=6, med2=7, pdop=10, rano=11, osmb=19, siga=13, zale=16, valt=22, dhop=8, shop=8, fexo=11, med1=10. MLE degenerates (=0.0) on narrow-score tasks — TwoNN is more robust. Estimate with `scripts/estimate_id_all_tasks.py`.
+
+### Dimension Sweep (2026-02-07, complete)
+
+V2 geodesic on adip, d=8..20 × 10 seeds, 500 iter. **NOTE**: Run WITH adaptive_tr (results ~0.015 lower than true geodesic baseline).
+- Best d=17 (0.5514±0.018), but profile is flat across d=8..19 (all within 0.538-0.551)
+- d=20 shows slight drop (0.5368±0.008) — possible onset of curse of dimensionality
+- Results: `rielbo/results/dim_sweep/`. Aggregate: `uv run python scripts/aggregate_dim_sweep.py`
 
 ### Vanilla BO (Hvarfner)
 
@@ -368,3 +455,93 @@ uv run pytest tests/ -x -q
 - **Run tests**: `uv run pytest tests/ -x -q`
 - **Version control**: Commit working configurations before major refactors
 - **Documentation**: Update this file when adding new parameters, models, or workflows
+
+---
+
+## Experiment Log & Lessons Learned
+
+### What Was Tried
+
+#### Subspace BO Variants (v1–v5)
+
+| Variant | Key Feature | Result | Status |
+|---------|-------------|--------|--------|
+| v1 | Basic ArcCosine + Sobol TR | Baseline | Kept |
+| **v2 Geodesic** | **Geodesic TR + adaptive TR + restart** | **Best: 0.5581** | **Active** |
+| v2 Order-2 | Smoother ArcCosine kernel | Worse than v2 baseline | Removed |
+| v2 Whitening | Spherical whitening only | Marginal | Available as preset |
+| v3 | Multi-projection rotation | ~Same as v2 | Removed |
+| v4 | Novelty-weighted acquisition | ~Same as v2 | Removed |
+| v5 | Windowed GP + adaptive TR | Good but complex | Removed (features in v2) |
+
+#### Pullback Metric Experiment (PM-LSBO, 2026-02-06)
+
+Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J) to guide subspace selection.
+
+| Config | Score (5 seeds, 500 iter) | Finding |
+|--------|---------------------------|---------|
+| A0: Random QR + ArcCosine | 0.5069 (100 iter) | V5 baseline |
+| A1: Metric eigvecs + ArcCosine | 0.4910 = cold start | **Complete failure** |
+| A3: Metric eigvecs + MetricArcCosine | 0.4910 = cold start | **Complete failure** |
+| A5: Full (metric + decoder features) | 0.4910 = cold start | **Complete failure** |
+| B0: Random QR + restart fix | 0.5531 ± 0.018 | Restart fix is key |
+| B2: Score-weighted metric | 0.5422 ± 0.014 | Worse than random |
+| B6: Hybrid 75% metric | 0.5336 ± 0.006 | Lowest variance, low mean |
+
+**Conclusion**: Pullback metric was removed. See "Key Lesson" below.
+
+#### Other Approaches Tested
+
+- **Vanilla BO (Hvarfner, 256D)**: 0.5022 in 20 iter, ~33s/iter. Impractical.
+- **SAASBO**: ~25s/iter due to MCMC. Impractical.
+- **PCA subspace**: No improvement over random projection.
+- **Active Subspace**: No improvement (linear projections miss nonlinear VAE structure).
+- **PLS BO**: Supervised projection nearly identical to random (0.5576 vs 0.5582).
+- **Graph Laplacian GP**: Experimental, no clear benefit. Removed.
+- **Geodesic Matérn 5/2 ARD**: 0.5403±0.014 (10 seeds) — under ArcCosine o0 (0.5581). Smooth kernel + 16 ARD lengthscales overfit on ~100-200 points and smooth over sharp chemical transitions.
+- **ArcCosine order 2**: 0.5458±0.013 (10 seeds) — under order 0 (0.5581). Smoother kernel less suited to sharp chemical transitions.
+- **Without adaptive TR**: ~0.533 (10 seeds, 2026-02-07) — removing adaptive TR from geodesic preset hurt significantly. Adaptive TR + restart is essential for the 0.5581 baseline.
+- **Dim sweep** (d=8..20, 10 seeds, with adaptive_tr): Flat profile. Best d=17 (0.5514±0.018), d=16 (0.5424±0.017), d=8 (0.5384±0.012). ArcCosine kernel on sphere handles excess dims gracefully — no strong dimension dependence.
+- **UR-TR (Uncertainty-Responsive Trust Region)**: Counter-intuitive — EXPAND when GP std drops (collapsing), SHRINK when GP std is high. Directly addresses GP collapse = death of exploration. Optimal thresholds: ur_std_low=0.05, ur_std_high=0.15.
+- **LASS (Look-Ahead Subspace Selection)**: Evaluate 50 random QR projections at cold start, pick the one with best GP log marginal likelihood. CRITICAL: max posterior std is WRONG (picks flat landscapes). Related to SA-cREMBO (2025), ALEBO (2020).
+- **Acquisition schedule (acqf_schedule)**: Switch to UCB with high beta when GP posterior std drops below threshold. Contributes +0.010 to mean. Essential component of explore preset.
+- **explore preset (ALL THREE combined)**: 0.5555±0.013 (10 seeds). Significant vs 0207 geodesic (p=0.021), NOT vs 0205 (p=0.80). Batch 2 gives 0.5445 — reproducibility needs verification. s47=0.5867 highest ever.
+
+### Key Lessons
+
+1. **Decoder sensitivity ≠ objective sensitivity**: The pullback metric G = J^T J captures which latent directions change the decoded output the most, NOT which directions improve the optimization objective. These are fundamentally different — a direction might drastically change molecular structure while making the score worse. Random QR projection is actually better because it provides unbiased exploration.
+
+2. **Adaptive TR + random restart is essential for v2 geodesic**: Without adaptive TR, v2 scores drop to ~0.533 (vs 0.5581 with). The TuRBO-style grow/shrink mechanism with fresh QR restart on TR collapse enables exploring multiple 16D subspaces. The 0.5581 runs had adaptive_tr enabled (config just didn't log the field at the time).
+
+3. **Simpler is better for subspace selection**: Score-weighted metrics, hybrid bases, and Jacobian-based projections all underperformed random QR. The intrinsic dimensionality (~16) means that almost any 16D random subspace captures useful structure.
+
+4. **ArcCosine order 0 > order 2**: The rougher kernel (order 0, like Matern-1/2) outperforms the smoother order 2 (like Matern-5/2). Chemical property landscapes have sharp transitions.
+
+5. **Z-score normalization breaks Hvarfner GP priors**: For full-dimensional BO, min-max normalization to [0,1]^D is required. Z-score causes pairwise distances ~16 vs median lengthscale 65.8, leading to singular kernels.
+
+6. **Med2 is effectively unsolvable**: Only 0.6% of 20K molecules beat cold start best. The score range [0.02, 0.19] is so narrow that BO has no signal to exploit. Don't waste compute on it.
+
+7. **Hash embedding requires target-space normalization**: BAxUS-style hash embeddings map [-1,1]^D to an unbounded target space (values can reach ±20). Trust region bounds must be in the normalized target space, not raw. Always add `_normalize_target`/`_denormalize_target` when using non-orthogonal projections.
+
+8. **Score-conditioned ID ≠ global ID**: Global TwoNN≈17 is task-independent (VAE geometry). Score-conditioned ID (top-K molecules per task) is task-specific and lower — adip≈9. Use `scripts/estimate_id_all_tasks.py` for per-task estimates.
+
+9. **GP LOO CV is not a good dimension selector**: ArcCosine kernel (no lengthscale) gives flat LOO across dimensions. Geodesic Matérn ARD LOO monotonically prefers higher d because ARD "kills" unnecessary dims for free. Neither penalizes excess dimensions properly. Scripts in `scripts/loocv_dim_selection.py`.
+
+10. **Parameterless kernels beat learnable ones on S^15**: Geodesic Matérn 5/2 with 16D ARD (0.5403) lost to ArcCosine order 0 with zero hyperparameters (0.5581). With ~100-200 training points on S^15, the 17 extra kernel hyperparameters (16 lengthscales + outputscale) overfit. The rough ArcCosine (Matérn-1/2 analog) also better matches the sharp transitions in chemical property landscapes.
+
+11. **GP collapse = death of exploration**: When GP posterior std → 0, Thompson Sampling degenerates into random local search. Trend between GP std and seed success exists (r=0.488, p=0.152) but is NOT statistically significant with n=10. UR-TR directly addresses this by expanding TR / rotating subspace on collapse.
+
+12. **LASS projection selection criterion matters critically**: Max posterior std picks projections where GP is uncertain because the landscape is FLAT (no structure to model). Max GP log marginal likelihood picks projections where the GP best explains score variations. This was a critical bug fix (s44: 0.4910 → 0.5493).
+
+13. **Combining UR-TR + LASS + acqf_schedule synergizes**: Each component alone has modest effect (+0.002-0.005), but together they achieve +0.013 over baseline. UR-TR prevents stagnation, LASS picks good initial subspace, acqf_schedule provides UCB exploration when GP collapses.
+
+### Best Practices for Future Experiments
+
+- **Always benchmark with 10 seeds** (42-51). Single-seed results are unreliable.
+- **Run 100-iter pilot first** before committing to 500-iter benchmarks. If a method doesn't show promise in 100 iterations, it won't catch up in 500.
+- **Focus on adip** — it's the most informative benchmark task (wide score range, meaningful optimization signal).
+- **Keep the pipeline simple**: Random QR + ArcCosine + geodesic TR is hard to beat. New features must show clear improvement over this baseline.
+- **Track GP diagnostics**: Monitor train correlation, posterior std, lengthscales. If correlation is 1.0, the GP is overfitting.
+- **Document negative results**: They save future effort. The pullback metric failure is valuable knowledge.
+- **When you beat the baseline, IMMEDIATELY save the exact config**: Log the preset, all CLI flags, seed, and commit hash. Record in CLAUDE.md and MEMORY.md before running more seeds. Baselines are hard to reproduce — don't lose winning configurations.
+- **Current best config**: `--preset explore --ur-std-low 0.05` → 0.5555±0.013 on adip (10 seeds, p=0.021 vs 0207 geodesic). CAUTION: batch 2 gave 0.5445 — verify acqf_schedule is enabled.

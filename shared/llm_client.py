@@ -73,7 +73,7 @@ class VLLMClient(LLMClient):
             tensor_parallel_size=tensor_parallel_size,
             dtype="auto",
             gpu_memory_utilization=gpu_memory_utilization,
-            max_model_len=4096,
+            max_model_len=16384,
             enforce_eager=tensor_parallel_size > 1, # Disable CUDA graphs
             enable_prefix_caching=True,
         )

@@ -58,26 +58,21 @@ def main():
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    # Load components
     logger.info("Loading codec and oracle...")
+    from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
     from shared.guacamol.oracle import GuacaMolOracle
-    from shared.guacamol.codec import SELFIESVAECodec
 
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
     input_dim = 256
-    logger.info("Using SELFIES VAE codec (embedding_dim=256)")
-
     oracle = GuacaMolOracle(task_id=args.task_id)
 
-    # Load cold start
     logger.info("Loading cold start data...")
     smiles_list, scores, _ = load_guacamol_data(
         n_samples=args.n_cold_start,
         task_id=args.task_id,
     )
 
-    # Create optimizer
     from rielbo.subspace_bo import SphericalSubspaceBO
     logger.info(
         f"Fixed subspace: S^{input_dim-1} → S^{args.subspace_dim-1}, "
@@ -97,11 +92,9 @@ def main():
         kernel=args.kernel,
     )
 
-    # Run
     optimizer.cold_start(smiles_list, scores)
     optimizer.optimize(n_iterations=args.iterations, log_interval=10)
 
-    # Save
     results_dir = "rielbo/results/guacamol"
     os.makedirs(results_dir, exist_ok=True)
 

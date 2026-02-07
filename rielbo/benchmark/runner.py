@@ -20,9 +20,7 @@ import logging
 import os
 import random
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -120,13 +118,11 @@ def run_single_benchmark(
         n_samples=n_cold_start,
         task_id=task_id,
     )
-    # Convert scores to tensor (may already be a numpy array or tensor)
     if isinstance(scores, torch.Tensor):
         scores_tensor = scores.detach().clone().float()
     else:
         scores_tensor = torch.tensor(scores, dtype=torch.float32)
 
-    # Create method
     method_class = get_method(method_name)
     method = method_class(
         codec=codec,
@@ -136,13 +132,11 @@ def run_single_benchmark(
         verbose=verbose,
     )
 
-    # Run optimization
     start_time = time.time()
     method.cold_start(smiles_list, scores_tensor)
     method.optimize(n_iterations=n_iterations, log_interval=50)
     elapsed_time = time.time() - start_time
 
-    # Collect results
     history = method.get_history()
     config = method.get_config()
 
@@ -162,7 +156,6 @@ def run_single_benchmark(
         "history": history.to_dict(),
     }
 
-    # Save results
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{method_name}_{task_id}_seed{seed}.json"
     filepath = os.path.join(output_dir, filename)
@@ -244,9 +237,7 @@ def run_benchmark_suite(
                     logger.info("Benchmark interrupted by user")
                     raise
                 except Exception as e:
-                    logger.error(f"Failed {method_name}/{task_id}/seed{seed}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"Failed {method_name}/{task_id}/seed{seed}: {e}", exc_info=True)
                     failures.append({"method": method_name, "task": task_id, "seed": seed, "error": str(e)})
 
                 completed += 1
@@ -396,19 +387,16 @@ def main():
     args = parser.parse_args()
 
     if args.summary:
-        # Just print summary of existing results
         methods = parse_methods(args.methods) if args.methods != "all" else None
         tasks = parse_tasks(args.tasks) if args.tasks != "all" else None
         table = generate_summary_table(args.output_dir, methods, tasks)
         print(table)
         return
 
-    # Parse arguments
     methods = parse_methods(args.methods)
     tasks = parse_tasks(args.tasks)
     seeds = parse_seeds(args.seeds)
 
-    # Validate
     for method in methods:
         if method not in METHODS:
             raise ValueError(f"Unknown method: {method}. Available: {list(METHODS.keys())}")
@@ -417,7 +405,6 @@ def main():
         if task not in GUACAMOL_TASKS:
             raise ValueError(f"Unknown task: {task}. Available: {GUACAMOL_TASKS}")
 
-    # Run benchmark
     run_benchmark_suite(
         methods=methods,
         tasks=tasks,

@@ -1,37 +1,17 @@
-"""Run Spherical Subspace BO v2 on GuacaMol with theoretical improvements.
-
-Extends v1 with:
-- ArcCosine Order 2 kernel (smoother GP)
-- Spherical Whitening (center data at north pole)
-- Geodesic Trust Region (proper Riemannian sampling)
-- Adaptive Dimension (BAxUS-style d=8→16)
-- Probabilistic Norm reconstruction
-- Product Space geometry (S^3 × S^3 × S^3 × S^3)
+"""Run Spherical Subspace BO v2 on GuacaMol.
 
 Usage:
-    # Baseline (matches v1)
+    # Recommended: explore preset (SOTA)
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
-        --preset baseline --task-id adip --seed 42
+        --preset explore --task-id adip --seed 42
 
-    # Full improvements
+    # Geodesic preset (baseline)
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
-        --preset full --task-id adip --seed 42
+        --preset geodesic --task-id adip --seed 42
 
-    # Individual improvements
+    # Kernel override
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
-        --kernel-order 2 --whitening --geodesic-tr --task-id adip
-
-Presets:
-    baseline  - No improvements (matches v1)
-    order2    - ArcCosine Order 2 kernel
-    whitening - Spherical whitening only
-    geodesic  - Geodesic trust region only
-    adaptive  - Adaptive dimension (8→16)
-    prob_norm - Probabilistic norm reconstruction
-    product   - Product sphere geometry
-    smooth    - Order 2 + whitening
-    geometric - Geodesic TR + whitening
-    full      - All improvements
+        --preset geodesic --kernel-type geodesic_matern --kernel-ard --task-id adip
 """
 
 import argparse
@@ -59,7 +39,6 @@ def main():
         epilog=__doc__,
     )
 
-    # Task config
     parser.add_argument("--task-id", type=str, default="adip",
                         help="GuacaMol task: adip, med2, pdop, etc.")
     parser.add_argument("--n-cold-start", type=int, default=100)
@@ -67,16 +46,20 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
 
-    # Preset (mutually exclusive with individual flags)
     parser.add_argument("--preset", type=str, default=None,
                         choices=["baseline", "order2", "whitening", "geodesic",
                                  "adaptive", "prob_norm", "product", "smooth",
-                                 "geometric", "full"],
+                                 "geometric", "full",
+                                 "ur_tr", "lass", "lass_ur", "explore", "portfolio"],
                         help="Use a preset configuration")
 
-    # Individual improvements (can be combined)
+    parser.add_argument("--kernel-type", type=str, default="arccosine",
+                        choices=["arccosine", "geodesic_matern", "matern"],
+                        help="Kernel type")
     parser.add_argument("--kernel-order", type=int, default=0, choices=[0, 2],
-                        help="ArcCosine kernel order (0=rough, 2=smooth)")
+                        help="ArcCosine kernel order (0=rough, 2=smooth); for geodesic_matern: 0→ν=0.5, 2→ν=2.5")
+    parser.add_argument("--kernel-ard", action="store_true",
+                        help="Per-dimension lengthscales (ARD) for geodesic_matern/matern")
     parser.add_argument("--whitening", action="store_true",
                         help="Enable spherical whitening")
     parser.add_argument("--geodesic-tr", action="store_true",
@@ -104,8 +87,47 @@ def main():
                         help="Use product sphere geometry")
     parser.add_argument("--n-spheres", type=int, default=4,
                         help="Number of spheres for product geometry")
+    parser.add_argument("--adaptive-tr", action="store_true",
+                        help="Enable adaptive trust region (TuRBO-style grow/shrink + restart)")
 
-    # BO config
+    parser.add_argument("--ur-tr", action="store_true",
+                        help="Enable uncertainty-responsive trust region")
+    parser.add_argument("--no-ur-relative", action="store_true",
+                        help="Use absolute thresholds instead of noise-relative")
+    parser.add_argument("--ur-std-high", type=float, default=0.15,
+                        help="GP std threshold for TR shrink (relative to noise_std)")
+    parser.add_argument("--ur-std-low", type=float, default=0.05,
+                        help="GP std threshold for TR expand (relative to noise_std)")
+    parser.add_argument("--ur-expand-factor", type=float, default=1.5,
+                        help="TR expansion factor on low GP std")
+    parser.add_argument("--ur-shrink-factor", type=float, default=0.8,
+                        help="TR shrink factor on high GP std")
+    parser.add_argument("--ur-std-collapse", type=float, default=0.005,
+                        help="GP std threshold for subspace rotation")
+    parser.add_argument("--ur-collapse-patience", type=int, default=15,
+                        help="Consecutive low-std iters before rotation")
+
+    parser.add_argument("--acqf-schedule", action="store_true",
+                        help="Enable acquisition schedule (UCB when GP collapses)")
+    parser.add_argument("--acqf-ucb-beta-high", type=float, default=4.0,
+                        help="UCB beta when GP is collapsing")
+    parser.add_argument("--acqf-ucb-beta-low", type=float, default=0.5,
+                        help="UCB beta when GP is informative")
+
+    parser.add_argument("--lass", action="store_true",
+                        help="Enable look-ahead subspace selection")
+    parser.add_argument("--lass-n-candidates", type=int, default=50,
+                        help="Number of candidate projections to evaluate")
+
+    parser.add_argument("--multi-subspace", action="store_true",
+                        help="Enable multi-subspace portfolio (TuRBO-M style)")
+    parser.add_argument("--n-subspaces", type=int, default=5,
+                        help="Number of subspaces in portfolio")
+    parser.add_argument("--subspace-ucb-beta", type=float, default=2.0,
+                        help="UCB exploration parameter for subspace bandit")
+    parser.add_argument("--subspace-stale-patience", type=int, default=50,
+                        help="Replace subspace after this many evals without improvement")
+
     parser.add_argument("--subspace-dim", type=int, default=16,
                         help="Subspace dimension d (GP on S^(d-1))")
     parser.add_argument("--ucb-beta", type=float, default=2.0)
@@ -116,20 +138,68 @@ def main():
 
     args = parser.parse_args()
 
-    # Set seeds
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    # Build config
     from rielbo.subspace_bo_v2 import V2Config
 
     if args.preset:
         config = V2Config.from_preset(args.preset)
+
+        # CLI overrides for preset values (only applied when non-default)
+        if args.kernel_type != "arccosine":
+            config.kernel_type = args.kernel_type
+        if args.kernel_ard:
+            config.kernel_ard = True
+        if args.kernel_order != 0:
+            config.kernel_order = args.kernel_order
+        if args.ur_std_high != 0.15:
+            config.ur_std_high = args.ur_std_high
+        if args.ur_std_low != 0.05:
+            config.ur_std_low = args.ur_std_low
+        if args.no_ur_relative:
+            config.ur_relative = False
+        if args.ur_expand_factor != 1.5:
+            config.ur_expand_factor = args.ur_expand_factor
+        if args.ur_shrink_factor != 0.8:
+            config.ur_shrink_factor = args.ur_shrink_factor
+        if args.lass_n_candidates != 50:
+            config.lass_n_candidates = args.lass_n_candidates
+        if args.ur_std_collapse != 0.005:
+            config.ur_std_collapse = args.ur_std_collapse
+        if args.ur_collapse_patience != 15:
+            config.ur_collapse_patience = args.ur_collapse_patience
+        if args.acqf_ucb_beta_high != 4.0:
+            config.acqf_ucb_beta_high = args.acqf_ucb_beta_high
+        if args.acqf_ucb_beta_low != 0.5:
+            config.acqf_ucb_beta_low = args.acqf_ucb_beta_low
+        if args.ur_tr:
+            config.ur_tr = True
+        if args.lass:
+            config.lass = True
+        if args.acqf_schedule:
+            config.acqf_schedule = True
+        if args.adaptive_tr:
+            config.adaptive_tr = True
+        if args.multi_subspace:
+            config.multi_subspace = True
+        if args.n_subspaces != 5:
+            config.n_subspaces = args.n_subspaces
+        if args.subspace_ucb_beta != 2.0:
+            config.subspace_ucb_beta = args.subspace_ucb_beta
+        if args.subspace_stale_patience != 50:
+            config.subspace_stale_patience = args.subspace_stale_patience
         config_name = args.preset
+        if config.kernel_type != "arccosine" or config.kernel_ard:
+            config_name += f"_{config.kernel_type}"
+            if config.kernel_ard:
+                config_name += "_ard"
     else:
         config = V2Config(
+            kernel_type=args.kernel_type,
             kernel_order=args.kernel_order,
+            kernel_ard=args.kernel_ard,
             whitening=args.whitening,
             geodesic_tr=args.geodesic_tr,
             geodesic_max_angle=args.geodesic_max_angle,
@@ -143,49 +213,72 @@ def main():
             norm_n_candidates=args.norm_n_candidates,
             product_space=args.product_space,
             n_spheres=args.n_spheres,
+            adaptive_tr=args.adaptive_tr,
+            ur_tr=args.ur_tr,
+            ur_relative=not args.no_ur_relative,
+            ur_std_high=args.ur_std_high,
+            ur_std_low=args.ur_std_low,
+            ur_expand_factor=args.ur_expand_factor,
+            ur_shrink_factor=args.ur_shrink_factor,
+            ur_std_collapse=args.ur_std_collapse,
+            ur_collapse_patience=args.ur_collapse_patience,
+            acqf_schedule=args.acqf_schedule,
+            acqf_ucb_beta_high=args.acqf_ucb_beta_high,
+            acqf_ucb_beta_low=args.acqf_ucb_beta_low,
+            lass=args.lass,
+            lass_n_candidates=args.lass_n_candidates,
+            multi_subspace=args.multi_subspace,
+            n_subspaces=args.n_subspaces,
+            subspace_ucb_beta=args.subspace_ucb_beta,
+            subspace_stale_patience=args.subspace_stale_patience,
         )
-        # Build config name from enabled features
         features = []
+        if config.kernel_type != "arccosine":
+            features.append(config.kernel_type)
+        if config.kernel_ard:
+            features.append("ard")
         if config.kernel_order == 2:
             features.append("o2")
         if config.whitening:
             features.append("wh")
         if config.geodesic_tr:
             features.append("geo")
+        if config.adaptive_tr:
+            features.append("atr")
         if config.adaptive_dim:
             features.append("adp")
         if config.prob_norm:
             features.append("prn")
         if config.product_space:
             features.append("prd")
+        if config.ur_tr:
+            features.append("ur")
+        if config.lass:
+            features.append("lass")
+        if config.multi_subspace:
+            features.append(f"port{config.n_subspaces}")
         config_name = "-".join(features) if features else "baseline"
 
     logger.info(f"Configuration: {config_name}")
     logger.info(f"Config details: {config}")
 
-    # Load components
     logger.info("Loading codec and oracle...")
+    from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
     from shared.guacamol.oracle import GuacaMolOracle
-    from shared.guacamol.codec import SELFIESVAECodec
 
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
     input_dim = 256
-    logger.info("Using SELFIES VAE codec (embedding_dim=256)")
-
     oracle = GuacaMolOracle(task_id=args.task_id)
 
-    # Load cold start
     logger.info("Loading cold start data...")
     smiles_list, scores, _ = load_guacamol_data(
         n_samples=args.n_cold_start,
         task_id=args.task_id,
     )
 
-    # Create optimizer
     from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2
 
-    # Determine effective subspace dim (for adaptive, use end dim as base)
     effective_dim = args.adaptive_end_dim if config.adaptive_dim else args.subspace_dim
 
     optimizer = SphericalSubspaceBOv2(
@@ -202,11 +295,9 @@ def main():
         seed=args.seed,
     )
 
-    # Run
     optimizer.cold_start(smiles_list, scores)
     optimizer.optimize(n_iterations=args.iterations, log_interval=10)
 
-    # Save results
     results_dir = "rielbo/results/guacamol_v2"
     os.makedirs(results_dir, exist_ok=True)
 
@@ -225,12 +316,21 @@ def main():
         "history": optimizer.history,
         "args": vars(args),
         "config": {
+            "kernel_type": config.kernel_type,
             "kernel_order": config.kernel_order,
+            "kernel_ard": config.kernel_ard,
             "whitening": config.whitening,
             "geodesic_tr": config.geodesic_tr,
+            "adaptive_tr": config.adaptive_tr,
             "adaptive_dim": config.adaptive_dim,
             "prob_norm": config.prob_norm,
             "product_space": config.product_space,
+            "ur_tr": config.ur_tr,
+            "ur_relative": config.ur_relative,
+            "lass": config.lass,
+            "acqf_schedule": config.acqf_schedule,
+            "multi_subspace": config.multi_subspace,
+            "n_subspaces": config.n_subspaces,
         },
         "mean_norm": optimizer.mean_norm,
         "final_subspace_dim": optimizer._current_dim,

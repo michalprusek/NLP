@@ -504,6 +504,18 @@ wheels = [
 ]
 
 [[package]]
+name = "cma"
+version = "4.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/54/1a04d4badaca8f2508a24b59e60c51f4fc96de356adf79a48915f9957e56/cma-4.4.2.tar.gz", hash = "sha256:edd1d1f22d11ebf7a2ccae713bc3838931e31002410d19910d9d7ca9c4911fe1", size = 301082, upload-time = "2026-01-23T23:57:36.643Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/dd/1a316ae2bade89afa7631def756f08a6b6a54a7a8482f9abee75802afd4a/cma-4.4.2-py3-none-any.whl", hash = "sha256:75c45f201e689ffaf72e02dc1f2ba2f98fbb6cc4e89847f3173e9bf099d1f10c", size = 312069, upload-time = "2026-01-23T23:57:31.952Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2101,6 +2113,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "botorch" },
+    { name = "cma" },
     { name = "datasets" },
     { name = "gpytorch" },
     { name = "guacamol" },
@@ -2133,6 +2146,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.71.0" },
     { name = "botorch", specifier = ">=0.14.0" },
+    { name = "cma", specifier = ">=4.4.2" },
     { name = "datasets", specifier = ">=4.2.0" },
     { name = "gpytorch", specifier = ">=1.14.2" },
     { name = "guacamol", specifier = ">=0.5.0" },

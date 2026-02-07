@@ -14,27 +14,33 @@ import logging
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from shared.guacamol.constants import GUACAMOL_TASKS, GUACAMOL_TASK_DESCRIPTIONS
+from shared.guacamol.constants import GUACAMOL_TASK_DESCRIPTIONS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Color scheme for methods
 METHOD_COLORS = {
-    "subspace": "#2ecc71",  # Green
-    "turbo": "#3498db",     # Blue
-    "lolbo": "#e74c3c",     # Red
+    "subspace": "#d62728",  # Red (ours)
+    "turbo": "#7b8fa1",     # Steel blue
+    "lolbo": "#a0b070",     # Olive green
+    "baxus": "#9b8bb4",     # Lavender
+    "cmaes": "#c4956a",     # Tan
+    "invbo": "#6aadba",     # Dusty teal
+    "random": "#b0b0b0",    # Light gray
 }
 
 METHOD_LABELS = {
     "subspace": "Subspace BO (S^15)",
     "turbo": "TuRBO (R^256)",
     "lolbo": "LOLBO (DKL)",
+    "baxus": "BAxUS (Adaptive)",
+    "cmaes": "CMA-ES (R^256)",
+    "invbo": "InvBO (DKL+Inv)",
 }
 
 
@@ -107,6 +113,7 @@ def plot_convergence(
     methods: list[str] | None = None,
     title: str | None = None,
     figsize: tuple[float, float] = (10, 6),
+    show_std: bool = True,
 ) -> None:
     """Create convergence plot for one task.
 
@@ -120,7 +127,6 @@ def plot_convergence(
     """
     plt.figure(figsize=figsize)
 
-    # Determine methods to plot
     if methods is None:
         methods = sorted(set(m for m, t in results.keys() if t == task_id))
 
@@ -137,7 +143,6 @@ def plot_convergence(
         color = METHOD_COLORS.get(method, "#95a5a6")
         label = METHOD_LABELS.get(method, method)
 
-        # Plot mean line
         plt.plot(
             iterations,
             mean_scores,
@@ -146,25 +151,23 @@ def plot_convergence(
             linewidth=2,
         )
 
-        # Plot ±1 std shaded area
-        plt.fill_between(
-            iterations,
-            mean_scores - std_scores,
-            mean_scores + std_scores,
-            color=color,
-            alpha=0.2,
-        )
+        if show_std:
+            plt.fill_between(
+                iterations,
+                mean_scores - std_scores,
+                mean_scores + std_scores,
+                color=color,
+                alpha=0.2,
+            )
 
-    # Formatting
     if title is None:
         title = GUACAMOL_TASK_DESCRIPTIONS.get(task_id, task_id)
     plt.title(f"Convergence: {title}", fontsize=14)
     plt.xlabel("Iteration", fontsize=12)
     plt.ylabel("Best Score", fontsize=12)
-    plt.legend(loc="lower right", fontsize=10)
+    plt.legend(loc="upper left", fontsize=10)
     plt.grid(True, alpha=0.3)
 
-    # Set y-axis limits with some padding
     all_scores = []
     for method in methods:
         histories = results.get((method, task_id), [])
@@ -189,6 +192,7 @@ def plot_all_tasks(
     output_dir: str,
     methods: list[str] | None = None,
     tasks: list[str] | None = None,
+    show_std: bool = True,
 ) -> None:
     """Generate convergence plots for all tasks.
 
@@ -202,7 +206,6 @@ def plot_all_tasks(
 
     results = load_results(results_dir, methods, tasks)
 
-    # Find all tasks in results
     if tasks is None:
         tasks = sorted(set(t for _, t in results.keys()))
 
@@ -215,6 +218,7 @@ def plot_all_tasks(
             results=results,
             output_path=output_path,
             methods=methods,
+            show_std=show_std,
         )
 
 
@@ -224,6 +228,7 @@ def plot_summary_grid(
     methods: list[str] | None = None,
     tasks: list[str] | None = None,
     cols: int = 4,
+    show_std: bool = True,
 ) -> None:
     """Create a grid of convergence plots for all tasks.
 
@@ -236,7 +241,6 @@ def plot_summary_grid(
     """
     results = load_results(results_dir, methods, tasks)
 
-    # Find all tasks
     if tasks is None:
         tasks = sorted(set(t for _, t in results.keys()))
 
@@ -265,13 +269,14 @@ def plot_summary_grid(
             label = METHOD_LABELS.get(method, method)
 
             ax.plot(iterations, mean_scores, color=color, label=label, linewidth=1.5)
-            ax.fill_between(
-                iterations,
-                mean_scores - std_scores,
-                mean_scores + std_scores,
-                color=color,
-                alpha=0.2,
-            )
+            if show_std:
+                ax.fill_between(
+                    iterations,
+                    mean_scores - std_scores,
+                    mean_scores + std_scores,
+                    color=color,
+                    alpha=0.2,
+                )
 
         ax.set_title(task_id, fontsize=11)
         ax.set_xlabel("Iteration", fontsize=9)
@@ -279,11 +284,10 @@ def plot_summary_grid(
         ax.grid(True, alpha=0.3)
         ax.tick_params(labelsize=8)
 
-    # Hide empty axes
     for idx in range(len(tasks), len(axes)):
         axes[idx].set_visible(False)
 
-    # Add single legend
+    # Single legend from first subplot
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=len(labels), fontsize=10)
 
@@ -314,7 +318,6 @@ def generate_results_table(
     """
     results = load_results(results_dir, methods, tasks)
 
-    # Find all methods and tasks
     all_methods = sorted(set(m for m, _ in results.keys()))
     all_tasks = sorted(set(t for _, t in results.keys()))
 
@@ -323,7 +326,6 @@ def generate_results_table(
     if tasks:
         all_tasks = [t for t in tasks if t in all_tasks]
 
-    # Build table
     lines = []
     header = "| Task | Cold Start |" + " | ".join(all_methods) + " | Best Δ |"
     separator = "|------|------------|" + " | ".join(["------"] * len(all_methods)) + " | ----- |"
@@ -333,7 +335,6 @@ def generate_results_table(
     for task in all_tasks:
         row = [f"| {task} "]
 
-        # Get cold start score (from first iteration)
         cold_start_scores = []
         for method in all_methods:
             histories = results.get((method, task), [])
@@ -367,7 +368,6 @@ def generate_results_table(
             else:
                 row.append("| - ")
 
-        # Improvement over cold start
         improvement = ((best_mean - cold_start) / cold_start * 100) if cold_start > 0 else 0
         row.append(f"| **{best_method}** +{improvement:.1f}% |")
         lines.append("".join(row))
@@ -419,10 +419,14 @@ def main():
         action="store_true",
         help="Generate markdown results table",
     )
+    parser.add_argument(
+        "--no-std",
+        action="store_true",
+        help="Disable std shading in convergence plots",
+    )
 
     args = parser.parse_args()
 
-    # Parse methods and tasks
     methods = args.methods.split(",") if args.methods else None
     tasks = args.tasks.split(",") if args.tasks else None
 
@@ -437,20 +441,23 @@ def main():
         )
         print(table)
 
+    show_std = not args.no_std
+
     if args.summary_grid:
         plot_summary_grid(
             args.results_dir,
             os.path.join(args.output_dir, "summary_grid.png"),
             methods,
             tasks,
+            show_std=show_std,
         )
 
-    # Generate individual convergence plots
     plot_all_tasks(
         args.results_dir,
         args.output_dir,
         methods,
         tasks,
+        show_std=show_std,
     )
 
 

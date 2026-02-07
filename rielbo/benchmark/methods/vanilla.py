@@ -10,12 +10,16 @@ import torch
 from rielbo.benchmark.base import BaseBenchmarkMethod, StepResult
 from rielbo.vanilla_bo import VanillaBO
 
+# Hvarfner prior constants for 256D
+_LS_MU = math.sqrt(2) + math.log(256) / 2
+_LS_SIGMA = math.sqrt(3)
+
 
 class VanillaBOBenchmark(BaseBenchmarkMethod):
     """Vanilla BO with BoTorch's Hvarfner dimension-scaled priors.
 
-    GP in full 256D with RBF + LogNormal(√2 + log(D)/2, √3) + ARD.
-    No subspace projection — relies on the prior to handle high-D.
+    GP in full 256D with RBF + LogNormal(sqrt(2) + log(D)/2, sqrt(3)) + ARD.
+    No subspace projection -- relies on the prior to handle high-D.
     Uses [0,1]^D min-max normalization.
     """
 
@@ -28,7 +32,6 @@ class VanillaBOBenchmark(BaseBenchmarkMethod):
         seed: int = 42,
         device: str = "cuda",
         verbose: bool = False,
-        # Method-specific parameters
         n_candidates: int = 2000,
         trust_region: float = 0.8,
         acqf: str = "ts",
@@ -54,7 +57,6 @@ class VanillaBOBenchmark(BaseBenchmarkMethod):
     def cold_start(self, smiles_list: list[str], scores: torch.Tensor) -> None:
         """Initialize with cold start data."""
         self.optimizer.cold_start(smiles_list, scores)
-
         self.best_score = self.optimizer.best_score
         self.best_smiles = self.optimizer.best_smiles
         self.n_evaluated = len(self.optimizer.smiles_observed)
@@ -63,7 +65,6 @@ class VanillaBOBenchmark(BaseBenchmarkMethod):
     def step(self) -> StepResult:
         """Execute a single optimization step."""
         result = self.optimizer.step()
-
         self.best_score = self.optimizer.best_score
         self.best_smiles = self.optimizer.best_smiles
         self.n_evaluated = len(self.optimizer.smiles_observed)
@@ -83,13 +84,12 @@ class VanillaBOBenchmark(BaseBenchmarkMethod):
     def get_config(self) -> dict:
         """Return method-specific configuration."""
         config = super().get_config()
-        ls_mu = math.sqrt(2) + math.log(256) / 2
         config.update({
             "n_candidates": self.n_candidates,
             "trust_region": self.trust_region,
             "acqf": self.acqf,
             "input_dim": 256,
             "kernel": "RBF (BoTorch default)",
-            "ls_prior": f"LogNormal({ls_mu:.2f}, {math.sqrt(3):.2f})",
+            "ls_prior": f"LogNormal({_LS_MU:.2f}, {_LS_SIGMA:.2f})",
         })
         return config

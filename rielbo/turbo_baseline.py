@@ -1,19 +1,7 @@
 """TuRBO baseline for comparison with Spherical Subspace BO.
 
-TuRBO (Trust Region Bayesian Optimization) is a standard BO baseline that:
-- Uses GP in the full latent space
-- Maintains a local trust region around the best point
-- Adapts trust region size based on success/failure
-
-This provides a fair comparison to Subspace BO since both use:
-- Same SELFIES VAE codec (256D latent space)
-- Same GuacaMol oracle
-- Same cold start data
-- Same number of iterations
-
-The key difference:
-- TuRBO: GP operates in full 256D (struggles with limited data)
-- Subspace BO: Projects to S^15 for tractable GP
+TuRBO operates a GP in the full 256D latent space with a local trust region,
+whereas Subspace BO projects to S^15 for a tractable GP.
 
 Usage:
     CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.turbo_baseline \
@@ -26,6 +14,8 @@ import logging
 import os
 import random
 from datetime import datetime
+
+import gpytorch
 import numpy as np
 import torch
 from botorch.acquisition import qExpectedImprovement
@@ -83,17 +73,14 @@ class TurboState:
             self.success_counter = 0
             self.failure_counter += 1
 
-        # Expand trust region on success
         if self.success_counter >= self.success_tolerance:
             self.length = min(2.0 * self.length, self.length_max)
             self.success_counter = 0
 
-        # Shrink trust region on failure
         if self.failure_counter >= self.failure_tolerance:
             self.length = self.length / 2.0
             self.failure_counter = 0
 
-        # Restart if trust region too small
         if self.length < self.length_min:
             self.restart_triggered = True
 
@@ -121,27 +108,16 @@ class TuRBOBaseline:
         self.seed = seed
         self.verbose = verbose
 
-        # Data storage
-        self.train_Z = None  # Latent vectors
-        self.train_Y = None  # Scores
+        self.train_Z = None
+        self.train_Y = None
         self.smiles_observed = set()
-
-        # Best tracking
         self.best_score = -float("inf")
         self.best_smiles = None
         self.best_z = None
         self.mean_norm = None
-
-        # History
         self.history = []
-
-        # GP
         self.gp = None
-
-        # Trust region state
         self.turbo_state = None
-
-        # GP diagnostics
         self.gp_diagnostics = GPDiagnostics(verbose=True)
         self.diagnostic_history = []
 
@@ -149,7 +125,6 @@ class TuRBOBaseline:
         """Initialize with cold start data."""
         logger.info(f"Cold start with {len(smiles_list)} molecules")
 
-        # Encode SMILES to latent
         z_list = []
         valid_scores = []
         valid_smiles = []
@@ -163,11 +138,9 @@ class TuRBOBaseline:
                     valid_smiles.append(smi)
                     self.smiles_observed.add(smi)
             except (ValueError, RuntimeError) as e:
-                # Expected encoding failures (invalid SMILES, tensor issues)
                 logger.info(f"Failed to encode {smi[:50]}...: {e}")
                 continue
             except (torch.cuda.OutOfMemoryError, MemoryError):
-                # Critical memory errors - re-raise
                 raise
 
         if not z_list:
@@ -176,17 +149,13 @@ class TuRBOBaseline:
         self.train_Z = torch.cat(z_list, dim=0).to(self.device)
         self.train_Y = torch.tensor(valid_scores, dtype=torch.float32, device=self.device)
 
-        # Compute mean norm for reconstruction
-        norms = self.train_Z.norm(dim=-1)
-        self.mean_norm = norms.mean().item()
+        self.mean_norm = self.train_Z.norm(dim=-1).mean().item()
 
-        # Initialize best
         best_idx = self.train_Y.argmax()
         self.best_score = self.train_Y[best_idx].item()
         self.best_smiles = valid_smiles[best_idx]
         self.best_z = self.train_Z[best_idx].clone()
 
-        # Initialize trust region
         self.turbo_state = TurboState(
             dim=self.input_dim,
             length=self.trust_region,
@@ -215,16 +184,13 @@ class TuRBOBaseline:
 
     def _fit_gp(self):
         """Fit GP in normalized latent space."""
-        # Normalize training data
         train_Z_norm = self._normalize_z(self.train_Z)
 
-        # Standardize Y
         y_mean = self.train_Y.mean()
         y_std = self.train_Y.std().clamp(min=1e-6)
         train_Y_norm = (self.train_Y - y_mean) / y_std
 
         try:
-            # Fit GP with Matern kernel (standard for BO)
             self.gp = SingleTaskGP(
                 train_Z_norm.double(),
                 train_Y_norm.double().unsqueeze(-1),
@@ -237,7 +203,6 @@ class TuRBOBaseline:
             if isinstance(e, torch.cuda.OutOfMemoryError):
                 raise
             logger.error(f"TuRBO GP fit failed: {e}")
-            import gpytorch
             self.gp = SingleTaskGP(
                 train_Z_norm.double(),
                 train_Y_norm.double().unsqueeze(-1),
@@ -255,22 +220,17 @@ class TuRBOBaseline:
 
     def _generate_candidates(self) -> torch.Tensor:
         """Generate Sobol candidates in trust region around best point."""
-        # Normalize best point
         z_center_norm = self._normalize_z(self.best_z.unsqueeze(0))
 
-        # Generate Sobol candidates
         sobol = SobolEngine(self.input_dim, scramble=True, seed=self.seed + len(self.history))
         pert = sobol.draw(self.n_candidates).to(dtype=torch.float32, device=self.device)
 
-        # Scale to trust region
         half_length = self.turbo_state.length / 2
         z_cand_norm = z_center_norm - half_length + self.turbo_state.length * pert
-
         return z_cand_norm
 
     def _select_candidate(self, z_cand_norm: torch.Tensor) -> torch.Tensor:
         """Select best candidate using Expected Improvement."""
-        # EI acquisition
         sampler = SobolQMCNormalSampler(sample_shape=torch.Size([512]))
         ei = qExpectedImprovement(
             model=self.gp,
@@ -278,30 +238,18 @@ class TuRBOBaseline:
             sampler=sampler,
         )
 
-        # Evaluate all candidates
         with torch.no_grad():
             ei_values = ei(z_cand_norm.double().unsqueeze(1))
 
-        # Select best
         best_idx = ei_values.argmax()
-        z_opt_norm = z_cand_norm[best_idx]
-
-        return z_opt_norm
+        return z_cand_norm[best_idx]
 
     def _step(self, iteration: int = 0) -> tuple[float | None, str]:
-        """Single optimization step.
-
-        Returns:
-            Tuple of (score, smiles). Score is None if duplicate/decode failed.
-            SMILES is empty string if decode failed.
-        """
-        # Fit GP
+        """Single optimization step. Returns (score, smiles); score is None if duplicate/decode failed."""
         self._fit_gp()
 
-        # Generate and select candidate
         z_cand_norm = self._generate_candidates()
 
-        # Run GP diagnostics (every 10 iterations to reduce overhead)
         if iteration % 10 == 0:
             metrics = self.gp_diagnostics.analyze(
                 self.gp,
@@ -313,11 +261,8 @@ class TuRBOBaseline:
             self.diagnostic_history.append(self.gp_diagnostics.get_summary_dict(metrics))
 
         z_opt_norm = self._select_candidate(z_cand_norm)
-
-        # Denormalize
         z_opt = self._denormalize_z(z_opt_norm.unsqueeze(0)).float()
 
-        # Decode to SMILES
         try:
             smiles = self.codec.decode(z_opt)[0]
         except (ValueError, RuntimeError, IndexError) as e:
@@ -328,25 +273,20 @@ class TuRBOBaseline:
             # Critical memory errors - re-raise
             raise
 
-        # Skip if already evaluated
         if smiles in self.smiles_observed:
-            return None, smiles  # Return smiles even for duplicates
+            return None, smiles
 
-        # Evaluate
         score = self.oracle.score(smiles)
         self.smiles_observed.add(smiles)
 
-        # Update data
         self.train_Z = torch.cat([self.train_Z, z_opt], dim=0)
         self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device, dtype=torch.float32)])
 
-        # Update best
         if score > self.best_score:
             self.best_score = score
             self.best_smiles = smiles
             self.best_z = z_opt.squeeze()
 
-        # Update trust region
         self.turbo_state.update(score)
 
         return score, smiles
@@ -358,7 +298,6 @@ class TuRBOBaseline:
         for i in range(1, n_iterations + 1):
             score, _smiles = self._step(iteration=i)
 
-            # Handle restart
             if self.turbo_state.restart_triggered:
                 logger.info(f"Iter {i}: Trust region restart triggered")
                 self.turbo_state = TurboState(
@@ -368,7 +307,6 @@ class TuRBOBaseline:
                 )
                 self.turbo_state.best_value = self.best_score
 
-            # Log progress
             if i % log_interval == 0 or i == n_iterations:
                 logger.info(
                     f"Iter {i}/{n_iterations}: best={self.best_score:.4f}, "
@@ -403,7 +341,6 @@ def main():
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    # Load components
     logger.info("Loading codec and oracle...")
     from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
@@ -412,14 +349,12 @@ def main():
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
     oracle = GuacaMolOracle(task_id=args.task_id)
 
-    # Load cold start
     logger.info("Loading cold start data...")
     smiles_list, scores, _ = load_guacamol_data(
         n_samples=args.n_cold_start,
         task_id=args.task_id,
     )
 
-    # Create optimizer
     optimizer = TuRBOBaseline(
         codec=codec,
         oracle=oracle,
@@ -430,11 +365,9 @@ def main():
         seed=args.seed,
     )
 
-    # Run
     optimizer.cold_start(smiles_list, scores)
     optimizer.optimize(n_iterations=args.iterations, log_interval=10)
 
-    # Save
     results_dir = "rielbo/results/guacamol"
     os.makedirs(results_dir, exist_ok=True)
 

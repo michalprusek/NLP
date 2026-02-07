@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 from botorch.models import SingleTaskGP
 
 logger = logging.getLogger(__name__)
@@ -86,23 +85,19 @@ class GPDiagnostics:
         Returns:
             GPMetrics with diagnostic information
         """
-        device = train_X.device
         train_Y = train_Y.squeeze()
         n_train, n_dims = train_X.shape
 
-        # === Train fit quality ===
         gp.eval()
         with torch.no_grad():
             posterior = gp.posterior(train_X)
             pred_mean = posterior.mean.squeeze()
             pred_std = posterior.variance.sqrt().squeeze()
 
-        # RMSE and correlation
         residuals = pred_mean - train_Y
         train_rmse = residuals.pow(2).mean().sqrt().item()
         train_mae = residuals.abs().mean().item()
 
-        # Pearson correlation
         y_centered = train_Y - train_Y.mean()
         pred_centered = pred_mean - pred_mean.mean()
         train_correlation = (
@@ -110,29 +105,24 @@ class GPDiagnostics:
             (y_centered.norm() * pred_centered.norm() + 1e-8)
         ).item()
 
-        # === LOO cross-validation ===
         loo_rmse = None
         loo_correlation = None
-        if do_loo and n_train <= 200:  # Only for small datasets
+        if do_loo and n_train <= 200:
             loo_rmse, loo_correlation = self._compute_loo(gp, train_X, train_Y)
 
-        # === Kernel analysis ===
         lengthscales = self._get_lengthscales(gp)
         outputscale = self._get_outputscale(gp)
         noise = self._get_noise(gp)
 
-        # === Uncertainty quality ===
         train_std_mean = pred_std.mean().item()
         y_range = (train_Y.max() - train_Y.min()).item()
         train_std_ratio = train_std_mean / (y_range + 1e-8)
 
-        # === Extrapolation detection ===
         if candidate_X is not None and len(candidate_X) > 0:
             distances = self._compute_distances(candidate_X, train_X)
             candidate_distance_mean = distances.mean().item()
             candidate_distance_max = distances.max().item()
 
-            # Approximate hull check: within range of training data
             in_hull = self._approx_in_hull(candidate_X, train_X)
             candidate_in_hull_frac = in_hull.float().mean().item()
         else:
@@ -173,13 +163,11 @@ class GPDiagnostics:
         loo_preds = []
 
         for i in range(n):
-            # Leave out point i
             mask = torch.ones(n, dtype=torch.bool)
             mask[i] = False
             X_train = X[mask]
             Y_train = Y[mask]
 
-            # Refit GP (simplified - uses same hyperparams)
             try:
                 loo_gp = SingleTaskGP(
                     X_train.double(),
@@ -196,11 +184,9 @@ class GPDiagnostics:
 
         loo_preds = torch.tensor(loo_preds, device=Y.device)
 
-        # LOO RMSE
         loo_residuals = loo_preds - Y
         loo_rmse = loo_residuals.pow(2).mean().sqrt().item()
 
-        # LOO correlation
         y_centered = Y - Y.mean()
         pred_centered = loo_preds - loo_preds.mean()
         loo_corr = (
@@ -213,7 +199,6 @@ class GPDiagnostics:
     def _get_lengthscales(self, gp: SingleTaskGP) -> Optional[torch.Tensor]:
         """Extract lengthscales from GP kernel."""
         try:
-            # Navigate through ScaleKernel -> base_kernel
             kernel = gp.covar_module
             if hasattr(kernel, 'base_kernel'):
                 kernel = kernel.base_kernel
@@ -244,46 +229,31 @@ class GPDiagnostics:
         self, candidates: torch.Tensor, train: torch.Tensor
     ) -> torch.Tensor:
         """Compute distance from each candidate to nearest training point."""
-        # Pairwise distances [M, N]
-        dists = torch.cdist(candidates, train)
-        # Min distance to any training point
-        min_dists, _ = dists.min(dim=1)
-        return min_dists
+        return torch.cdist(candidates, train).min(dim=1).values
 
     def _approx_in_hull(
         self, candidates: torch.Tensor, train: torch.Tensor
     ) -> torch.Tensor:
         """Approximate check if candidates are within training data range."""
-        # Simple axis-aligned bounding box check
         train_min = train.min(dim=0).values
         train_max = train.max(dim=0).values
 
         in_range = (candidates >= train_min) & (candidates <= train_max)
-        # Consider "in hull" if within range on most dimensions
         return in_range.float().mean(dim=1) > 0.8
 
     def log_summary(self, metrics: GPMetrics, prefix: str = "GP"):
         """Log diagnostic summary."""
         issues = []
-
-        # Check for overfitting
         if metrics.train_correlation > 0.99:
             issues.append("OVERFIT: train_corr=1.0")
-
-        # Check lengthscales
         if metrics.lengthscale_min < 0.01:
             issues.append(f"SHORT_LENGTHSCALE: {metrics.lengthscale_min:.4f}")
-
-        # Check uncertainty
         if metrics.train_std_ratio < 0.01:
             issues.append("LOW_UNCERTAINTY: std→0")
-
-        # Check extrapolation
         if metrics.candidate_in_hull_frac < 0.5:
             issues.append(f"EXTRAPOLATING: {1-metrics.candidate_in_hull_frac:.0%} outside hull")
 
-        # Format log message
-        status = "⚠️ " + ", ".join(issues) if issues else "✓"
+        status = "WARNING " + ", ".join(issues) if issues else "OK"
 
         logger.info(
             f"{prefix} Diag: train_corr={metrics.train_correlation:.3f}, "

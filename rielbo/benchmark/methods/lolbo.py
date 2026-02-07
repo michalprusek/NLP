@@ -34,26 +34,18 @@ lolbo_path = Path(__file__).parent.parent.parent.parent / "lolbo_ref"
 if str(lolbo_path) not in sys.path:
     sys.path.insert(0, str(lolbo_path))
 
-# Monkey-patch ppgpr to fix botorch API compatibility
-# The old API used GPyTorchPosterior(mvn=dist), new API uses GPyTorchPosterior(distribution=dist)
+# Monkey-patch ppgpr: old API used GPyTorchPosterior(mvn=dist), new uses distribution=dist
 import lolbo.utils.bo_utils.ppgpr as ppgpr
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 
-def _fixed_posterior_gpmodel(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
+def _fixed_posterior(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
     self.eval()
     self.likelihood.eval()
     dist = self.likelihood(self(X))
     return GPyTorchPosterior(distribution=dist)
 
-def _fixed_posterior_gpmodeldkl(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
-    self.eval()
-    self.likelihood.eval()
-    dist = self.likelihood(self(X))
-    return GPyTorchPosterior(distribution=dist)
-
-# Apply patches
-ppgpr.GPModel.posterior = _fixed_posterior_gpmodel
-ppgpr.GPModelDKL.posterior = _fixed_posterior_gpmodeldkl
+ppgpr.GPModel.posterior = _fixed_posterior
+ppgpr.GPModelDKL.posterior = _fixed_posterior
 
 from lolbo.lolbo import LOLBOState
 from lolbo.latent_space_objective import LatentSpaceObjective
@@ -78,9 +70,8 @@ class SharedCodecObjective(LatentSpaceObjective):
     ):
         self.codec = codec
         self.oracle = oracle
-        self.dim = 256  # SELFIES VAE latent dim
+        self.dim = 256
 
-        # Initialize parent (calls initialize_vae)
         super().__init__(
             xs_to_scores_dict=xs_to_scores_dict or {},
             num_calls=num_calls,
@@ -88,8 +79,7 @@ class SharedCodecObjective(LatentSpaceObjective):
         )
 
     def initialize_vae(self):
-        """Use shared codec as VAE."""
-        # Store codec reference as vae (LOLBO expects self.vae)
+        """Use shared codec as VAE (LOLBO expects self.vae)."""
         self.vae = self.codec
 
     def vae_decode(self, z: torch.Tensor) -> list[str]:
@@ -111,12 +101,8 @@ class SharedCodecObjective(LatentSpaceObjective):
             return np.nan
 
     def vae_forward(self, xs_batch: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode SMILES to latent codes.
-
-        For frozen VAE mode, we just return encoded z with zero loss.
-        """
+        """Encode SMILES to latent codes with zero VAE loss (frozen)."""
         z = self.codec.encode(xs_batch)
-        # Zero VAE loss (no training)
         vae_loss = torch.tensor(0.0, device=z.device)
         return z, vae_loss
 
@@ -153,7 +139,6 @@ class LOLBOBenchmark(BaseBenchmarkMethod):
     ):
         super().__init__(codec, oracle, seed, device, verbose)
 
-        # Store config
         self.bsz = bsz
         self.acq_func = acq_func
         self.learning_rte = learning_rte
@@ -161,33 +146,25 @@ class LOLBOBenchmark(BaseBenchmarkMethod):
         self.k = k
         self.freeze_vae = freeze_vae
 
-        # LOLBO state (initialized in cold_start)
         self.lolbo_state: LOLBOState | None = None
         self.objective: SharedCodecObjective | None = None
-
-        # Task ID (set in cold_start based on oracle)
         self.task_id = getattr(oracle, "task_id", "unknown")
 
     def cold_start(self, smiles_list: list[str], scores: torch.Tensor) -> None:
         """Initialize with cold start data."""
-        # Set seed before LOLBO initialization for reproducibility
-        # (LOLBO uses torch operations internally)
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
-        # Create objective
         self.objective = SharedCodecObjective(
             codec=self.codec,
             oracle=self.oracle,
             task_id=self.task_id,
         )
 
-        # Encode initial data
         train_x = list(smiles_list)
-        train_y = scores.unsqueeze(-1).float().cpu()  # Shape (n, 1) - LOLBO expects CPU
-        train_z = self.codec.encode(smiles_list).cpu()  # Shape (n, 256) - LOLBO expects CPU
+        train_y = scores.unsqueeze(-1).float().cpu()  # LOLBO expects CPU tensors
+        train_z = self.codec.encode(smiles_list).cpu()
 
-        # Create LOLBO state
         self.lolbo_state = LOLBOState(
             objective=self.objective,
             train_x=train_x,
@@ -203,7 +180,6 @@ class LOLBOBenchmark(BaseBenchmarkMethod):
             verbose=self.verbose,
         )
 
-        # Sync state
         self.best_score = self.lolbo_state.best_score_seen.item() if isinstance(
             self.lolbo_state.best_score_seen, torch.Tensor
         ) else self.lolbo_state.best_score_seen
@@ -220,38 +196,38 @@ class LOLBOBenchmark(BaseBenchmarkMethod):
         if self.lolbo_state is None:
             raise RuntimeError("Must call cold_start() before step()")
 
-        # Track state before step
-        prev_best = self.lolbo_state.best_score_seen
         prev_n = len(self.lolbo_state.train_x)
 
-        # Update surrogate model
-        self.lolbo_state.update_surrogate_model()
+        try:
+            self.lolbo_state.update_surrogate_model()
+            self.lolbo_state.acquisition()
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as e:
+            logger.error(f"LOLBO step failed: {e}")
+            return StepResult(
+                score=0.0,
+                best_score=self.best_score,
+                smiles="",
+                is_duplicate=True,
+                is_valid=False,
+            )
 
-        # Acquisition step (generates and evaluates batch)
-        self.lolbo_state.acquisition()
-
-        # Handle trust region restart
         if self.lolbo_state.tr_state.restart_triggered:
             self.lolbo_state.initialize_tr_state()
 
-        # Get new results
         n_new = len(self.lolbo_state.train_x) - prev_n
         current_best = self.lolbo_state.best_score_seen
-
-        # Update tracked state
         self.best_score = current_best.item() if isinstance(current_best, torch.Tensor) else current_best
         self.best_smiles = self.lolbo_state.best_x_seen
         self.n_evaluated = len(self.lolbo_state.train_x)
         self.smiles_set = set(self.lolbo_state.train_x)
 
-        # Determine current score (last evaluated)
         if n_new > 0:
-            # Get last score
             current_score = self.lolbo_state.train_y[-1].item()
             current_smiles = self.lolbo_state.train_x[-1]
             is_duplicate = False
         else:
-            # No new valid molecules
             current_score = 0.0
             current_smiles = ""
             is_duplicate = True

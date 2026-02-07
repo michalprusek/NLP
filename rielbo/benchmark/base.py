@@ -6,7 +6,6 @@ for fair comparison in the benchmark framework.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 
@@ -21,10 +20,9 @@ class StepResult:
     is_duplicate: bool = False  # Whether molecule was already evaluated
     is_valid: bool = True  # Whether molecule is valid
 
-    # Optional diagnostics
-    gp_mean: Optional[float] = None
-    gp_std: Optional[float] = None
-    trust_region_length: Optional[float] = None
+    gp_mean: float | None = None
+    gp_std: float | None = None
+    trust_region_length: float | None = None
     extra: dict = field(default_factory=dict)
 
 
@@ -109,16 +107,12 @@ class BaseBenchmarkMethod(ABC):
         self.device = device
         self.verbose = verbose
 
-        # Track state
         self.best_score: float = float("-inf")
         self.best_smiles: str = ""
         self.n_evaluated: int = 0
         self.smiles_set: set[str] = set()
-
-        # History for plotting
         self.history = BenchmarkHistory()
 
-        # Seed RNG
         torch.manual_seed(seed)
 
     @abstractmethod

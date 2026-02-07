@@ -36,11 +36,9 @@ class TuRBOBenchmark(BaseBenchmarkMethod):
     ):
         super().__init__(codec, oracle, seed, device, verbose)
 
-        # Store config for logging
         self.n_candidates = n_candidates
         self.trust_region = trust_region
 
-        # Create underlying optimizer
         self.optimizer = TuRBOBaseline(
             codec=codec,
             oracle=oracle,
@@ -52,16 +50,13 @@ class TuRBOBenchmark(BaseBenchmarkMethod):
             verbose=verbose,
         )
 
-        # Track iteration for internal state
         self._iteration = 0
 
     def cold_start(self, smiles_list: list[str], scores: torch.Tensor) -> None:
         """Initialize with cold start data."""
-        # TuRBO expects scores as list
-        scores_list = scores.tolist()
+        scores_list = scores.tolist()  # TuRBO expects list, not tensor
         self.optimizer.cold_start(smiles_list, scores_list)
 
-        # Sync state
         self.best_score = self.optimizer.best_score
         self.best_smiles = self.optimizer.best_smiles
         self.n_evaluated = len(self.optimizer.smiles_observed)
@@ -72,7 +67,6 @@ class TuRBOBenchmark(BaseBenchmarkMethod):
         self._iteration += 1
         score, smiles = self.optimizer._step(iteration=self._iteration)
 
-        # Handle restart
         if self.optimizer.turbo_state.restart_triggered:
             from rielbo.turbo_baseline import TurboState
             self.optimizer.turbo_state = TurboState(
@@ -82,11 +76,9 @@ class TuRBOBenchmark(BaseBenchmarkMethod):
             )
             self.optimizer.turbo_state.best_value = self.optimizer.best_score
 
-        # Update tracked state
         self.best_score = self.optimizer.best_score
         self.best_smiles = self.optimizer.best_smiles
 
-        # Determine if this was a duplicate or failed step
         is_duplicate = score is None
 
         if not is_duplicate:
@@ -96,7 +88,7 @@ class TuRBOBenchmark(BaseBenchmarkMethod):
         return StepResult(
             score=score if score is not None else 0.0,
             best_score=self.optimizer.best_score,
-            smiles=smiles,  # Now correctly tracks the actual SMILES from this step
+            smiles=smiles,
             is_duplicate=is_duplicate,
             is_valid=not is_duplicate,
             trust_region_length=self.optimizer.turbo_state.length,
