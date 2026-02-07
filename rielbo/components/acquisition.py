@@ -91,6 +91,8 @@ class AcquisitionSelector:
             return v_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             logger.error(f"Acquisition failed: {e}")
             # Random fallback
             v_opt = candidates[0:1]
@@ -137,8 +139,8 @@ class AcquisitionSchedule:
         if cfg.ur_relative and gp is not None:
             try:
                 noise_std = gp.likelihood.noise.item() ** 0.5
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Failed to get GP noise std for schedule: {e}")
 
         eff_low = cfg.ur_std_low * noise_std
         eff_high = cfg.ur_std_high * noise_std

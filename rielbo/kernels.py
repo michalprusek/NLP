@@ -37,7 +37,7 @@ class ArcCosineKernel(gpytorch.kernels.Kernel):
 
     k(x, y) = 1 - arccos(x·y) / pi
 
-    Equivalent to Matern-1/2 (very rough, like Brownian motion paths).
+    Analogous to Matern-1/2 on R^d (rough, like Brownian motion paths).
     """
 
     has_lengthscale = False
@@ -182,6 +182,7 @@ class ProductSphereKernel(gpytorch.kernels.Kernel):
 
 
 _ARCCOSINE_KERNELS = {0: ArcCosineKernel, 2: ArcCosineKernelOrder2}
+# Maps kernel_order (CLI arg) to Matern nu: 0→0.5 (rough), 1→1.5, 2→2.5 (smooth)
 _NU_MAP = {0: 0.5, 1: 1.5, 2: 2.5}
 
 
@@ -198,8 +199,16 @@ def create_kernel(
             raise ValueError(f"kernel_order must be 0 or 2, got {kernel_order}")
         base = _ARCCOSINE_KERNELS[kernel_order]()
     elif kernel_type == "geodesic_matern":
-        nu = _NU_MAP.get(kernel_order, 1.5)
+        if kernel_order not in _NU_MAP:
+            raise ValueError(
+                f"kernel_order must be 0, 1, or 2 for geodesic_matern, got {kernel_order}"
+            )
+        nu = _NU_MAP[kernel_order]
         base = GeodesicMaternKernel(nu=nu, ard_num_dims=ard_num_dims)
+    elif kernel_type == "hvarfner":
+        # BoTorch default RBF + LogNormal + ARD (Hvarfner priors).
+        # Used by EuclideanGPSurrogate in "hvarfner" mode — SingleTaskGP handles it.
+        base = gpytorch.kernels.RBFKernel(ard_num_dims=ard_num_dims)
     elif kernel_type == "matern":
         base = gpytorch.kernels.MaternKernel(nu=2.5, ard_num_dims=ard_num_dims)
     elif kernel_type == "product":

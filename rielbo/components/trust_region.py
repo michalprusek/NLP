@@ -183,7 +183,8 @@ class URTR:
             if gp is not None:
                 try:
                     noise_std = gp.likelihood.noise.item() ** 0.5
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to get GP noise std for UR-TR: {e}")
                     noise_std = 1.0
 
         eff_std_high = cfg.ur_std_high * noise_std

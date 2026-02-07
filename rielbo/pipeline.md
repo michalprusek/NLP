@@ -275,7 +275,7 @@ If decode fails or produces a duplicate SMILES, count as failure (no training da
 
 ### UR-TR — Uncertainty-Responsive Trust Region
 
-**Problem**: When GP posterior std → 0, Thompson Sampling degenerates into random local search. Seeds where GP maintains meaningful uncertainty (std > 0.3) correlate with best scores (r=0.746).
+**Problem**: When GP posterior std → 0, Thompson Sampling degenerates into random local search. Seeds where GP maintains meaningful uncertainty show a trend toward better scores (r=0.488, p=0.152, not statistically significant with n=10).
 
 **Solution**: Monitor GP posterior std and adapt geodesic TR radius:
 - **Low std (collapsing)**: EXPAND radius — force broader exploration to escape dead regions
@@ -406,7 +406,7 @@ Geodesic trust region samples within a spherical cap:
 - Uniform density in geodesic distance
 - Natural notion of "local" on a curved space
 
-**Geometry**: 0.4 rad cap = 1/6.4M of S^15 surface. Extremely local.
+**Geometry**: 0.4 rad cap = 1/12.8M of S^15 surface. Extremely local.
 
 ---
 
@@ -442,7 +442,7 @@ Geodesic trust region samples within a spherical cap:
 | `geodesic` | Geodesic TR + Adaptive TR | 0.542±0.017 | Reproducible baseline |
 | `ur_tr` | Geodesic TR + UR-TR | — | UR-TR only |
 | `lass` | Geodesic TR + LASS | — | LASS only |
-| `lass_ur` | Geodesic TR + UR-TR + LASS | 0.545±0.016 | Without LASS |
+| `lass_ur` | Geodesic TR + UR-TR + LASS | 0.545±0.016 | Without acqf_schedule |
 | **`explore`** | **Geodesic TR + UR-TR + LASS** | **0.556±0.013** | **Recommended (BEST)** |
 | `portfolio` | explore + multi-subspace (K=5) | — | Experimental |
 | `order2` | ArcCosine order 2 | 0.546±0.013 | Smoother GP |

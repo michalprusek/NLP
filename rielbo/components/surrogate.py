@@ -115,7 +115,8 @@ class SphericalGPSurrogate:
                 with torch.no_grad():
                     output = self.gp(X_gp)
                     self._last_mll_value = mll(output, Y_gp.squeeze(-1)).item()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"MLL computation failed: {e}")
                 self._last_mll_value = None
 
             # Diagnostics
@@ -165,7 +166,8 @@ class SphericalGPSurrogate:
             with torch.no_grad():
                 output = gp(X_gp)
                 return mll(output, Y_gp.squeeze(-1)).item()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"fit_quick failed: {e}")
             return float("-inf")
 
 
@@ -288,8 +290,8 @@ class EuclideanGPSurrogate:
                 if mode == "hvarfner" and hasattr(self.gp, "outcome_transform"):
                     try:
                         Y_diag = self.gp.outcome_transform(Y_gp)[0].squeeze(-1).float()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Outcome transform for diagnostics failed: {e}")
                 metrics = self.gp_diagnostics.analyze(
                     self.gp, Z_norm.float(), Y_diag,
                 )

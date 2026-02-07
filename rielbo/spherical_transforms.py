@@ -62,7 +62,8 @@ class GeodesicTrustRegion:
 
     Generates points within geodesic distance rho of a center point using
     the exponential map: x(theta) = cos(theta)*center + sin(theta)*tangent.
-    Area-uniform sampling via rejection against sin^(d-2)(theta) envelope.
+    Default cap_sampling="uniform_angle" is center-biased (~12,800x on S^15).
+    Use cap_sampling="area_uniform" for sin^(d-2)(theta)-weighted sampling.
     """
 
     def __init__(

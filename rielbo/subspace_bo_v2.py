@@ -504,7 +504,8 @@ class SphericalSubspaceBOv2:
             try:
                 with torch.no_grad():
                     self.last_mll_value = mll(self.gp(X), Y.squeeze(-1)).item()
-            except Exception:
+            except Exception as e:
+                logger.debug(f"MLL computation failed: {e}")
                 self.last_mll_value = None
 
             if self.verbose:
@@ -589,7 +590,8 @@ class SphericalSubspaceBOv2:
             return 1.0
         try:
             return self.gp.likelihood.noise.item() ** 0.5
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to get GP noise std: {e}")
             return 1.0
 
     def _update_ur_tr(self, gp_std: float):
@@ -883,6 +885,8 @@ class SphericalSubspaceBOv2:
             return self.lift_to_original(v_opt), diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0, "is_fallback": True}

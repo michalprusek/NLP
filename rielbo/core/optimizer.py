@@ -1,8 +1,8 @@
 """BaseOptimizer: unified BO loop composing all components.
 
-Replaces the 6 monolithic optimizer classes (V1, V2, TuRBO, VanillaBO,
-Ensemble, AdaS) with a single orchestrator that delegates to composable
-components via the Protocol interfaces.
+Provides an alternative to the monolithic optimizer classes (V1, V2, TuRBO,
+VanillaBO, Ensemble, AdaS) as a single orchestrator that delegates to
+composable components via the Protocol interfaces.
 
 Usage:
     config = OptimizerConfig.from_preset("explore")
@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import logging
 
 import torch
@@ -66,16 +67,16 @@ class BaseOptimizer:
         ucb_beta: float | None = None,
         trust_region: float = 0.8,
     ):
-        self.config = config
+        self.config = copy.deepcopy(config)
         self.codec = codec
         self.oracle = oracle
-        self.device = config.device
-        self.seed = config.seed
-        self.verbose = config.verbose
+        self.device = self.config.device
+        self.seed = self.config.seed
+        self.verbose = self.config.verbose
 
         # Dimensions
         self.input_dim = input_dim
-        cfg_proj = config.projection
+        cfg_proj = self.config.projection
         if subspace_dim is not None:
             cfg_proj.subspace_dim = subspace_dim
         cfg_proj.input_dim = input_dim
@@ -83,11 +84,11 @@ class BaseOptimizer:
 
         # Override acquisition config from constructor args
         if acqf is not None:
-            config.acquisition.acqf = acqf
+            self.config.acquisition.acqf = acqf
         if ucb_beta is not None:
-            config.acquisition.ucb_beta = ucb_beta
+            self.config.acquisition.ucb_beta = ucb_beta
         if n_candidates is not None:
-            config.acquisition.n_candidates = n_candidates
+            self.config.acquisition.n_candidates = n_candidates
 
         # Adaptive dimension state
         self._current_dim = cfg_proj.subspace_dim
@@ -109,19 +110,19 @@ class BaseOptimizer:
 
         if is_identity:
             self.surrogate = EuclideanGPSurrogate(
-                config.kernel, input_dim, device=self.device,
+                self.config.kernel, input_dim, device=self.device,
                 verbose=self.verbose,
             )
         else:
             self.surrogate = SphericalGPSurrogate(
-                config.kernel, self._current_dim, device=self.device,
+                self.config.kernel, self._current_dim, device=self.device,
                 verbose=self.verbose, pca_mode=is_pca,
             )
 
         # Trust region
         gp_getter = lambda: self.surrogate.gp  # noqa: E731
         self.trust_region = create_trust_region(
-            config.trust_region,
+            self.config.trust_region,
             trust_region=trust_region,
             dim=input_dim,
             gp_getter=gp_getter,
@@ -129,38 +130,38 @@ class BaseOptimizer:
 
         # UR-TR (separate from adaptive TR — both can be active)
         self.ur_tr: URTR | None = None
-        if config.trust_region.ur_tr:
-            init_radius = config.trust_region.geodesic_max_angle * trust_region
+        if self.config.trust_region.ur_tr:
+            init_radius = self.config.trust_region.geodesic_max_angle * trust_region
             self.ur_tr = URTR(
-                config.trust_region,
+                self.config.trust_region,
                 initial_radius=init_radius,
                 gp_getter=gp_getter,
             )
 
         # Candidate generator
         self.candidate_gen = create_candidate_generator(
-            config.candidate_gen,
+            self.config.candidate_gen,
             dim=self._current_dim,
             device=self.device,
-            geodesic_max_angle=config.trust_region.geodesic_max_angle,
-            geodesic_global_fraction=config.trust_region.geodesic_global_fraction,
+            geodesic_max_angle=self.config.trust_region.geodesic_max_angle,
+            geodesic_global_fraction=self.config.trust_region.geodesic_global_fraction,
         )
 
         # Acquisition
         self.acq_selector, self.acq_schedule = create_acquisition(
-            config.acquisition, config.trust_region,
+            self.config.acquisition, self.config.trust_region,
         )
 
         # Norm reconstruction
         self.norm_reconstructor = create_norm_reconstructor(
-            config.norm_reconstruction, device=self.device,
+            self.config.norm_reconstruction, device=self.device,
         )
 
         # LASS selector (created if lass enabled, used at cold_start)
         self.lass_selector: LASSSelector | None = None
         if cfg_proj.lass and cfg_proj.projection_type == "random":
             self.lass_selector = LASSSelector(
-                cfg_proj, config.kernel, device=self.device, seed=self.seed,
+                cfg_proj, self.config.kernel, device=self.device, seed=self.seed,
             )
 
         # ── State ────────────────────────────────────────────────────
@@ -425,6 +426,8 @@ class BaseOptimizer:
             return u_opt, diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(
                 torch.randn(1, self.input_dim, device=self.device), dim=-1,

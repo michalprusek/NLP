@@ -6,6 +6,7 @@ Presets are factory functions returning fully configured OptimizerConfig.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 class KernelConfig:
     """Kernel configuration."""
 
-    kernel_type: str = "arccosine"  # "arccosine", "geodesic_matern", "matern"
+    kernel_type: str = "arccosine"  # "arccosine", "geodesic_matern", "matern", "hvarfner"
     kernel_order: int = 0  # 0 or 2 for arccosine; maps to nu for geodesic_matern
     kernel_ard: bool = False
     product_space: bool = False
@@ -85,6 +86,18 @@ class TrustRegionConfig:
     vanilla_success_tolerance: int = 3
     vanilla_length_min: float = 0.5**7
     vanilla_length_max: float = 1.6
+
+    def __post_init__(self) -> None:
+        if self.tr_min >= self.tr_max:
+            raise ValueError(f"tr_min ({self.tr_min}) must be < tr_max ({self.tr_max})")
+        if self.ur_std_low >= self.ur_std_high:
+            raise ValueError(
+                f"ur_std_low ({self.ur_std_low}) must be < ur_std_high ({self.ur_std_high})"
+            )
+        if self.ur_tr_min >= self.ur_tr_max:
+            raise ValueError(
+                f"ur_tr_min ({self.ur_tr_min}) must be < ur_tr_max ({self.ur_tr_max})"
+            )
 
 
 @dataclass
@@ -300,7 +313,7 @@ def _preset_portfolio() -> OptimizerConfig:
 
 # ── Preset registry ──────────────────────────────────────────────────
 
-_PRESETS: dict[str, callable] = {
+_PRESETS: dict[str, Callable[[], OptimizerConfig]] = {
     "baseline": _preset_baseline,
     "geodesic": _preset_geodesic,
     "ur_tr": _preset_ur_tr,

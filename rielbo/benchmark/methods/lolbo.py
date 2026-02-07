@@ -198,8 +198,20 @@ class LOLBOBenchmark(BaseBenchmarkMethod):
 
         prev_n = len(self.lolbo_state.train_x)
 
-        self.lolbo_state.update_surrogate_model()
-        self.lolbo_state.acquisition()
+        try:
+            self.lolbo_state.update_surrogate_model()
+            self.lolbo_state.acquisition()
+        except torch.cuda.OutOfMemoryError:
+            raise
+        except Exception as e:
+            logger.error(f"LOLBO step failed: {e}")
+            return StepResult(
+                score=0.0,
+                best_score=self.best_score,
+                smiles="",
+                is_duplicate=True,
+                is_valid=False,
+            )
 
         if self.lolbo_state.tr_state.restart_triggered:
             self.lolbo_state.initialize_tr_state()

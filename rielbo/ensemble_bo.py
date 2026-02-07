@@ -192,6 +192,8 @@ class SubspaceMember:
             v_opt = v_opt.squeeze(0).float()
             v_opt = F.normalize(v_opt, p=2, dim=-1)
         except Exception as e:
+            if isinstance(e, torch.cuda.OutOfMemoryError):
+                raise
             logger.error(f"Member {self.member_id} TS failed: {e}")
             v_opt = v_cand[0:1]
 
