@@ -58,13 +58,17 @@ METHOD_LINESTYLES = {
 def load_incremental_json(path: str | Path) -> list[dict] | None:
     """Load an IncrementalPromptSaver JSON file.
 
-    Returns list of {eval_id, score} or None if file missing/empty.
+    Returns list of {eval_id, score} or None if file missing/empty/corrupt.
     """
     path = Path(path)
     if not path.exists():
         return None
-    with open(path) as f:
-        data = json.load(f)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"  WARNING: skipping corrupted file {path}: {e}")
+        return None
     prompts = data.get("evaluated_prompts", [])
     if not prompts:
         return None
@@ -160,11 +164,14 @@ def load_rielbo_gsm8k_data() -> list[tuple[np.ndarray, np.ndarray]] | None:
             prompts = load_incremental_json(p)
             if prompts is None or len(prompts) == 0:
                 continue
-            scores = [ep["score"] for ep in prompts]
+            scores = [ep.get("score") for ep in prompts if "score" in ep]
+            if not scores:
+                continue
             x = np.arange(1, len(scores) + 1)
             y = extract_running_max(scores)
             curves.append((x, y))
         if curves:
+            print(f"  rielbo: loaded {len(curves)} seeds from pattern '{pattern}'")
             return curves
 
     return None

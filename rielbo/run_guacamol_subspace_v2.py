@@ -128,9 +128,6 @@ def main():
     parser.add_argument("--subspace-stale-patience", type=int, default=50,
                         help="Replace subspace after this many evals without improvement")
 
-    parser.add_argument("--codec", type=str, default="selfies_vae",
-                        choices=["selfies_vae", "smi_ted"],
-                        help="Molecular codec: selfies_vae (256D, spherical) or smi_ted (768D, linear)")
     parser.add_argument("--projection", type=str, default="random",
                         choices=["random", "pca", "pca_spherical"],
                         help="Projection type: random QR, PCA (Euclidean), or pca_spherical (PCA dirs + spherical pipeline)")
@@ -199,8 +196,6 @@ def main():
         if args.projection != "random":
             config.projection_type = args.projection
         config_name = args.preset
-        if args.codec != "selfies_vae":
-            config_name += f"_{args.codec}"
         if config.projection_type != "random":
             config_name += f"_{config.projection_type}"
         if config.kernel_type != "arccosine" or config.kernel_ard:
@@ -270,24 +265,21 @@ def main():
             features.append("lass")
         if config.multi_subspace:
             features.append(f"port{config.n_subspaces}")
+        if config.projection_type != "random":
+            features.append(config.projection_type)
         config_name = "-".join(features) if features else "baseline"
 
     logger.info(f"Configuration: {config_name}")
     logger.info(f"Config details: {config}")
 
     logger.info("Loading codec and oracle...")
-    from shared.guacamol.codec import create_molecular_codec
+    from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
     from shared.guacamol.oracle import GuacaMolOracle
 
-    codec = create_molecular_codec(codec_type=args.codec, device=args.device)
-    input_dim = codec.embedding_dim
+    codec = SELFIESVAECodec.from_pretrained(device=args.device)
+    input_dim = 256
     oracle = GuacaMolOracle(task_id=args.task_id)
-
-    # SMI-TED has linear geometry → force PCA projection if not already set
-    if args.codec == "smi_ted" and args.projection == "random":
-        logger.info("SMI-TED codec detected: auto-switching projection to 'pca'")
-        config.projection_type = "pca"
 
     logger.info("Loading cold start data...")
     smiles_list, scores, _ = load_guacamol_data(
@@ -350,7 +342,6 @@ def main():
             "multi_subspace": config.multi_subspace,
             "n_subspaces": config.n_subspaces,
             "projection_type": config.projection_type,
-            "codec": args.codec,
         },
         "mean_norm": optimizer.mean_norm,
         "final_subspace_dim": optimizer._current_dim,
