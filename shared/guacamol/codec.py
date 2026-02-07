@@ -304,7 +304,10 @@ def create_molecular_codec(
     """
     if codec_type in ("selfies_vae", "minicddd"):
         return SELFIESVAECodec.from_pretrained(model_path, device=device, **kwargs)
+    elif codec_type == "smi_ted":
+        from shared.guacamol.smi_ted_codec import SmiTedCodec
+        return SmiTedCodec.from_pretrained(device=device)
     else:
         raise ValueError(
-            f"Unknown codec type: {codec_type}. Use 'selfies_vae'."
+            f"Unknown codec type: {codec_type}. Use 'selfies_vae' or 'smi_ted'."
         )

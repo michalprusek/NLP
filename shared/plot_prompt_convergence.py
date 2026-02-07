@@ -34,17 +34,24 @@ plt.rcParams.update({
 })
 
 METHOD_COLORS = {
-    "opro": "#E65100",       # dark orange
-    "protegi": "#2E7D32",    # dark green
-    "gepa": "#7B1FA2",       # purple
-    "rielbo": "#1565C0",     # dark blue
+    "rielbo": "#e41a1c",     # Bright red (ours)
+    "opro": "#c4956a",       # Tan
+    "protegi": "#a0b070",    # Olive green
+    "gepa": "#7b8fa1",       # Steel blue
 }
 
 METHOD_LABELS = {
+    "rielbo": "Ours: RieLBO-GSM8K",
     "opro": "OPRO",
     "protegi": "ProTeGi",
     "gepa": "GEPA",
-    "rielbo": "RieLBO-GSM8K",
+}
+
+METHOD_LINESTYLES = {
+    "rielbo": "-",
+    "opro": "-.",
+    "protegi": ":",
+    "gepa": "-.",
 }
 
 
@@ -131,29 +138,36 @@ def load_gepa_data() -> list[tuple[np.ndarray, np.ndarray]] | None:
 
 
 def load_rielbo_gsm8k_data() -> list[tuple[np.ndarray, np.ndarray]] | None:
-    """Load RieLBO-GSM8K benchmark data."""
-    paths = sorted(Path("rielbo_gsm8k/results").glob("rielbo_s*.json"))
-    if not paths:
-        return None
+    """Load RieLBO-GSM8K benchmark data.
 
-    all_curves = []
-    for p in paths:
-        prompts = load_incremental_json(p)
-        if prompts is None:
-            # Try history format (like GuacaMol)
-            with open(p) as f:
-                data = json.load(f)
-            if "history" in data and "best_score" in data["history"]:
-                bs = data["history"]["best_score"]
-                x = np.arange(1, len(bs) + 1)
-                y = np.array(bs)
-                all_curves.append((x, y))
-            continue
-        scores = [ep["score"] for ep in prompts]
-        x = np.arange(1, len(scores) + 1)
-        y = extract_running_max(scores)
-        all_curves.append((x, y))
-    return all_curves if all_curves else None
+    Prioritizes explore_pca_v2 results (best config), falls back to
+    geodesic runs. Only includes files with evaluated_prompts data.
+    """
+    result_dir = Path("rielbo_gsm8k/results")
+
+    # Priority: explore_pca_v2 > explore_pca > geodesic (rielbo_s*)
+    glob_patterns = [
+        "rielbo_explore_pca_v2_s*.json",
+        "rielbo_explore_pca_s*.json",
+        "rielbo_s[0-9][0-9].json",  # Only rielbo_s42.json etc, not timestamps
+    ]
+
+    # Use the first pattern that has data
+    for pattern in glob_patterns:
+        paths = sorted(result_dir.glob(pattern))
+        curves = []
+        for p in paths:
+            prompts = load_incremental_json(p)
+            if prompts is None or len(prompts) == 0:
+                continue
+            scores = [ep["score"] for ep in prompts]
+            x = np.arange(1, len(scores) + 1)
+            y = extract_running_max(scores)
+            curves.append((x, y))
+        if curves:
+            return curves
+
+    return None
 
 
 def get_mean_std_curve(
@@ -179,6 +193,8 @@ def plot_convergence():
     """Create the main convergence plot."""
     fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
+    # Plot order: baselines first (behind), then ours on top
+    plot_order = ["opro", "protegi", "gepa", "rielbo"]
     loaders = {
         "opro": load_opro_data,
         "protegi": load_protegi_data,
@@ -187,7 +203,8 @@ def plot_convergence():
     }
 
     plotted = []
-    for method, loader in loaders.items():
+    for method in plot_order:
+        loader = loaders[method]
         curves = loader()
         if curves is None:
             print(f"  {method}: no data found, skipping")
@@ -198,11 +215,15 @@ def plot_convergence():
             continue
 
         c = METHOD_COLORS[method]
+        ls = METHOD_LINESTYLES[method]
         n_seeds = len(curves)
         label = f"{METHOD_LABELS[method]} (n={n_seeds})"
 
-        lw = 2.5 if method == "rielbo" else 2.0
-        ax.plot(x, mean * 100, color=c, linewidth=lw, label=label)
+        is_ours = method == "rielbo"
+        lw = 3.0 if is_ours else 2.0
+        zorder = 10 if is_ours else 5
+        ax.plot(x, mean * 100, color=c, linewidth=lw, linestyle=ls,
+                label=label, zorder=zorder)
         if n_seeds > 1:
             ax.fill_between(
                 x,
@@ -210,6 +231,7 @@ def plot_convergence():
                 (mean + std) * 100,
                 alpha=0.15,
                 color=c,
+                zorder=zorder - 1,
             )
         plotted.append(method)
 
@@ -221,7 +243,7 @@ def plot_convergence():
     ax.set_xlabel("Prompts Evaluated")
     ax.set_ylabel("Best Accuracy (%)")
     ax.set_title("GSM8K Prompt Optimization — Convergence", fontweight="bold")
-    ax.legend(loc="lower right", framealpha=0.9)
+    ax.legend(loc="upper left", framealpha=0.9)
     ax.grid(True, alpha=0.3)
     ax.set_xlim(1, None)
 

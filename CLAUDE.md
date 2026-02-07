@@ -346,6 +346,7 @@ Only proceed with the benchmark launch after both verifiers confirm correctness.
 | **V2 explore (NEW SOTA)** | **0.5555±0.013** | **0.5867** | LASS+UR-TR+acqf, p=0.021 vs 0207 geodesic (0.5424). REPRODUCIBILITY: batch 2 gives 0.5445±0.008 — verify acqf_schedule enabled. |
 | V2 lass_ur | 0.5453±0.016 | 0.5722 | LASS+UR-TR, no acqf |
 | V1 Subspace | 0.5440±0.006 | — | benchmark runner |
+| V2 ur_tr only | 0.5439±0.009 | 0.5565 | UR-TR without LASS. Identical to baseline (p=0.98). |
 | V2 geodesic (baseline) | 0.5424±0.017 | 0.5701 | reproducible 0207 batch |
 | Ensemble (K=6) | 0.5422±0.009 | — | halves variance, same mean |
 | CMA-ES | 0.5371±0.018 | — | |
@@ -506,6 +507,8 @@ Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J
 - **LASS (Look-Ahead Subspace Selection)**: Evaluate 50 random QR projections at cold start, pick the one with best GP log marginal likelihood. CRITICAL: max posterior std is WRONG (picks flat landscapes). Related to SA-cREMBO (2025), ALEBO (2020).
 - **Acquisition schedule (acqf_schedule)**: Switch to UCB with high beta when GP posterior std drops below threshold. Contributes +0.010 to mean. Essential component of explore preset.
 - **explore preset (ALL THREE combined)**: 0.5555±0.013 (10 seeds). Significant vs 0207 geodesic (p=0.021), NOT vs 0205 (p=0.80). Batch 2 gives 0.5445 — reproducibility needs verification. s47=0.5867 highest ever.
+- **UR-TR only (no LASS)**: 0.5439±0.009 (10 seeds). Identical to V2 baseline (0.5440, p=0.98). 7/10 seeds hit max rotations; UR radius at max 81-98% of time. UR-TR degenerates to global geodesic search with periodic subspace rotation.
+- **TR strategy comparison (2026-02-07)**: TuRBO-style adaptive_tr (0.5402), UR-TR (0.5439), and static Sobol TR (0.5440) are statistically indistinguishable in 16D (all p>0.44). TR strategy is irrelevant — architecture (S^15 + ArcCosine) dominates. Plots: `rielbo/results/turbo_vs_urtr_comparison.png`, `rielbo/results/tr_dynamics_comparison.png`.
 
 ### Key Lessons
 
@@ -535,6 +538,8 @@ Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J
 
 13. **Combining UR-TR + LASS + acqf_schedule synergizes**: Each component alone has modest effect (+0.002-0.005), but together they achieve +0.013 over baseline. UR-TR prevents stagnation, LASS picks good initial subspace, acqf_schedule provides UCB exploration when GP collapses.
 
+14. **TR strategy is irrelevant in 16D subspace BO**: Static Sobol (0.5440), TuRBO-style adaptive (0.5402), and UR-TR (0.5439) all produce identical results (p>0.44). The dominant effect is architecture: 16D projection + ArcCosine kernel gives +3.8% over TuRBO-256D (p<0.0001, Cohen's d=3.0). TuRBO fails specifically due to 71-82% duplicate rate — 256D GP with 257 hyperparameters generates near-identical candidates.
+
 ### Best Practices for Future Experiments
 
 - **Always benchmark with 10 seeds** (42-51). Single-seed results are unreliable.
@@ -545,3 +550,4 @@ Tested using the VAE decoder's Riemannian geometry (pullback metric G(z) = J^T J
 - **Document negative results**: They save future effort. The pullback metric failure is valuable knowledge.
 - **When you beat the baseline, IMMEDIATELY save the exact config**: Log the preset, all CLI flags, seed, and commit hash. Record in CLAUDE.md and MEMORY.md before running more seeds. Baselines are hard to reproduce — don't lose winning configurations.
 - **Current best config**: `--preset explore --ur-std-low 0.05` → 0.5555±0.013 on adip (10 seeds, p=0.021 vs 0207 geodesic). CAUTION: batch 2 gave 0.5445 — verify acqf_schedule is enabled.
+- **Always verify n_iter/n_eval before comparing result files**: Some batches have incomplete runs (e.g., 0207 geodesic seeds 42-44 ran only 100 iter). Use `len(history['best_score'])` to check, not just file existence.

@@ -331,13 +331,19 @@ class SphericalSubspaceBOv2:
     def _init_projection(self):
         """Initialize orthonormal projection matrix.
 
-        Uses PCA on training data when projection_type="pca" and data is available,
-        otherwise falls back to random QR.
+        Uses PCA on training data when projection_type="pca" or "pca_spherical"
+        and data is available, otherwise falls back to random QR.
+
+        "pca" = full Euclidean PCA (centering, RBF kernel, Sobol box).
+        "pca_spherical" = PCA eigenvectors as projection, but spherical pipeline
+                          (normalize, ArcCosine kernel, geodesic TR).
         """
-        if (self.config.projection_type == "pca"
-                and getattr(self, "train_U", None) is not None
-                and self.train_U.shape[0] > self._current_dim):
+        has_data = (getattr(self, "train_U", None) is not None
+                    and self.train_U.shape[0] > self._current_dim)
+        if self.config.projection_type == "pca" and has_data:
             self._init_pca_projection()
+        elif self.config.projection_type == "pca_spherical" and has_data:
+            self._init_pca_spherical_projection()
         else:
             A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
             self.A, _ = torch.linalg.qr(A_raw)
@@ -354,6 +360,21 @@ class SphericalSubspaceBOv2:
         self.A = Vt[:d].T.contiguous().to(self.device)
         var_explained = (S[:d]**2).sum() / (S**2).sum()
         logger.info(f"PCA projection: {self.input_dim}D → {d}D, variance explained: {var_explained:.3f}")
+
+    def _init_pca_spherical_projection(self):
+        """PCA eigenvectors as projection matrix, but keep spherical pipeline.
+
+        Uses PCA to find data-informed directions (better than random QR),
+        but project/lift still normalize to sphere. No _pca_mean stored,
+        so all downstream code uses the spherical path (ArcCosine, geodesic TR).
+        """
+        centered = self.train_U - self.train_U.mean(dim=0, keepdim=True)
+        _, S, Vt = torch.linalg.svd(centered, full_matrices=False)
+        d = min(self._current_dim, Vt.shape[0])
+        self.A = Vt[:d].T.contiguous().to(self.device)
+        var_explained = (S[:d]**2).sum() / (S**2).sum()
+        logger.info(f"PCA-spherical projection: {self.input_dim}D → {d}D, "
+                     f"variance explained: {var_explained:.3f} (spherical pipeline)")
 
     def _maybe_switch_dimension(self):
         """Switch to higher dimension if conditions met."""
@@ -938,9 +959,9 @@ class SphericalSubspaceBOv2:
         self.best_score = self.train_Y[best_idx].item()
         self.best_smiles = smiles_list[best_idx]
 
-        if self.config.projection_type == "pca":
+        if self.config.projection_type in ("pca", "pca_spherical"):
             self._init_projection()
-        if self.config.lass and self.config.projection_type != "pca":
+        if self.config.lass and self.config.projection_type not in ("pca", "pca_spherical"):
             self._select_best_projection()
 
         self._fit_gp()
