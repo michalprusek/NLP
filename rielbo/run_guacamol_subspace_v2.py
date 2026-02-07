@@ -128,6 +128,9 @@ def main():
     parser.add_argument("--subspace-stale-patience", type=int, default=50,
                         help="Replace subspace after this many evals without improvement")
 
+    parser.add_argument("--projection", type=str, default="random",
+                        choices=["random", "pca", "pca_spherical"],
+                        help="Projection type: random QR, PCA (Euclidean), or pca_spherical (PCA dirs + spherical pipeline)")
     parser.add_argument("--subspace-dim", type=int, default=16,
                         help="Subspace dimension d (GP on S^(d-1))")
     parser.add_argument("--ucb-beta", type=float, default=2.0)
@@ -190,7 +193,11 @@ def main():
             config.subspace_ucb_beta = args.subspace_ucb_beta
         if args.subspace_stale_patience != 50:
             config.subspace_stale_patience = args.subspace_stale_patience
+        if args.projection != "random":
+            config.projection_type = args.projection
         config_name = args.preset
+        if config.projection_type != "random":
+            config_name += f"_{config.projection_type}"
         if config.kernel_type != "arccosine" or config.kernel_ard:
             config_name += f"_{config.kernel_type}"
             if config.kernel_ard:
@@ -231,6 +238,7 @@ def main():
             n_subspaces=args.n_subspaces,
             subspace_ucb_beta=args.subspace_ucb_beta,
             subspace_stale_patience=args.subspace_stale_patience,
+            projection_type=args.projection,
         )
         features = []
         if config.kernel_type != "arccosine":
@@ -257,6 +265,8 @@ def main():
             features.append("lass")
         if config.multi_subspace:
             features.append(f"port{config.n_subspaces}")
+        if config.projection_type != "random":
+            features.append(config.projection_type)
         config_name = "-".join(features) if features else "baseline"
 
     logger.info(f"Configuration: {config_name}")
@@ -331,6 +341,7 @@ def main():
             "acqf_schedule": config.acqf_schedule,
             "multi_subspace": config.multi_subspace,
             "n_subspaces": config.n_subspaces,
+            "projection_type": config.projection_type,
         },
         "mean_norm": optimizer.mean_norm,
         "final_subspace_dim": optimizer._current_dim,

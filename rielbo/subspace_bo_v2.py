@@ -331,14 +331,26 @@ class SphericalSubspaceBOv2:
     def _init_projection(self):
         """Initialize orthonormal projection matrix.
 
-        Uses PCA on training data when projection_type="pca" and data is available,
-        otherwise falls back to random QR.
+        Uses PCA on training data when projection_type="pca" or "pca_spherical"
+        and data is available, otherwise falls back to random QR.
+
+        "pca" = full Euclidean PCA (centering, RBF kernel, Sobol box).
+        "pca_spherical" = PCA eigenvectors as projection, but spherical pipeline
+                          (normalize, ArcCosine kernel, geodesic TR).
         """
-        if (self.config.projection_type == "pca"
-                and getattr(self, "train_U", None) is not None
-                and self.train_U.shape[0] > self._current_dim):
+        has_data = (getattr(self, "train_U", None) is not None
+                    and self.train_U.shape[0] > self._current_dim)
+        if self.config.projection_type == "pca" and has_data:
             self._init_pca_projection()
+        elif self.config.projection_type == "pca_spherical" and has_data:
+            self._init_pca_spherical_projection()
         else:
+            if self.config.projection_type in ("pca", "pca_spherical") and not has_data:
+                n = self.train_U.shape[0] if getattr(self, "train_U", None) is not None else 0
+                logger.warning(
+                    f"Requested {self.config.projection_type} but insufficient data "
+                    f"(n={n}, need >{self._current_dim}), using random QR"
+                )
             A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
             self.A, _ = torch.linalg.qr(A_raw)
 
@@ -346,14 +358,64 @@ class SphericalSubspaceBOv2:
         """Compute PCA projection from training data on the unit sphere.
 
         Stores _pca_mean so project/lift can center/uncenter correctly.
+        Falls back to random QR if SVD fails on degenerate data.
         """
         self._pca_mean = self.train_U.mean(dim=0, keepdim=True).to(self.device)
         centered = self.train_U - self._pca_mean
-        _, S, Vt = torch.linalg.svd(centered, full_matrices=False)
+        try:
+            _, S, Vt = torch.linalg.svd(centered, full_matrices=False)
+        except torch.linalg.LinAlgError as e:
+            logger.warning(f"PCA SVD failed ({e}), falling back to random QR")
+            del self._pca_mean
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+            return
+        total_var = (S**2).sum()
+        if total_var < 1e-12:
+            logger.warning("PCA: near-zero variance, falling back to random QR")
+            del self._pca_mean
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+            return
         d = min(self._current_dim, Vt.shape[0])
+        if d < self._current_dim:
+            logger.warning(f"PCA: data rank ({Vt.shape[0]}) < requested dim ({self._current_dim}), using d={d}")
         self.A = Vt[:d].T.contiguous().to(self.device)
-        var_explained = (S[:d]**2).sum() / (S**2).sum()
+        var_explained = (S[:d]**2).sum() / total_var
         logger.info(f"PCA projection: {self.input_dim}D → {d}D, variance explained: {var_explained:.3f}")
+
+    def _init_pca_spherical_projection(self):
+        """PCA eigenvectors as projection matrix, but keep spherical pipeline.
+
+        Uses PCA to find data-informed directions (better than random QR),
+        but project/lift still normalize to sphere. No _pca_mean stored,
+        so all downstream code uses the spherical path (ArcCosine, geodesic TR).
+        Falls back to random QR if SVD fails on degenerate data.
+        """
+        # Defensive cleanup: remove stale _pca_mean from a prior "pca" mode
+        if hasattr(self, "_pca_mean"):
+            del self._pca_mean
+        centered = self.train_U - self.train_U.mean(dim=0, keepdim=True)
+        try:
+            _, S, Vt = torch.linalg.svd(centered, full_matrices=False)
+        except torch.linalg.LinAlgError as e:
+            logger.warning(f"PCA-spherical SVD failed ({e}), falling back to random QR")
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+            return
+        total_var = (S**2).sum()
+        if total_var < 1e-12:
+            logger.warning("PCA-spherical: near-zero variance, falling back to random QR")
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+            return
+        d = min(self._current_dim, Vt.shape[0])
+        if d < self._current_dim:
+            logger.warning(f"PCA-spherical: data rank ({Vt.shape[0]}) < requested dim ({self._current_dim}), using d={d}")
+        self.A = Vt[:d].T.contiguous().to(self.device)
+        var_explained = (S[:d]**2).sum() / total_var
+        logger.info(f"PCA-spherical projection: {self.input_dim}D → {d}D, "
+                     f"variance explained: {var_explained:.3f} (spherical pipeline)")
 
     def _maybe_switch_dimension(self):
         """Switch to higher dimension if conditions met."""
@@ -442,8 +504,10 @@ class SphericalSubspaceBOv2:
                     best_score = log_ml
                     best_A = A_k.clone()
                     best_k = k
-            except Exception as e:
-                logger.debug(f"LASS candidate {k}: GP fit failed: {e}")
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    raise  # Don't silently swallow OOM
+                logger.warning(f"LASS candidate {k}: GP fit failed: {e}")
                 all_scores.append(float("-inf"))
 
         if best_A is not None:
@@ -504,8 +568,8 @@ class SphericalSubspaceBOv2:
             try:
                 with torch.no_grad():
                     self.last_mll_value = mll(self.gp(X), Y.squeeze(-1)).item()
-            except Exception as e:
-                logger.debug(f"MLL computation failed: {e}")
+            except RuntimeError as e:
+                logger.warning(f"MLL computation failed: {e}")
                 self.last_mll_value = None
 
             if self.verbose:
@@ -560,7 +624,10 @@ class SphericalSubspaceBOv2:
                 logger.info(f"TR shrink → {self.tr_length:.4f}")
 
     def _restart_subspace(self):
-        """Restart with fresh random projection when TR collapses."""
+        """Restart with fresh random projection when TR collapses.
+
+        For pca_spherical, uses random QR instead of recomputing identical PCA.
+        """
         cfg = self.config
         if self.n_restarts >= cfg.max_restarts:
             self.tr_length = cfg.tr_init
@@ -573,7 +640,12 @@ class SphericalSubspaceBOv2:
         self._tr_fail_count = 0
 
         torch.manual_seed(self.seed + self.n_restarts * 1000)
-        self._init_projection()
+        if cfg.projection_type == "pca_spherical":
+            # PCA is deterministic on same data — use random QR for diversity
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+        else:
+            self._init_projection()
 
         if self.train_U is not None:
             self.train_V = self.project_to_subspace(self.train_U)
@@ -581,7 +653,8 @@ class SphericalSubspaceBOv2:
 
         logger.info(
             f"Subspace restart #{self.n_restarts}: "
-            f"{cfg.projection_type} projection, TR reset to {cfg.tr_init}"
+            f"{'random QR (pca_spherical rotation)' if cfg.projection_type == 'pca_spherical' else cfg.projection_type} "
+            f"projection, TR reset to {cfg.tr_init}"
         )
 
     def _get_gp_noise_std(self) -> float:
@@ -590,8 +663,8 @@ class SphericalSubspaceBOv2:
             return 1.0
         try:
             return self.gp.likelihood.noise.item() ** 0.5
-        except Exception as e:
-            logger.debug(f"Failed to get GP noise std: {e}")
+        except (AttributeError, RuntimeError) as e:
+            logger.warning(f"Failed to get GP noise std: {e}, using fallback 1.0")
             return 1.0
 
     def _update_ur_tr(self, gp_std: float):
@@ -640,7 +713,10 @@ class SphericalSubspaceBOv2:
             self._ur_collapse_count = 0
 
     def _ur_rotate_subspace(self):
-        """Rotate to fresh random projection when GP collapses under UR-TR."""
+        """Rotate to fresh random projection when GP collapses under UR-TR.
+
+        For pca_spherical, uses random QR instead of recomputing identical PCA.
+        """
         cfg = self.config
         init_radius = cfg.geodesic_max_angle * self.trust_region
 
@@ -655,7 +731,11 @@ class SphericalSubspaceBOv2:
         self._ur_radius = init_radius
 
         torch.manual_seed(self.seed + self._ur_n_rotations * 2000)
-        self._init_projection()
+        if cfg.projection_type == "pca_spherical":
+            A_raw = torch.randn(self.input_dim, self._current_dim, device=self.device)
+            self.A, _ = torch.linalg.qr(A_raw)
+        else:
+            self._init_projection()
 
         if self.train_U is not None:
             self.train_V = self.project_to_subspace(self.train_U)
@@ -938,9 +1018,9 @@ class SphericalSubspaceBOv2:
         self.best_score = self.train_Y[best_idx].item()
         self.best_smiles = smiles_list[best_idx]
 
-        if self.config.projection_type == "pca":
+        if self.config.projection_type in ("pca", "pca_spherical"):
             self._init_projection()
-        if self.config.lass and self.config.projection_type != "pca":
+        if self.config.lass and self.config.projection_type not in ("pca", "pca_spherical"):
             self._select_best_projection()
 
         self._fit_gp()
@@ -994,7 +1074,7 @@ class SphericalSubspaceBOv2:
         self.train_Y = torch.cat([self.train_Y, torch.tensor([score], device=self.device, dtype=torch.float32)])
         self.smiles_observed.append(smiles)
 
-        refit_interval = 1 if self.config.projection_type == "pca" else 10
+        refit_interval = 1 if self.config.projection_type in ("pca", "pca_spherical") else 10
         if self.iteration % refit_interval == 0:
             self._fit_gp()
 
