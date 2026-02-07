@@ -570,7 +570,7 @@ CUDA_VISIBLE_DEVICES=0 uv run python -m rielbo.run_guacamol_subspace_v2 \
 
 4. **Adaptive restart on GP collapse is the most impactful fix** — drove scores from ~0.533 to 0.555.
 
-5. **GP posterior std predicts seed success** (r=0.746) — Seeds where GP maintains meaningful uncertainty (std > 0.3) perform best. s47 (0.5867, best ever) had sustained GP uncertainty. s45 (0.5368, worst) had early GP collapse.
+5. **GP posterior std shows trend with seed success** (r=0.488, p=0.152, not statistically significant with n=10) — Seeds where GP maintains meaningful uncertainty tend to perform better. s47 (0.5867, best ever) had sustained GP uncertainty. s45 (0.5368, worst) had early GP collapse.
 
 6. **UR-TR direction is counter-intuitive** — EXPAND when GP std drops (collapsing), SHRINK when std is high. Opposite of TuRBO. Driven by GP health, not score improvement.
 
