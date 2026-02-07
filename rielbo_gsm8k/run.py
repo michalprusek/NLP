@@ -52,8 +52,14 @@ def main():
     # V2 config
     parser.add_argument("--preset", type=str, default="geodesic",
                         choices=["baseline", "order2", "whitening", "geodesic",
-                                 "adaptive", "prob_norm", "smooth", "geometric", "full"],
+                                 "adaptive", "prob_norm", "smooth", "geometric", "full",
+                                 "ur_tr", "lass", "lass_ur", "explore", "portfolio"],
                         help="V2 preset configuration")
+    parser.add_argument("--ur-std-low", type=float, default=None,
+                        help="UR-TR: GP std threshold for expansion (default: preset value)")
+    parser.add_argument("--projection", type=str, default="random",
+                        choices=["random", "pca"],
+                        help="Projection type: random QR or PCA (use pca for high-D codecs like SONAR)")
     parser.add_argument("--subspace-dim", type=int, default=16,
                         help="Subspace dimension d")
     parser.add_argument("--acqf", type=str, default="ts",
@@ -73,6 +79,10 @@ def main():
     # SONAR
     parser.add_argument("--sonar-device", type=str, default="cpu",
                         help="Device for SONAR codec (cpu recommended to save GPU for vLLM)")
+
+    # Seed cache (skip re-scoring)
+    parser.add_argument("--seed-cache", type=str, default=None,
+                        help="JSON file with pre-scored seeds [{prompt, score}, ...] to skip cold start scoring")
 
     # Output
     parser.add_argument("--incremental-json", type=str, default=None,
@@ -99,6 +109,8 @@ def main():
     logger.info(f"Total prompts: {args.n_cold_start + args.iterations}")
     logger.info(f"Eval size: {args.eval_size}, Split: {args.split}")
     logger.info(f"SONAR device: {args.sonar_device}")
+    if args.ur_std_low is not None:
+        logger.info(f"UR-TR std_low override: {args.ur_std_low}")
     logger.info(f"Seed: {args.seed}")
     logger.info("=" * 60)
 
@@ -154,30 +166,39 @@ def main():
             config=config,
         )
 
-    # 5. Load seed prompts
-    logger.info("Loading seed prompts...")
-    from rielbo_gsm8k.seed_prompts import get_seed_prompts
-    all_seeds = get_seed_prompts()
+    # 5. Load seed prompts and scores
+    if args.seed_cache:
+        logger.info(f"Loading pre-scored seeds from {args.seed_cache}")
+        with open(args.seed_cache) as f:
+            cached = json.load(f)
+        seed_prompts = [e["prompt"] for e in cached]
+        seed_scores = [e["score"] for e in cached]
+        logger.info(f"Loaded {len(seed_prompts)} cached seeds. Best: {max(seed_scores):.4f}")
 
-    # Use first n_cold_start prompts
-    seed_prompts = all_seeds[:args.n_cold_start]
-    logger.info(f"Using {len(seed_prompts)} seed prompts")
+        # Populate oracle cache so duplicates are detected during BO
+        import hashlib
+        for prompt, score in zip(seed_prompts, seed_scores):
+            h = hashlib.md5(prompt.encode()).hexdigest()
+            oracle._cache[h] = score
 
-    # 6. Score seed prompts
-    logger.info("Scoring seed prompts...")
-    seed_scores = []
-    for i, prompt in enumerate(seed_prompts):
-        score = oracle.score(prompt)
-        seed_scores.append(score)
-        logger.info(f"  Seed {i+1}/{len(seed_prompts)}: {score:.4f} | {prompt[:80]}")
-
-        # Save incrementally
         if incremental_saver is not None:
-            incremental_saver.save_prompt(
-                prompt=prompt,
-                score=score,
-                iteration=0,
-            )
+            for prompt, score in zip(seed_prompts, seed_scores):
+                incremental_saver.save_prompt(prompt=prompt, score=score, iteration=0)
+    else:
+        logger.info("Loading seed prompts...")
+        from rielbo_gsm8k.seed_prompts import get_seed_prompts
+        all_seeds = get_seed_prompts()
+        seed_prompts = all_seeds[:args.n_cold_start]
+        logger.info(f"Using {len(seed_prompts)} seed prompts")
+
+        logger.info("Scoring seed prompts...")
+        seed_scores = []
+        for i, prompt in enumerate(seed_prompts):
+            score = oracle.score(prompt)
+            seed_scores.append(score)
+            logger.info(f"  Seed {i+1}/{len(seed_prompts)}: {score:.4f} | {prompt[:80]}")
+            if incremental_saver is not None:
+                incremental_saver.save_prompt(prompt=prompt, score=score, iteration=0)
 
     seed_scores_tensor = torch.tensor(seed_scores, dtype=torch.float32)
     logger.info(f"Seed scoring done. Best: {max(seed_scores):.4f}")
@@ -187,6 +208,9 @@ def main():
     from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
 
     config = V2Config.from_preset(args.preset)
+    config.projection_type = args.projection
+    if args.ur_std_low is not None:
+        config.ur_std_low = args.ur_std_low
 
     # Use CPU for GP — 16D subspace is lightweight, keeps GPU free for vLLM
     gp_device = "cpu"
@@ -206,18 +230,47 @@ def main():
     # 8. Cold start
     optimizer.cold_start(seed_prompts, seed_scores_tensor)
 
-    # 9. Optimize
+    # 9. Optimize with diagnostics
     logger.info(f"Starting BO: {args.iterations} iterations")
 
+    import torch.nn.functional as F
     from tqdm import tqdm
     pbar = tqdm(range(args.iterations), desc="RieLBO-GSM8K")
     n_dup = 0
     n_decode_fail = 0
 
+    # Extended history for diagnostics
+    optimizer.history["round_trip_cos"] = []
+    optimizer.history["round_trip_l2"] = []
+    optimizer.history["mll"] = []
+    optimizer.history["prompt"] = []
+
+    def compute_round_trip_loss(prompt_text, x_opt):
+        """Encode decoded prompt back and measure reconstruction fidelity."""
+        if not prompt_text:
+            return 0.0, float("inf")
+        try:
+            with torch.no_grad():
+                re_emb = codec.encode([prompt_text])  # [1, 1024]
+            re_emb = re_emb.to(x_opt.device)
+            cos_sim = F.cosine_similarity(x_opt, re_emb, dim=-1).item()
+            l2_dist = (x_opt - re_emb).norm(dim=-1).item()
+            return cos_sim, l2_dist
+        except Exception as e:
+            logger.warning(f"Round trip loss computation failed: {e}")
+            return 0.0, float("inf")
+
     i = -1
     try:
         for i in pbar:
             result = optimizer.step()
+
+            # Round trip loss
+            prompt_text = result.get("smiles", "")
+            x_opt = result.get("x_opt")
+            rt_cos, rt_l2 = 0.0, float("inf")
+            if prompt_text and x_opt is not None:
+                rt_cos, rt_l2 = compute_round_trip_loss(prompt_text, x_opt)
 
             # Track history
             optimizer.history["iteration"].append(i)
@@ -233,18 +286,35 @@ def main():
                 optimizer.tr_length if optimizer.tr_length is not None else optimizer.trust_region
             )
             optimizer.history["n_restarts"].append(optimizer.n_restarts)
+            optimizer.history["round_trip_cos"].append(rt_cos)
+            optimizer.history["round_trip_l2"].append(rt_l2 if rt_l2 != float("inf") else None)
+            optimizer.history["mll"].append(result.get("mll"))
+            optimizer.history["prompt"].append(prompt_text[:120] if prompt_text else "")
 
             if result.get("is_decode_failure"):
                 n_decode_fail += 1
             if result["is_duplicate"]:
                 n_dup += 1
 
+            # Detailed per-iteration log
+            mll_str = f"{result.get('mll', 0):.2f}" if result.get("mll") is not None else "N/A"
+            tr_val = optimizer.tr_length if optimizer.tr_length is not None else optimizer.trust_region
+            logger.info(
+                f"[Iter {i+1:3d}] score={result['score']:.4f} best={optimizer.best_score:.4f} | "
+                f"GP: mean={result.get('gp_mean', 0):.3f} std={result.get('gp_std', 0):.3f} "
+                f"cos_nn={result.get('nearest_train_cos', 0):.3f} | "
+                f"RT: cos={rt_cos:.4f} l2={rt_l2:.2f} | "
+                f"TR={tr_val:.3f} rst={optimizer.n_restarts} mll={mll_str} | "
+                f"dup={n_dup} fail={n_decode_fail}"
+            )
+            if prompt_text and not result["is_duplicate"]:
+                logger.info(f"  prompt: {prompt_text}")
+
             # Save incrementally
             if incremental_saver is not None and not result["is_duplicate"]:
-                prompt = result.get("smiles", "")
-                if prompt:
+                if prompt_text:
                     incremental_saver.save_prompt(
-                        prompt=prompt,
+                        prompt=prompt_text,
                         score=result["score"],
                         iteration=i + 1,
                     )
@@ -252,6 +322,7 @@ def main():
             postfix = {
                 "best": f"{optimizer.best_score:.4f}",
                 "curr": f"{result['score']:.4f}",
+                "rt": f"{rt_cos:.3f}",
                 "dup": n_dup,
                 "fail": n_decode_fail,
             }
@@ -287,6 +358,20 @@ def main():
     logger.info(f"Prompts evaluated: {len(optimizer.smiles_observed)}")
     logger.info(f"Duplicates: {n_dup}, Decode failures: {n_decode_fail}")
     logger.info(f"GP restarts: {optimizer.n_restarts}")
+
+    # Round trip loss summary
+    rt_cos_vals = [v for v in optimizer.history["round_trip_cos"] if v > 0]
+    if rt_cos_vals:
+        logger.info(f"Round trip cosine: mean={np.mean(rt_cos_vals):.4f} "
+                     f"min={np.min(rt_cos_vals):.4f} max={np.max(rt_cos_vals):.4f}")
+
+    # GP diagnostics summary
+    if optimizer.diagnostic_history:
+        last_diag = optimizer.diagnostic_history[-1]
+        logger.info(f"Final GP: train_corr={last_diag['train_correlation']:.3f} "
+                     f"noise={last_diag['noise']:.2e} "
+                     f"lengthscale=[{last_diag['lengthscale_min']:.3f}, {last_diag['lengthscale_max']:.3f}]")
+
     logger.info("=" * 60)
 
     # 11. Save results
@@ -317,6 +402,7 @@ def main():
         },
         "mean_norm": optimizer.mean_norm,
         "seed_scores": seed_scores,
+        "gp_diagnostic_history": optimizer.diagnostic_history,
         "timestamp": timestamp,
     }
 

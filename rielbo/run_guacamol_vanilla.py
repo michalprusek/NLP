@@ -54,7 +54,6 @@ def main():
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    # Load components
     logger.info("Loading codec and oracle...")
     from shared.guacamol.codec import SELFIESVAECodec
     from shared.guacamol.data import load_guacamol_data
@@ -63,14 +62,12 @@ def main():
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
     oracle = GuacaMolOracle(task_id=args.task_id)
 
-    # Load cold start
     logger.info("Loading cold start data...")
     smiles_list, scores, _ = load_guacamol_data(
         n_samples=args.n_cold_start,
         task_id=args.task_id,
     )
 
-    # Create optimizer
     from rielbo.vanilla_bo import VanillaBO
 
     optimizer = VanillaBO(
@@ -85,11 +82,9 @@ def main():
         seed=args.seed,
     )
 
-    # Run
     optimizer.cold_start(smiles_list, scores)
     optimizer.optimize(n_iterations=args.iterations, log_interval=10)
 
-    # Save
     results_dir = "rielbo/results/guacamol_vanilla"
     os.makedirs(results_dir, exist_ok=True)
 

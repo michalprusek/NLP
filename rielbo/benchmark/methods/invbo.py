@@ -26,28 +26,20 @@ invbo_path = Path(__file__).parent.parent.parent.parent / "invbo_ref"
 if str(invbo_path) not in sys.path:
     sys.path.insert(0, str(invbo_path))
 
-# Monkey-patch InvBO's ppgpr to fix botorch API (mvn= → distribution=)
+# Monkey-patch InvBO's ppgpr: old API used GPyTorchPosterior(mvn=dist), new uses distribution=dist
 import invbo.utils.bo_utils.ppgpr as invbo_ppgpr
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 
 
-def _fixed_posterior_gpmodel(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
+def _fixed_posterior(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
     self.eval()
     self.likelihood.eval()
     dist = self.likelihood(self(X))
     return GPyTorchPosterior(distribution=dist)
 
 
-def _fixed_posterior_gpmodeldkl(self, X, output_indices=None, observation_noise=False, *args, **kwargs):
-    self.eval()
-    self.likelihood.eval()
-    dist = self.likelihood(self(X))
-    return GPyTorchPosterior(distribution=dist)
-
-
-# Apply patches
-invbo_ppgpr.GPModel.posterior = _fixed_posterior_gpmodel
-invbo_ppgpr.GPModelDKL.posterior = _fixed_posterior_gpmodeldkl
+invbo_ppgpr.GPModel.posterior = _fixed_posterior
+invbo_ppgpr.GPModelDKL.posterior = _fixed_posterior
 
 from invbo.invbo import InvBOState
 from invbo.latent_space_objective import LatentSpaceObjective
@@ -73,12 +65,9 @@ class SharedCodecObjective(LatentSpaceObjective):
         self.codec = codec
         self.oracle = oracle
         self.dim = 256
-
-        # InvBO inversion() needs these:
-        self.smiles_to_selfies: dict[str, str] = {}
+        self.smiles_to_selfies: dict[str, str] = {}  # Required by InvBO inversion()
         self.dataobj = codec.dataset  # SELFIESDataset for tokenization
 
-        # Initialize parent (calls initialize_vae)
         super().__init__(
             xs_to_scores_dict=xs_to_scores_dict or {},
             num_calls=num_calls,
@@ -86,9 +75,7 @@ class SharedCodecObjective(LatentSpaceObjective):
         )
 
     def initialize_vae(self):
-        """Use shared codec's raw VAE model."""
-        # InvBO's inversion() accesses self.vae.encode() and self.vae.decode()
-        # with token-level interface, so we expose the raw model
+        """Expose raw VAE model for InvBO's token-level inversion interface."""
         self.vae = self.codec.model
 
     def vae_decode(self, z: torch.Tensor) -> list[str]:
@@ -110,14 +97,9 @@ class SharedCodecObjective(LatentSpaceObjective):
             return np.nan
 
     def vae_forward(self, xs_batch: list[str]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Encode SMILES to latent codes.
-
-        Returns (z, sigma, recon_loss, kl_div) — for frozen VAE,
-        we return zeros for loss terms.
-        """
+        """Encode SMILES to latent codes. Returns (z, sigma, recon_loss, kl_div) with zero losses (frozen VAE)."""
         z = self.codec.encode(xs_batch)
         zero = torch.tensor(0.0, device=z.device)
-        # Return (z, sigma, recon_loss_per_sample, kl_div)
         recon_loss = torch.zeros(len(xs_batch), device=z.device)
         return z, zero, recon_loss, zero
 
@@ -169,7 +151,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
         self.gamma = gamma
         self.delta = delta
 
-        # InvBO state (initialized in cold_start)
         self.invbo_state: InvBOState | None = None
         self.objective: SharedCodecObjective | None = None
         self.task_id = getattr(oracle, "task_id", "unknown")
@@ -179,14 +160,12 @@ class InvBOBenchmark(BaseBenchmarkMethod):
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
-        # Create objective
         self.objective = SharedCodecObjective(
             codec=self.codec,
             oracle=self.oracle,
             task_id=self.task_id,
         )
 
-        # Pre-populate smiles_to_selfies for inversion
         import selfies as sf
         n_sf_failures = 0
         for smi in smiles_list:
@@ -200,12 +179,10 @@ class InvBOBenchmark(BaseBenchmarkMethod):
         if n_sf_failures > 0:
             logger.warning(f"InvBO: {n_sf_failures}/{len(smiles_list)} SELFIES encodings failed in cold start")
 
-        # Encode initial data
         train_x = list(smiles_list)
         train_y = scores.unsqueeze(-1).float().cpu()
         train_z = self.codec.encode(smiles_list).cpu()
 
-        # Create InvBO state
         self.invbo_state = InvBOState(
             objective=self.objective,
             train_x=train_x,
@@ -225,7 +202,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
             delta=self.delta,
         )
 
-        # Sync state
         self.best_score = self.invbo_state.best_score_seen
         if isinstance(self.best_score, torch.Tensor):
             self.best_score = self.best_score.item()
@@ -249,7 +225,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
             prev_best = prev_best.item()
         prev_n = len(self.invbo_state.train_x)
 
-        # Run inversion when progress stalls (skip e2e VAE training)
         if self.invbo_state.progress_fails_since_last_e2e >= self.e2e_freq:
             try:
                 self.invbo_state.inversion()
@@ -258,7 +233,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 raise
             except Exception as e:
                 logger.warning(f"InvBO inversion failed: {e}")
-                # Continue incrementing counter to detect systematic inversion failures
                 self.invbo_state.progress_fails_since_last_e2e += 1
                 if self.invbo_state.progress_fails_since_last_e2e == self.e2e_freq * 3:
                     logger.error(
@@ -266,7 +240,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                         f"consecutive times — inversion may be systematically broken"
                     )
 
-        # Update surrogate model (GP only)
         try:
             self.invbo_state.update_surrogate_model()
         except torch.cuda.OutOfMemoryError:
@@ -278,7 +251,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 is_duplicate=True, is_valid=False,
             )
 
-        # Acquisition (potential-aware TS with trust region)
         try:
             self.invbo_state.acquisition()
         except torch.cuda.OutOfMemoryError:
@@ -290,11 +262,9 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 is_duplicate=True, is_valid=False,
             )
 
-        # Handle trust region restart
         if self.invbo_state.tr_state.restart_triggered:
             self.invbo_state.initialize_tr_state()
 
-        # Get results
         n_new = len(self.invbo_state.train_x) - prev_n
         current_best = self.invbo_state.best_score_seen
         if isinstance(current_best, torch.Tensor):
@@ -308,7 +278,6 @@ class InvBOBenchmark(BaseBenchmarkMethod):
         if n_new > 0:
             current_score = self.invbo_state.train_y[-1].item()
             current_smiles = self.invbo_state.train_x[-1]
-            # Update smiles_to_selfies for new molecules
             import selfies as sf
             try:
                 s = sf.encoder(current_smiles)
@@ -333,7 +302,7 @@ class InvBOBenchmark(BaseBenchmarkMethod):
                 "n_new_this_step": n_new,
                 "oracle_calls": self.objective.num_calls,
                 "progress_fails": self.invbo_state.progress_fails_since_last_e2e,
-                "n_e2e_updates": self.invbo_state.tot_num_e2e_updates,  # Vestigial: always 0 (VAE frozen)
+                "n_e2e_updates": self.invbo_state.tot_num_e2e_updates,
             },
         )
 

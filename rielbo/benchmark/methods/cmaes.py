@@ -51,7 +51,6 @@ class CMAESBenchmark(BaseBenchmarkMethod):
         self.sigma0 = sigma0
         self.popsize = popsize
 
-        # CMA-ES internals
         self._es: cma.CMAEvolutionStrategy | None = None
         self._pending_solutions: list | None = None
         self._pending_idx: int = 0

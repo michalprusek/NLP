@@ -1,34 +1,8 @@
 """Vanilla BO with Hvarfner's dimension-scaled lengthscale priors.
 
-Implements the approach from:
-  Hvarfner et al. (ICML 2024): "Vanilla Bayesian Optimization Performs Great
-  in High Dimensions"
-
-Key idea: Standard GP priors push lengthscales too short in high D, causing
-overfitting. BoTorch 0.16+ already uses RBF + LogNormal(√2 + log(D)/2, √3)
-with ARD as default. This module simply uses those defaults with:
-- Proper [0,1]^D min-max input normalization
-- BoTorch default GP (RBF + Hvarfner priors + Standardize outcome)
-- TuRBO-style trust region for local exploration
-- Thompson Sampling acquisition
-
-Differences from TuRBO baseline:
-- Hvarfner's LogNormal lengthscale prior (vs old Gamma default)
-- RBF kernel (vs Matern-5/2)
-- [0,1]^D normalization (vs z-score)
-
-Differences from Subspace BO:
-- No random projection — GP operates in full 256D
-- Relies on the lengthscale prior to handle dimensionality
-
-Usage:
-    from rielbo.vanilla_bo import VanillaBO
-
-    optimizer = VanillaBO(
-        codec=codec,
-        oracle=oracle,
-        input_dim=256,
-    )
+Uses BoTorch 0.16+ defaults (RBF + LogNormal + ARD + Standardize) with
+[0,1]^D min-max normalization and TuRBO-style trust region. No subspace
+projection -- GP operates in full 256D.
 """
 
 import logging
@@ -84,21 +58,18 @@ class VanillaBO:
         self.seed = seed
         self.verbose = verbose
 
-        # Trust region
         self.failure_tolerance = failure_tolerance or max(5, input_dim // 20)
         self.success_tolerance = success_tolerance
         self.length_min = length_min
         self.length_max = length_max
 
-        # Trust region state
         self._tr_length = trust_region
         self._tr_success_count = 0
         self._tr_failure_count = 0
         self._tr_restart_count = 0
 
-        # Data
-        self.train_Z = None  # Raw latent vectors [N, D]
-        self.train_Y = None  # Scores [N]
+        self.train_Z = None
+        self.train_Y = None
         self.smiles_observed = []
         self.best_score = float("-inf")
         self.best_smiles = ""
@@ -107,11 +78,8 @@ class VanillaBO:
         self.iteration = 0
         self.fallback_count = 0
 
-        # [0,1]^D normalization bounds (set from cold start data)
-        self._z_min = None  # [D]
-        self._z_max = None  # [D]
-
-        # GP
+        self._z_min = None
+        self._z_max = None
         self.gp = None
 
         self.history = {
@@ -124,11 +92,9 @@ class VanillaBO:
             "tr_length": [],
         }
 
-        # GP diagnostics
         self.gp_diagnostics = GPDiagnostics(verbose=True)
         self.diagnostic_history = []
 
-        # Compute Hvarfner prior params for logging
         ls_mu = math.sqrt(2) + math.log(input_dim) / 2
         ls_sigma = math.sqrt(3)
         logger.info(
@@ -146,19 +112,11 @@ class VanillaBO:
         return z_norm * (self._z_max - self._z_min) + self._z_min
 
     def _fit_gp(self):
-        """Fit GP using BoTorch defaults on [0,1]^D normalized data.
-
-        BoTorch 0.16+ default SingleTaskGP uses:
-        - RBF kernel with ARD
-        - LogNormal(√2 + log(D)/2, √3) lengthscale prior
-        - Standardize() outcome transform (Y normalization)
-        - No ScaleKernel wrapper
-        """
+        """Fit GP using BoTorch defaults on [0,1]^D normalized data."""
         Z_norm = self._to_unit_cube(self.train_Z).double()
         Y = self.train_Y.double().unsqueeze(-1)
 
         try:
-            # Use BoTorch defaults — already has Hvarfner priors
             self.gp = SingleTaskGP(Z_norm, Y).to(self.device)
 
             mll = ExactMarginalLogLikelihood(self.gp.likelihood, self.gp)
@@ -228,9 +186,7 @@ class VanillaBO:
                 z_opt = z_opt.squeeze(0).float()
 
             elif self.acqf == "ei":
-                # BoTorch Standardize handles Y transform internally
-                best_f = self.best_score
-                ei = qExpectedImprovement(self.gp, best_f=best_f)
+                ei = qExpectedImprovement(self.gp, best_f=self.best_score)
                 with torch.no_grad():
                     ei_vals = ei(z_cand_norm.double().unsqueeze(-2))
                 best_idx = ei_vals.argmax()
@@ -249,13 +205,11 @@ class VanillaBO:
             else:
                 raise ValueError(f"Unknown acquisition function: {self.acqf}")
 
-            # Diagnostics (in original Y scale since Standardize is applied)
             with torch.no_grad():
                 post = self.gp.posterior(z_opt.double())
                 diag["gp_mean"] = post.mean.item()
                 diag["gp_std"] = post.variance.sqrt().item()
 
-            # Denormalize back to original latent space
             z_opt_raw = self._from_unit_cube(z_opt.float())
             return z_opt_raw, diag
 
@@ -313,14 +267,12 @@ class VanillaBO:
         self.train_Y = scores.to(self.device).float()
         self.smiles_observed = smiles_list.copy()
 
-        # Compute [0,1] normalization bounds from cold start data
-        # Add small margin to avoid exact 0/1 at boundaries
+        # [0,1] normalization bounds with 5% margin
         self._z_min = embeddings.min(dim=0).values
         self._z_max = embeddings.max(dim=0).values
         margin = (self._z_max - self._z_min) * 0.05
         self._z_min = self._z_min - margin
         self._z_max = self._z_max + margin
-        # Prevent zero-range dimensions
         zero_range = (self._z_max - self._z_min).abs() < 1e-8
         self._z_max[zero_range] = self._z_min[zero_range] + 1.0
 
@@ -329,7 +281,6 @@ class VanillaBO:
         self.best_smiles = smiles_list[best_idx]
         self.best_z = self.train_Z[best_idx].clone()
 
-        # Initial GP fit
         self._fit_gp()
 
         logger.info(
@@ -340,15 +291,11 @@ class VanillaBO:
     def step(self) -> dict:
         """One BO iteration."""
         self.iteration += 1
-
-        # Refit GP
         self._fit_gp()
 
-        # Optimize acquisition
         z_opt, diag = self._optimize_acquisition()
         diag["tr_length"] = self._tr_length
 
-        # Decode
         smiles_list = self.codec.decode(z_opt)
         smiles = smiles_list[0] if smiles_list else ""
 
@@ -364,13 +311,9 @@ class VanillaBO:
                 "smiles": smiles, "is_duplicate": True, **diag,
             }
 
-        # Evaluate
         score = self.oracle.score(smiles)
 
-        # Update training data
         self.train_Z = torch.cat([self.train_Z, z_opt], dim=0)
-
-        # Update normalization bounds to cover new data
         self._z_min = torch.min(self._z_min, z_opt.squeeze() - (self._z_max - self._z_min) * 0.05)
         self._z_max = torch.max(self._z_max, z_opt.squeeze() + (self._z_max - self._z_min) * 0.05)
 
@@ -380,8 +323,7 @@ class VanillaBO:
         ])
         self.smiles_observed.append(smiles)
 
-        # Update trust region BEFORE best_score update so the comparison
-        # score > self.best_score uses the pre-update value
+        # Update trust region before best_score so comparison uses pre-update value
         self._update_trust_region(score)
 
         if score > self.best_score:

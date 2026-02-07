@@ -242,15 +242,13 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         self.max_target_dim = max_target_dim
         self.dtype = torch.double
 
-        # BAxUS internals (initialized in cold_start)
         self.state: BaxusState | None = None
-        self.S: torch.Tensor | None = None  # Embedding matrix
+        self.S: torch.Tensor | None = None  # Embedding matrix: target_dim x input_dim
         self.X_input: torch.Tensor | None = None  # Full-D normalized points
         self.X_target: torch.Tensor | None = None  # Low-D embedded points
-        self.Y: torch.Tensor | None = None  # Scores
+        self.Y: torch.Tensor | None = None
 
-        # Normalization bounds
-        self._z_min: torch.Tensor | None = None
+        self._z_min: torch.Tensor | None = None  # Input space bounds
         self._z_max: torch.Tensor | None = None
         self._t_min: torch.Tensor | None = None  # Target space bounds
         self._t_max: torch.Tensor | None = None
@@ -285,19 +283,14 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
 
-        # Encode SMILES to latent vectors
-        Z = self.codec.encode(smiles_list).to(self.device)  # [N, 256]
-        Y = scores.to(self.device).unsqueeze(-1).to(self.dtype)  # [N, 1]
+        Z = self.codec.encode(smiles_list).to(self.device)
+        Y = scores.to(self.device).unsqueeze(-1).to(self.dtype)
 
-        # Compute normalization bounds for input space
         self._z_min = Z.min(dim=0).values
         self._z_max = Z.max(dim=0).values
-
-        # Normalize to [-1, 1]^D
         Z_norm = self._normalize(Z).to(self.dtype)
 
-        # Initialize BAxUS state
-        input_dim = Z.shape[1]  # 256
+        input_dim = Z.shape[1]
         self.state = BaxusState(
             dim=input_dim, eval_budget=self.eval_budget,
             max_target_dim=self.max_target_dim,
@@ -307,20 +300,15 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             f"n_splits={self.state.n_splits}"
         )
 
-        # Create initial embedding matrix
         self.S = _embedding_matrix(
             input_dim, self.state.target_dim, self.device, self.dtype
         )
 
-        # Store full-D normalized input
         self.X_input = Z_norm
-
-        # Project to target-D and normalize target space to [-1, 1]
         self._update_target_bounds()
         self.X_target = self._normalize_target(Z_norm @ self.S.T)
         self.Y = Y
 
-        # Sync state
         best_idx = Y.argmax()
         self.best_score = Y[best_idx].item()
         self.best_smiles = smiles_list[best_idx]
@@ -332,7 +320,6 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         """Execute one BAxUS optimization step."""
         self._iteration += 1
 
-        # Fit GP in normalized target space (SingleTaskGP handles Y standardization)
         try:
             likelihood = GaussianLikelihood(noise_constraint=Interval(1e-8, 1e-3))
             model = SingleTaskGP(
@@ -363,7 +350,6 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
 
         model.eval()
 
-        # Generate candidate in normalized target space [-1, 1]^d_target
         X_next_target_norm = _baxus_candidate(
             state=self.state,
             model=model,
@@ -374,19 +360,11 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
             dtype=self.dtype,
         )
 
-        # Denormalize target → raw target → input space
+        # Denormalize target -> raw target -> input space (lossy back-projection)
         X_next_target_raw = self._denormalize_target(X_next_target_norm)
-        # Back-project: target → input space using S as direct back-projection
-        # (standard BAxUS approach; lossy since multiple input dims map to each target dim)
-        X_next_input = X_next_target_raw @ self.S
-
-        # Clamp to [-1, 1] input space
-        X_next_input = X_next_input.clamp(-1.0, 1.0)
-
-        # Denormalize to original latent space
+        X_next_input = (X_next_target_raw @ self.S).clamp(-1.0, 1.0)
         z_full = self._denormalize(X_next_input.float())
 
-        # Decode to SMILES
         try:
             smiles = self.codec.decode(z_full)[0]
         except Exception as e:
@@ -399,7 +377,6 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
                 extra={"target_dim": self.state.target_dim},
             )
 
-        # Check duplicate
         if not smiles or smiles in self.smiles_set:
             self._handle_failure()
             return StepResult(
@@ -409,28 +386,22 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
                 extra={"target_dim": self.state.target_dim},
             )
 
-        # Score
         score = self.oracle.score(smiles)
         self.smiles_set.add(smiles)
         self.n_evaluated += 1
 
-        # Update BAxUS state
         Y_next = torch.tensor([[score]], dtype=self.dtype, device=self.device)
         self.state = _update_baxus_state(self.state, Y_next)
 
-        # Add to training data (input space + normalized target space)
         self.X_input = torch.cat([self.X_input, X_next_input], dim=0)
-        # Update normalization bounds to include new point, then re-normalize all
         self._update_target_bounds()
         self.X_target = self._normalize_target(self.X_input @ self.S.T)
         self.Y = torch.cat([self.Y, Y_next], dim=0)
 
-        # Update best
         if score > self.best_score:
             self.best_score = score
             self.best_smiles = smiles
 
-        # Handle subspace expansion
         if self.state.restart_triggered:
             self._expand_subspace()
 
@@ -461,7 +432,6 @@ class BAxUSBenchmark(BaseBenchmarkMethod):
         self.state.restart_triggered = False
 
         if self.state.target_dim >= min(self.state.max_target_dim, self.state.dim):
-            # At cap or full dimensional — just reset TR
             self.state.length = self.state.length_init
             self.state.failure_counter = 0
             self.state.success_counter = 0

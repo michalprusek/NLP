@@ -110,52 +110,24 @@ def plot_on_ax(ax, task: str, show_legend: bool = True):
     """Plot convergence curves for one task onto a given axes."""
     plotted = []
 
-    # RieLBO (v2 geodesic)
-    rielbo = load_rielbo(task)
-    if rielbo:
-        iters, mean, std = get_convergence_curves(rielbo)
-        if len(iters) > 0:
-            c = METHOD_COLORS["rielbo"]
-            label = f"{METHOD_LABELS['rielbo']} (n={len(rielbo)})"
-            ax.plot(iters, mean, color=c, linewidth=2.5, label=label)
-            ax.fill_between(iters, mean - std, mean + std, alpha=0.15, color=c)
-            plotted.append(("rielbo", rielbo))
+    # Load results: rielbo uses a special loader, others use load_full_results
+    method_results = [("rielbo", load_rielbo(task))]
+    for method in ("lolbo", "turbo", "baxus", "cmaes", "invbo"):
+        method_results.append((method, load_full_results(method, task)))
 
-    # LOL-BO
-    lolbo = load_full_results("lolbo", task)
-    if lolbo:
-        iters, mean, std = get_convergence_curves(lolbo)
-        if len(iters) > 0:
-            c = METHOD_COLORS["lolbo"]
-            label = f"{METHOD_LABELS['lolbo']} (n={len(lolbo)})"
-            ax.plot(iters, mean, color=c, linewidth=2, label=label)
-            ax.fill_between(iters, mean - std, mean + std, alpha=0.15, color=c)
-            plotted.append(("lolbo", lolbo))
+    for method, results in method_results:
+        if not results:
+            continue
+        iters, mean, std = get_convergence_curves(results)
+        if len(iters) == 0:
+            continue
+        c = METHOD_COLORS[method]
+        lw = 2.5 if method == "rielbo" else 2
+        label = f"{METHOD_LABELS[method]} (n={len(results)})"
+        ax.plot(iters, mean, color=c, linewidth=lw, label=label)
+        ax.fill_between(iters, mean - std, mean + std, alpha=0.15, color=c)
+        plotted.append((method, results))
 
-    # TuRBO
-    turbo = load_full_results("turbo", task)
-    if turbo:
-        iters, mean, std = get_convergence_curves(turbo)
-        if len(iters) > 0:
-            c = METHOD_COLORS["turbo"]
-            label = f"{METHOD_LABELS['turbo']} (n={len(turbo)})"
-            ax.plot(iters, mean, color=c, linewidth=2, label=label)
-            ax.fill_between(iters, mean - std, mean + std, alpha=0.15, color=c)
-            plotted.append(("turbo", turbo))
-
-    # BAxUS, CMA-ES, InvBO
-    for method in ("baxus", "cmaes", "invbo"):
-        results = load_full_results(method, task)
-        if results:
-            iters, mean, std = get_convergence_curves(results)
-            if len(iters) > 0:
-                c = METHOD_COLORS[method]
-                label = f"{METHOD_LABELS[method]} (n={len(results)})"
-                ax.plot(iters, mean, color=c, linewidth=2, label=label)
-                ax.fill_between(iters, mean - std, mean + std, alpha=0.15, color=c)
-                plotted.append((method, results))
-
-    # Cold start line
     cold_start_scores = []
     for _, results in plotted:
         for r in results:
@@ -242,8 +214,7 @@ def plot_v2_ablation():
                     label=f"{label} (n={len(results)})")
             ax.fill_between(iters, mean - std, mean + std, alpha=0.12, color=color)
 
-        # Also overlay LOL-BO and TuRBO for reference
-        for method, (c, ls) in [("lolbo", ("#E65100", "-")), ("turbo", ("#2E7D32", "-"))]:
+        for method, c in [("lolbo", "#E65100"), ("turbo", "#2E7D32")]:
             results = load_full_results(method, task)
             if not results:
                 continue
@@ -253,7 +224,7 @@ def plot_v2_ablation():
                         label=f"{METHOD_LABELS[method]} (n={len(results)})")
 
         task_name = TASK_NAMES.get(task, task.upper())
-        ax.set_title(f"{task_name}", fontweight="bold")
+        ax.set_title(task_name, fontweight="bold")
         ax.set_xlabel("BO Iteration")
         ax.set_ylabel("Best Score")
         ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
@@ -274,11 +245,9 @@ def print_summary_table():
     all_tasks = set()
     if FULL_DIR.exists():
         for f in FULL_DIR.glob("*.json"):
-            if f.suffix == '.json':
-                parts = f.stem.split("_")
-                all_tasks.add(parts[1])
+            parts = f.stem.split("_")
+            all_tasks.add(parts[1])
 
-    # Also add tasks from v2 results
     if V2_DIR.exists():
         for f in V2_DIR.glob("v2_geodesic_*_s*.json"):
             parts = f.stem.split("_")
@@ -302,32 +271,29 @@ def print_summary_table():
     for task in tasks:
         row = {}
 
-        # RieLBO V2
         rielbo = load_rielbo(task)
         if rielbo:
             scores = [r["best_score"] for r in rielbo]
             row["rielbo"] = (np.mean(scores), np.std(scores), len(scores))
 
-        # Other methods from full benchmark dir
         for method in ["lolbo", "turbo", "baxus", "cmaes", "invbo"]:
             results = load_full_results(method, task)
             if results:
                 scores = [r["best_score"] for r in results]
                 row[method] = (np.mean(scores), np.std(scores), len(scores))
 
-        def fmt(key, width=18):
+        def fmt(key):
             if key not in row:
-                return "\u2014".center(width)
+                return "\u2014".center(18)
             m, s, n = row[key]
-            return f"{m:.4f}\u00b1{s:.3f}({n})".center(width)
+            return f"{m:.4f}\u00b1{s:.3f}({n})".center(18)
 
-        # Find winner
         best_method = max(row.keys(), key=lambda k: row[k][0]) if row else "\u2014"
         winner = METHOD_LABELS.get(best_method, best_method)
 
         parts = [f"{task:<8}"]
         for m in all_methods:
-            parts.append(f"{fmt(m)}")
+            parts.append(fmt(m))
         parts.append(f"{winner:>12}")
         print(" ".join(parts))
 
@@ -335,7 +301,6 @@ def print_summary_table():
 
 
 def main():
-    # Discover all tasks from the full benchmark + v2
     all_tasks = set()
     if FULL_DIR.exists():
         for f in FULL_DIR.glob("*.json"):
@@ -343,26 +308,18 @@ def main():
             if len(parts) >= 2:
                 all_tasks.add(parts[1])
 
-    # Always include adip
     all_tasks.add("adip")
-
-    # Skip valt (all zeros — model can't produce SMARTS patterns)
     tasks = sorted(t for t in all_tasks if t != "valt")
 
     print(f"Tasks to plot: {tasks}")
 
-    # Individual plots
     for task in tasks:
         plot_individual(task)
 
-    # Combined multi-panel
     if len(tasks) > 1:
         plot_combined(tasks)
 
-    # V2 ablation (adip + med2)
     plot_v2_ablation()
-
-    # Summary table
     print_summary_table()
 
     print(f"\nAll plots saved to {OUTPUT_DIR}/")

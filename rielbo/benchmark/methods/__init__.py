@@ -7,6 +7,8 @@ from rielbo.benchmark.methods.vanilla import VanillaBOBenchmark
 from rielbo.benchmark.methods.baxus import BAxUSBenchmark
 from rielbo.benchmark.methods.cmaes import CMAESBenchmark
 from rielbo.benchmark.methods.invbo import InvBOBenchmark
+from rielbo.benchmark.methods.adas import AdaSBOTRBenchmark, AdaSBOStagBenchmark
+from rielbo.benchmark.methods.random_sampling import RandomSamplingBenchmark
 
 # Registry of available methods
 METHODS = {
@@ -17,6 +19,9 @@ METHODS = {
     "baxus": BAxUSBenchmark,
     "cmaes": CMAESBenchmark,
     "invbo": InvBOBenchmark,
+    "adas_tr": AdaSBOTRBenchmark,
+    "adas_stag": AdaSBOStagBenchmark,
+    "random": RandomSamplingBenchmark,
 }
 
 
@@ -30,5 +35,7 @@ def get_method(name: str):
 __all__ = [
     "SubspaceBOBenchmark", "TuRBOBenchmark", "LOLBOBenchmark", "VanillaBOBenchmark",
     "BAxUSBenchmark", "CMAESBenchmark", "InvBOBenchmark",
+    "AdaSBOTRBenchmark", "AdaSBOStagBenchmark",
+    "RandomSamplingBenchmark",
     "METHODS", "get_method",
 ]

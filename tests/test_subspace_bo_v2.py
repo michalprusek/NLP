@@ -381,7 +381,7 @@ class TestAdaptiveTrustRegion:
         from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
         from unittest.mock import MagicMock
 
-        config = V2Config.from_preset("geodesic")
+        config = V2Config(geodesic_tr=True, adaptive_tr=True)
         opt = object.__new__(SphericalSubspaceBOv2)
         opt.config = config
         opt.verbose = False
@@ -523,6 +523,353 @@ class TestKernelFactory:
         assert isinstance(kernel.base_kernel, ProductSphereKernel)
 
 
+class TestURTR:
+    """Test Uncertainty-Responsive Trust Region (UR-TR)."""
+
+    def _make_optimizer_with_ur_tr(self, **overrides):
+        """Create a minimal optimizer with UR-TR for testing."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+        from unittest.mock import MagicMock
+
+        config_kwargs = {"geodesic_tr": True, "ur_tr": True}
+        config_kwargs.update(overrides)
+        config = V2Config(**config_kwargs)
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.verbose = False
+        opt.seed = 42
+        opt.trust_region = 0.8
+        opt.input_dim = 256
+        opt._current_dim = 16
+        opt.device = "cpu"
+        opt._ur_radius = config.geodesic_max_angle * 0.8  # 0.4
+        opt._ur_collapse_count = 0
+        opt._ur_n_rotations = 0
+        opt._prev_gp_std = 1.0
+        opt.gp = None  # No GP → falls back to absolute thresholds
+        opt.train_U = None
+        opt.train_V = None
+        opt._init_projection = MagicMock()
+        opt._fit_gp = MagicMock()
+        return opt
+
+    def test_expand_on_low_std(self):
+        """UR-TR should expand radius when GP std is below ur_std_low."""
+        opt = self._make_optimizer_with_ur_tr()
+        initial_radius = opt._ur_radius
+
+        opt._update_ur_tr(gp_std=0.01)  # Below ur_std_low (0.05)
+
+        assert opt._ur_radius > initial_radius
+        expected = initial_radius * opt.config.ur_expand_factor
+        assert abs(opt._ur_radius - expected) < 1e-8
+
+    def test_shrink_on_high_std(self):
+        """UR-TR should shrink radius when GP std is above ur_std_high."""
+        opt = self._make_optimizer_with_ur_tr()
+        initial_radius = opt._ur_radius
+
+        opt._update_ur_tr(gp_std=0.3)  # Above ur_std_high (0.15)
+
+        assert opt._ur_radius < initial_radius
+        expected = initial_radius * opt.config.ur_shrink_factor
+        assert abs(opt._ur_radius - expected) < 1e-8
+
+    def test_no_change_in_normal_range(self):
+        """UR-TR should keep radius when GP std is in normal range."""
+        opt = self._make_optimizer_with_ur_tr()
+        initial_radius = opt._ur_radius
+
+        opt._update_ur_tr(gp_std=0.08)  # Between ur_std_low and ur_std_high
+
+        assert abs(opt._ur_radius - initial_radius) < 1e-8
+
+    def test_radius_capped_at_max(self):
+        """Radius should not exceed ur_tr_max."""
+        opt = self._make_optimizer_with_ur_tr()
+        opt._ur_radius = opt.config.ur_tr_max - 0.01
+
+        opt._update_ur_tr(gp_std=0.01)  # trigger expand
+
+        assert opt._ur_radius <= opt.config.ur_tr_max + 1e-8
+
+    def test_radius_capped_at_min(self):
+        """Radius should not go below ur_tr_min."""
+        opt = self._make_optimizer_with_ur_tr()
+        opt._ur_radius = opt.config.ur_tr_min + 0.01
+
+        opt._update_ur_tr(gp_std=0.5)  # trigger shrink
+
+        assert opt._ur_radius >= opt.config.ur_tr_min - 1e-8
+
+    def test_relative_thresholds_with_gp(self):
+        """With ur_relative=True and a GP, thresholds scale by noise_std."""
+        from unittest.mock import MagicMock
+
+        opt = self._make_optimizer_with_ur_tr(ur_relative=True)
+        initial_radius = opt._ur_radius
+
+        # Mock GP with noise_var = 4.0 → noise_std = 2.0
+        mock_gp = MagicMock()
+        mock_gp.likelihood.noise.item.return_value = 4.0
+        opt.gp = mock_gp
+
+        # Effective ur_std_low = 0.05 * 2.0 = 0.10
+        # gp_std=0.09 is below effective threshold → should expand
+        opt._update_ur_tr(gp_std=0.09)
+
+        assert opt._ur_radius > initial_radius
+
+    def test_relative_thresholds_no_expand_above_scaled(self):
+        """With ur_relative, values above scaled threshold should not expand."""
+        from unittest.mock import MagicMock
+
+        opt = self._make_optimizer_with_ur_tr(ur_relative=True)
+        initial_radius = opt._ur_radius
+
+        # Mock GP with noise_var = 4.0 → noise_std = 2.0
+        mock_gp = MagicMock()
+        mock_gp.likelihood.noise.item.return_value = 4.0
+        opt.gp = mock_gp
+
+        # Effective ur_std_low = 0.05 * 2.0 = 0.10
+        # gp_std=0.12 is above effective low but below effective high (0.15*2=0.30)
+        opt._update_ur_tr(gp_std=0.12)
+
+        assert abs(opt._ur_radius - initial_radius) < 1e-8  # No change
+
+    def test_absolute_thresholds_when_relative_disabled(self):
+        """With ur_relative=False, thresholds are used directly."""
+        opt = self._make_optimizer_with_ur_tr(ur_relative=False)
+        initial_radius = opt._ur_radius
+
+        opt._update_ur_tr(gp_std=0.01)  # Below absolute ur_std_low (0.05)
+
+        assert opt._ur_radius > initial_radius
+
+    def test_collapse_count_increments(self):
+        """Collapse count should increment when gp_std < ur_std_collapse."""
+        opt = self._make_optimizer_with_ur_tr()
+        opt._ur_collapse_count = 0
+
+        opt._update_ur_tr(gp_std=0.001)  # Below ur_std_collapse (0.005)
+
+        assert opt._ur_collapse_count == 1
+
+    def test_collapse_count_resets_on_normal_std(self):
+        """Collapse count should reset when gp_std is in normal range."""
+        opt = self._make_optimizer_with_ur_tr()
+        opt._ur_collapse_count = 5
+
+        opt._update_ur_tr(gp_std=0.08)  # Normal range
+
+        assert opt._ur_collapse_count == 0
+
+    def test_rotation_triggers_on_sustained_collapse(self):
+        """Rotation should trigger after ur_collapse_patience consecutive collapses."""
+        opt = self._make_optimizer_with_ur_tr(ur_collapse_patience=3)
+        opt._ur_collapse_count = 0
+        opt._ur_n_rotations = 0
+
+        for _ in range(3):
+            opt._update_ur_tr(gp_std=0.001)
+
+        assert opt._ur_n_rotations == 1
+        assert opt._ur_collapse_count == 0  # Reset after rotation
+
+    def test_rotation_resets_radius(self):
+        """Rotation should reset radius to initial value."""
+        opt = self._make_optimizer_with_ur_tr(ur_collapse_patience=1)
+        opt._ur_radius = 0.01  # Very small
+        opt._ur_collapse_count = 0
+        opt._ur_n_rotations = 0
+
+        opt._update_ur_tr(gp_std=0.001)  # Trigger collapse + rotation
+
+        expected_radius = opt.config.geodesic_max_angle * opt.trust_region
+        assert abs(opt._ur_radius - expected_radius) < 1e-8
+
+    def test_max_rotations_stops_rotating(self):
+        """After max_rotations, no more rotations should occur."""
+        opt = self._make_optimizer_with_ur_tr(ur_collapse_patience=1, ur_max_rotations=2)
+        opt._ur_n_rotations = 2  # Already at max
+
+        opt._update_ur_tr(gp_std=0.001)  # Would trigger rotation
+
+        assert opt._ur_n_rotations == 2  # Didn't increment
+
+    def test_no_op_when_disabled(self):
+        """_update_ur_tr should be no-op when ur_tr=False."""
+        from rielbo.subspace_bo_v2 import V2Config
+        opt = self._make_optimizer_with_ur_tr()
+        opt.config = V2Config()  # ur_tr=False by default
+        initial_radius = opt._ur_radius
+
+        opt._update_ur_tr(gp_std=0.001)
+
+        assert abs(opt._ur_radius - initial_radius) < 1e-8
+
+    def test_ur_tr_preset(self):
+        """ur_tr preset should have geodesic_tr and ur_tr enabled."""
+        from rielbo.subspace_bo_v2 import V2Config
+        config = V2Config.from_preset("ur_tr")
+        assert config.geodesic_tr
+        assert config.ur_tr
+        assert not config.adaptive_tr
+        assert not config.lass
+
+    def test_lass_ur_preset(self):
+        """lass_ur preset should have geodesic_tr, ur_tr, and lass."""
+        from rielbo.subspace_bo_v2 import V2Config
+        config = V2Config.from_preset("lass_ur")
+        assert config.geodesic_tr
+        assert config.ur_tr
+        assert config.lass
+        assert not config.adaptive_tr
+
+    def test_explore_preset(self):
+        """explore preset should have geodesic_tr, ur_tr, lass, and acqf_schedule."""
+        from rielbo.subspace_bo_v2 import V2Config
+        config = V2Config.from_preset("explore")
+        assert config.geodesic_tr
+        assert config.ur_tr
+        assert config.lass
+        assert config.acqf_schedule
+
+
+class TestLASS:
+    """Test Look-Ahead Subspace Selection (LASS)."""
+
+    def test_lass_selects_projection(self):
+        """LASS should pick a projection and set self.A."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+        from unittest.mock import MagicMock
+
+        config = V2Config(lass=True, lass_n_candidates=5)
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.verbose = False
+        opt.seed = 42
+        opt.input_dim = 32
+        opt._current_dim = 8
+        opt.device = "cpu"
+
+        # Create synthetic training data
+        opt.train_U = F.normalize(torch.randn(50, 32), p=2, dim=-1)
+        opt.train_Y = torch.randn(50)
+
+        # Initialize A first
+        torch.manual_seed(42)
+        A_raw = torch.randn(32, 8)
+        opt.A, _ = torch.linalg.qr(A_raw)
+        original_A = opt.A.clone()
+
+        opt._select_best_projection()
+
+        # A should have been updated (different from original with high probability)
+        # Note: could be the same by chance, but with 5 candidates it's very unlikely
+        assert opt.A.shape == (32, 8)
+        # Check it's orthonormal
+        ATA = opt.A.T @ opt.A
+        assert torch.allclose(ATA, torch.eye(8), atol=1e-5)
+
+    def test_lass_different_from_default(self):
+        """LASS with many candidates should likely pick a different projection."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+        torch.manual_seed(123)
+
+        config = V2Config(lass=True, lass_n_candidates=20)
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.verbose = False
+        opt.seed = 42
+        opt.input_dim = 32
+        opt._current_dim = 8
+        opt.device = "cpu"
+
+        opt.train_U = F.normalize(torch.randn(50, 32), p=2, dim=-1)
+        opt.train_Y = torch.randn(50)
+
+        # Default projection
+        torch.manual_seed(42)
+        A_raw = torch.randn(32, 8)
+        opt.A, _ = torch.linalg.qr(A_raw)
+        default_A = opt.A.clone()
+
+        opt._select_best_projection()
+
+        # With 20 candidates and seed 42 used for default, LASS should pick differently
+        # (seed 42 * 137 = different from seed 42)
+        diff = (opt.A - default_A).abs().max().item()
+        assert diff > 0.01  # Should be different
+
+    def test_lass_config_default(self):
+        """LASS should default to 50 candidates."""
+        from rielbo.subspace_bo_v2 import V2Config
+        config = V2Config(lass=True)
+        assert config.lass_n_candidates == 50
+
+
+class TestAcqfSchedule:
+    """Test acquisition function schedule."""
+
+    def _make_optimizer_with_acqf_schedule(self, **overrides):
+        """Create a minimal optimizer with acqf_schedule for testing."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+
+        config_kwargs = {
+            "geodesic_tr": True, "ur_tr": True, "acqf_schedule": True,
+        }
+        config_kwargs.update(overrides)
+        config = V2Config(**config_kwargs)
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.acqf = "ts"
+        opt.ucb_beta = 2.0
+        opt._prev_gp_std = 1.0
+        return opt
+
+    def test_default_acqf_when_normal(self):
+        """Should return default acqf when GP std is in normal range."""
+        opt = self._make_optimizer_with_acqf_schedule()
+        opt._prev_gp_std = 0.08  # Normal range
+
+        acqf, beta = opt._get_effective_acqf()
+
+        assert acqf == "ts"
+        assert beta == 2.0
+
+    def test_ucb_high_beta_when_collapsing(self):
+        """Should switch to UCB with high beta when GP std is low."""
+        opt = self._make_optimizer_with_acqf_schedule()
+        opt._prev_gp_std = 0.01  # Below ur_std_low
+
+        acqf, beta = opt._get_effective_acqf()
+
+        assert acqf == "ucb"
+        assert beta == opt.config.acqf_ucb_beta_high
+
+    def test_ucb_low_beta_when_informative(self):
+        """Should use UCB with low beta when GP std is high."""
+        opt = self._make_optimizer_with_acqf_schedule()
+        opt._prev_gp_std = 0.3  # Above ur_std_high
+
+        acqf, beta = opt._get_effective_acqf()
+
+        assert acqf == "ucb"
+        assert beta == opt.config.acqf_ucb_beta_low
+
+    def test_no_schedule_returns_default(self):
+        """With acqf_schedule=False, should always return default acqf."""
+        opt = self._make_optimizer_with_acqf_schedule(acqf_schedule=False)
+        opt._prev_gp_std = 0.001  # Very low
+
+        acqf, beta = opt._get_effective_acqf()
+
+        assert acqf == "ts"
+        assert beta == 2.0
+
+
 class TestExponentialMap:
     """Test exponential and logarithmic maps."""
 
@@ -556,3 +903,257 @@ class TestExponentialMap:
         # Should recover tangent (direction and magnitude)
         # Note: tangent is orthogonal to base, so we compare directly
         assert torch.allclose(tangent, recovered_tangent, atol=1e-4)
+
+
+class TestMultiSubspacePortfolio:
+    """Test multi-subspace portfolio (TuRBO-M style)."""
+
+    def _make_optimizer_with_portfolio(self, n_subspaces=3, **overrides):
+        """Create a minimal optimizer with multi-subspace portfolio."""
+        from rielbo.subspace_bo_v2 import SphericalSubspaceBOv2, V2Config
+        from unittest.mock import MagicMock
+
+        config_kwargs = {
+            "geodesic_tr": True, "ur_tr": True, "lass": False,
+            "multi_subspace": True, "n_subspaces": n_subspaces,
+            "subspace_stale_patience": 10,
+        }
+        config_kwargs.update(overrides)
+        config = V2Config(**config_kwargs)
+        opt = object.__new__(SphericalSubspaceBOv2)
+        opt.config = config
+        opt.verbose = False
+        opt.seed = 42
+        opt.trust_region = 0.8
+        opt.input_dim = 32
+        opt._current_dim = 8
+        opt.device = "cpu"
+        opt._ur_radius = config.geodesic_max_angle * 0.8
+        opt._ur_collapse_count = 0
+        opt._ur_n_rotations = 0
+        opt._prev_gp_std = 1.0
+        opt.gp = None
+        opt.train_U = F.normalize(torch.randn(50, 32), p=2, dim=-1)
+        opt.train_V = None
+        opt.train_Y = torch.randn(50)
+        opt.best_score = opt.train_Y.max().item()
+        opt.whitening = None
+
+        # Initialize projection
+        torch.manual_seed(42)
+        A_raw = torch.randn(32, 8)
+        opt.A, _ = torch.linalg.qr(A_raw)
+
+        opt._fit_gp = MagicMock()
+        return opt
+
+    def test_portfolio_preset(self):
+        """portfolio preset should have multi_subspace enabled."""
+        from rielbo.subspace_bo_v2 import V2Config
+        config = V2Config.from_preset("portfolio")
+        assert config.multi_subspace
+        assert config.n_subspaces == 5
+        assert config.geodesic_tr
+        assert config.ur_tr
+        assert config.lass
+
+    def test_init_subspaces_creates_K(self):
+        """_init_subspaces should create K subspaces."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        assert len(opt._subspaces) == 3
+        assert opt._active_subspace == 0
+        assert opt._total_bandit_steps == 0
+
+    def test_subspaces_have_distinct_projections(self):
+        """Each subspace should have a different projection matrix."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        A0 = opt._subspaces[0]["A"]
+        A1 = opt._subspaces[1]["A"]
+        A2 = opt._subspaces[2]["A"]
+
+        # Projections should differ
+        assert (A0 - A1).abs().max() > 0.01
+        assert (A1 - A2).abs().max() > 0.01
+
+    def test_subspace0_uses_current_projection(self):
+        """Subspace 0 should use the current (possibly LASS-selected) projection."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        original_A = opt.A.clone()
+        opt._init_subspaces()
+
+        assert torch.allclose(opt._subspaces[0]["A"], original_A)
+
+    def test_subspaces_are_orthonormal(self):
+        """All subspace projections should be orthonormal."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=5)
+        opt._init_subspaces()
+
+        for k, s in enumerate(opt._subspaces):
+            ATA = s["A"].T @ s["A"]
+            assert torch.allclose(ATA, torch.eye(8), atol=1e-5), f"Subspace {k} not orthonormal"
+
+    def test_bandit_selects_unexplored(self):
+        """UCB bandit should prefer unexplored subspaces."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        # Simulate: subspace 0 explored many times, 1 and 2 never
+        opt._subspaces[0]["n_evals"] = 100
+        opt._subspaces[0]["total_reward"] = 5.0
+        opt._total_bandit_steps = 100
+
+        k = opt._select_subspace_bandit()
+        # Should pick 1 or 2 (unexplored, high UCB exploration bonus)
+        assert k in [1, 2]
+
+    def test_bandit_selects_best_reward(self):
+        """With equal exploration, UCB should prefer higher reward."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+        opt._total_bandit_steps = 300
+
+        for k in range(3):
+            opt._subspaces[k]["n_evals"] = 100
+
+        opt._subspaces[0]["total_reward"] = 10.0
+        opt._subspaces[1]["total_reward"] = 2.0
+        opt._subspaces[2]["total_reward"] = 5.0
+
+        k = opt._select_subspace_bandit()
+        assert k == 0
+
+    def test_switch_subspace_changes_A(self):
+        """Switching subspace should swap projection matrix."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        A1_expected = opt._subspaces[1]["A"].clone()
+        opt._switch_to_subspace(1)
+
+        assert torch.allclose(opt.A, A1_expected)
+        assert opt._active_subspace == 1
+
+    def test_switch_subspace_refits_gp(self):
+        """Switching to a different subspace should trigger GP refit."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+        opt._total_bandit_steps = 1  # Not first step
+        opt._fit_gp.reset_mock()
+
+        opt._switch_to_subspace(1)
+        opt._fit_gp.assert_called_once()
+
+    def test_switch_same_subspace_no_refit(self):
+        """Switching to the same subspace should NOT refit GP."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+        opt._total_bandit_steps = 1
+        opt._active_subspace = 1
+        opt._fit_gp.reset_mock()
+
+        opt._switch_to_subspace(1)
+        opt._fit_gp.assert_not_called()
+
+    def test_update_stats_tracks_improvement(self):
+        """_update_subspace_stats should track improvements."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        opt._update_subspace_stats(0, improved=True)
+        assert opt._subspaces[0]["n_evals"] == 1
+        assert opt._subspaces[0]["n_success"] == 1
+        assert opt._subspaces[0]["total_reward"] == 1.0
+        assert opt._subspaces[0]["n_consec_fail"] == 0
+
+    def test_update_stats_tracks_failure(self):
+        """_update_subspace_stats should track consecutive failures."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        for _ in range(5):
+            opt._update_subspace_stats(0, improved=False)
+
+        assert opt._subspaces[0]["n_evals"] == 5
+        assert opt._subspaces[0]["n_success"] == 0
+        assert opt._subspaces[0]["n_consec_fail"] == 5
+
+    def test_stale_subspace_replaced(self):
+        """Subspace should be replaced after subspace_stale_patience failures."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+        old_A = opt._subspaces[1]["A"].clone()
+
+        # Simulate stale_patience consecutive failures on subspace 1
+        for _ in range(opt.config.subspace_stale_patience):
+            opt._update_subspace_stats(1, improved=False)
+
+        # Should have been replaced
+        assert opt._subspaces[1]["n_evals"] == 0
+        assert opt._subspaces[1]["n_consec_fail"] == 0
+        assert (opt._subspaces[1]["A"] - old_A).abs().max() > 0.01
+
+    def test_replacement_resets_ur_tr_state(self):
+        """Replaced subspace should have fresh UR-TR state."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+        init_radius = opt.config.geodesic_max_angle * opt.trust_region
+
+        # Mess up UR-TR state then replace
+        opt._subspaces[0]["ur_radius"] = 0.01
+        opt._subspaces[0]["ur_collapse_count"] = 5
+        opt._subspaces[0]["ur_n_rotations"] = 3
+        opt._active_subspace = 0
+        opt._replace_subspace(0)
+
+        assert opt._subspaces[0]["ur_radius"] == init_radius
+        assert opt._subspaces[0]["ur_collapse_count"] == 0
+        assert opt._subspaces[0]["ur_n_rotations"] == 0
+
+    def test_improvement_resets_consec_fail(self):
+        """An improvement should reset consecutive failure counter."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        for _ in range(5):
+            opt._update_subspace_stats(0, improved=False)
+        assert opt._subspaces[0]["n_consec_fail"] == 5
+
+        opt._update_subspace_stats(0, improved=True)
+        assert opt._subspaces[0]["n_consec_fail"] == 0
+
+    def test_saves_ur_tr_state_per_subspace(self):
+        """UR-TR state should be saved per subspace when switching."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        # Modify UR-TR state while in subspace 0
+        opt._ur_radius = 0.123
+        opt._ur_collapse_count = 7
+        opt._ur_n_rotations = 2
+        opt._update_subspace_stats(0, improved=False)
+
+        # State should be saved back
+        assert opt._subspaces[0]["ur_radius"] == 0.123
+        assert opt._subspaces[0]["ur_collapse_count"] == 7
+        assert opt._subspaces[0]["ur_n_rotations"] == 2
+
+    def test_switch_restores_ur_tr_state(self):
+        """Switching to subspace should restore its full UR-TR state."""
+        opt = self._make_optimizer_with_portfolio(n_subspaces=3)
+        opt._init_subspaces()
+
+        # Set unique UR-TR state for subspace 1
+        opt._subspaces[1]["ur_radius"] = 0.777
+        opt._subspaces[1]["ur_collapse_count"] = 3
+        opt._subspaces[1]["ur_n_rotations"] = 1
+        opt._total_bandit_steps = 1
+
+        opt._switch_to_subspace(1)
+
+        assert opt._ur_radius == 0.777
+        assert opt._ur_collapse_count == 3
+        assert opt._ur_n_rotations == 1

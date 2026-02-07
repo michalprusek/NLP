@@ -76,8 +76,7 @@ class NormDistribution:
         self.max_norm = norms.max().item()
 
         if self.method == "gaussian":
-            # Already computed
-            pass
+            pass  # Uses self.mean and self.std computed above
 
         elif self.method == "histogram":
             # Build histogram
@@ -107,17 +106,13 @@ class NormDistribution:
         n = len(norms)
         k = self.n_components
 
-        # Initialize with k-means++
-        self.gmm_means = torch.zeros(k, device=self.device)
         self.gmm_stds = torch.ones(k, device=self.device) * self.std / k
         self.gmm_weights = torch.ones(k, device=self.device) / k
-
-        # Random initialization
         indices = torch.randperm(n)[:k]
         self.gmm_means = norms[indices].clone()
 
         for _ in range(n_iter):
-            # E-step: compute responsibilities
+            # E-step
             log_probs = torch.zeros(n, k, device=self.device)
             for j in range(k):
                 diff = norms - self.gmm_means[j]
@@ -127,14 +122,13 @@ class NormDistribution:
                     - 0.5 * diff**2 / (self.gmm_stds[j]**2 + 1e-10)
                 )
 
-            # Normalize responsibilities
             log_sum = torch.logsumexp(log_probs, dim=1, keepdim=True)
-            resp = torch.exp(log_probs - log_sum)  # [n, k]
+            resp = torch.exp(log_probs - log_sum)
 
-            # M-step: update parameters
-            Nk = resp.sum(dim=0) + 1e-10  # [k]
+            # M-step
+            Nk = resp.sum(dim=0) + 1e-10
             self.gmm_weights = Nk / n
-            self.gmm_means = (resp.T @ norms) / Nk  # [k]
+            self.gmm_means = (resp.T @ norms) / Nk
 
             for j in range(k):
                 diff = norms - self.gmm_means[j]
@@ -156,26 +150,19 @@ class NormDistribution:
             samples = torch.randn(n_samples, device=self.device) * self.std + self.mean
 
         elif self.method == "histogram":
-            # Sample bin indices according to probabilities
             bin_indices = torch.multinomial(self.bin_probs, n_samples, replacement=True)
-
-            # Sample uniformly within each bin
             bin_width = (self.max_norm - self.min_norm) / self.n_bins
             bin_starts = self.bin_edges[bin_indices]
             samples = bin_starts + torch.rand(n_samples, device=self.device) * bin_width
 
         elif self.method == "gmm":
-            # Sample component assignments
             comp_indices = torch.multinomial(self.gmm_weights, n_samples, replacement=True)
-
-            # Sample from each component
             samples = torch.randn(n_samples, device=self.device)
             samples = samples * self.gmm_stds[comp_indices] + self.gmm_means[comp_indices]
 
         else:
             raise ValueError(f"Unknown method: {self.method}")
 
-        # Clamp to observed range
         samples = samples.clamp(self.min_norm * 0.9, self.max_norm * 1.1)
 
         return samples

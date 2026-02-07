@@ -31,9 +31,6 @@ def main():
     parser.add_argument("--zinc", action="store_true", help="Use ZINC dataset (249K) instead of GuacaMol (20K)")
     args = parser.parse_args()
 
-    # ============================================================
-    # Step 1: Encode molecules
-    # ============================================================
     logger.info(f"Loading codec on {args.device}...")
     from shared.guacamol.codec import SELFIESVAECodec
     codec = SELFIESVAECodec.from_pretrained(device=args.device)
@@ -48,7 +45,6 @@ def main():
         df = pd.read_csv("datasets/guacamol/guacamol_train_data_first_20k.csv")
         all_smiles = df["smile"].tolist()
 
-    # Sample
     n = min(args.n_samples, len(all_smiles))
     rng = np.random.RandomState(42)
     indices = rng.choice(len(all_smiles), size=n, replace=False)
@@ -59,16 +55,12 @@ def main():
     embeddings_torch = codec.encode_batch(smiles_list, batch_size=128)
     logger.info(f"Encoding took {time.time() - t0:.1f}s, shape: {embeddings_torch.shape}")
 
-    # Remove zero vectors (invalid molecules)
     norms = embeddings_torch.norm(dim=-1)
     valid_mask = norms > 1e-6
     embeddings_torch = embeddings_torch[valid_mask]
     logger.info(f"Valid embeddings: {embeddings_torch.shape[0]}/{n}")
 
-    # Raw embeddings (for variance analysis)
     embeddings = embeddings_torch.cpu().numpy()
-
-    # Normalized to unit sphere (matching BO setup)
     norms_np = np.linalg.norm(embeddings, axis=1, keepdims=True)
     directions = embeddings / norms_np
 
@@ -77,12 +69,8 @@ def main():
     print(f"Dataset: {'ZINC' if args.zinc else 'GuacaMol'}, N={embeddings.shape[0]}, D={embeddings.shape[1]}")
     print("=" * 60)
 
-    # ============================================================
-    # Step 2: Linear methods (PCA, Participation Ratio, ARD-style)
-    # ============================================================
     print("\n--- Linear Methods ---")
 
-    # PCA on raw embeddings
     pca = PCA().fit(embeddings)
     cumvar = np.cumsum(pca.explained_variance_ratio_)
     eigenvalues = pca.explained_variance_
@@ -93,12 +81,10 @@ def main():
     d_99 = int(np.searchsorted(cumvar, 0.99) + 1)
     print(f"PCA cumulative variance: d_80={d_80}, d_90={d_90}, d_95={d_95}, d_99={d_99}")
 
-    # Participation Ratio
     ev = eigenvalues[eigenvalues > 0]
     PR = float((ev.sum()) ** 2 / (ev ** 2).sum())
     print(f"Participation Ratio: {PR:.1f}")
 
-    # Per-dimension variance (ARD-style)
     per_dim_var = embeddings.var(axis=0)
     sorted_var = np.sort(per_dim_var)[::-1]
     active_1pct = int((sorted_var > 0.01 * sorted_var[0]).sum())
@@ -108,7 +94,6 @@ def main():
     print(f"Active dims (>5% max var): {active_5pct}")
     print(f"Active dims (>10% max var): {active_10pct}")
 
-    # PCA on directions (unit sphere)
     pca_dir = PCA().fit(directions)
     cumvar_dir = np.cumsum(pca_dir.explained_variance_ratio_)
     d_95_dir = int(np.searchsorted(cumvar_dir, 0.95) + 1)
@@ -117,14 +102,10 @@ def main():
     PR_dir = float((ev_dir.sum()) ** 2 / (ev_dir ** 2).sum())
     print(f"\nPCA on unit sphere directions: d_95={d_95_dir}, PR={PR_dir:.1f}")
 
-    # ============================================================
-    # Step 3: Nonlinear methods (scikit-dimension)
-    # ============================================================
     print("\n--- Nonlinear Methods (scikit-dimension) ---")
 
     import skdim
 
-    # TwoNN
     t0 = time.time()
     twonn = skdim.id.TwoNN(discard_fraction=0.1)
     twonn.fit(embeddings)
@@ -135,7 +116,6 @@ def main():
     twonn_dir.fit(directions)
     print(f"TwoNN (S^255):     {twonn_dir.dimension_:.1f}  ({time.time() - t0:.1f}s)")
 
-    # MLE
     t0 = time.time()
     mle = skdim.id.MLE(K=20)
     mle.fit(embeddings)
@@ -146,7 +126,6 @@ def main():
     mle_dir.fit(directions)
     print(f"MLE K=20 (S^255):  {mle_dir.dimension_:.1f}  ({time.time() - t0:.1f}s)")
 
-    # DANCo
     t0 = time.time()
     try:
         danco = skdim.id.DANCo()
@@ -157,18 +136,16 @@ def main():
         danco_val = None
         print(f"DANCo (raw):       FAILED - {e}")
 
-    # ESS
     t0 = time.time()
     try:
         ess = skdim.id.ESS()
-        ess.fit(embeddings[:2000])  # ESS can be slow on large datasets
+        ess.fit(embeddings[:2000])
         ess_val = ess.dimension_
         print(f"ESS (raw, N=2k):   {ess_val:.1f}  ({time.time() - t0:.1f}s)")
     except Exception as e:
         ess_val = None
         print(f"ESS (raw):         FAILED - {e}")
 
-    # FisherS
     t0 = time.time()
     try:
         fishers = skdim.id.FisherS()
@@ -179,44 +156,34 @@ def main():
         fishers_val = None
         print(f"FisherS:           FAILED - {e}")
 
-    # ============================================================
-    # Step 4: GRIDE multiscale (DADApy)
-    # ============================================================
     print("\n--- Multiscale Analysis (DADApy GRIDE) ---")
 
     from dadapy import Data
 
-    # On raw embeddings
     t0 = time.time()
     data_raw = Data(coordinates=embeddings)
     data_raw.compute_distances(maxk=100)
     id_2nn_raw, id_err_raw, _ = data_raw.compute_id_2NN()
     print(f"DADApy TwoNN (raw):  {id_2nn_raw:.1f} ± {id_err_raw:.1f}  ({time.time() - t0:.1f}s)")
 
-    # On unit sphere directions
     t0 = time.time()
     data_dir = Data(coordinates=directions)
     data_dir.compute_distances(maxk=100)
     id_2nn_dir, id_err_dir, _ = data_dir.compute_id_2NN()
     print(f"DADApy TwoNN (S^255): {id_2nn_dir:.1f} ± {id_err_dir:.1f}  ({time.time() - t0:.1f}s)")
 
-    # GRIDE multiscale on raw embeddings
     t0 = time.time()
     ids_gride, errs_gride, scales_gride = data_raw.return_id_scaling_gride(range_max=64)
     print(f"\nGRIDE Multiscale (raw embeddings):  ({time.time() - t0:.1f}s)")
     for s, i, e in zip(scales_gride, ids_gride, errs_gride):
         print(f"  neighbors={s:5.1f}: ID={i:.1f} ± {e:.1f}")
 
-    # GRIDE multiscale on directions
     t0 = time.time()
     ids_gride_dir, errs_gride_dir, scales_gride_dir = data_dir.return_id_scaling_gride(range_max=64)
     print(f"\nGRIDE Multiscale (unit sphere S^255):  ({time.time() - t0:.1f}s)")
     for s, i, e in zip(scales_gride_dir, ids_gride_dir, errs_gride_dir):
         print(f"  neighbors={s:5.1f}: ID={i:.1f} ± {e:.1f}")
 
-    # ============================================================
-    # Step 5: Local ID distribution
-    # ============================================================
     print("\n--- Local ID Distribution (lPCA) ---")
 
     t0 = time.time()
@@ -230,9 +197,6 @@ def main():
           f"75th={np.percentile(local_ids, 75):.1f}, "
           f"90th={np.percentile(local_ids, 90):.1f}")
 
-    # ============================================================
-    # Step 6: Norm distribution analysis
-    # ============================================================
     print("\n--- Norm Distribution ---")
     norms_flat = norms_np.flatten()
     print(f"  mean={norms_flat.mean():.2f}, std={norms_flat.std():.2f}")
@@ -240,9 +204,6 @@ def main():
     print(f"  10th={np.percentile(norms_flat, 10):.2f}, "
           f"90th={np.percentile(norms_flat, 90):.2f}")
 
-    # ============================================================
-    # Summary
-    # ============================================================
     print("\n" + "=" * 60)
     print("SUMMARY OF ID ESTIMATES")
     print("=" * 60)
@@ -271,7 +232,6 @@ def main():
     for name, val in estimates.items():
         print(f"  {name:30s}: {val:.1f}")
 
-    # Recommendation
     nonlinear = [
         twonn.dimension_, twonn_dir.dimension_,
         mle.dimension_, mle_dir.dimension_,
@@ -288,11 +248,17 @@ def main():
     print(f"  >>> (median of {len(nonlinear)} nonlinear estimates)")
     print(f"  >>> Test range: [{max(4, recommended // 2)}, {recommended * 2}]")
 
-    # Points per dimension analysis
     total_pts = 600  # 100 cold-start + 500 iterations
     for d in [8, 12, 16, recommended, 24, 32, 48, 64]:
         ratio = total_pts / d
-        quality = "excellent" if ratio > 20 else "good" if ratio > 10 else "marginal" if ratio > 5 else "poor"
+        if ratio > 20:
+            quality = "excellent"
+        elif ratio > 10:
+            quality = "good"
+        elif ratio > 5:
+            quality = "marginal"
+        else:
+            quality = "poor"
         marker = " <<<" if d == recommended else ""
         print(f"    d={d:3d}: {ratio:.1f} pts/dim ({quality}){marker}")
 

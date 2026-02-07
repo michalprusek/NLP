@@ -140,14 +140,11 @@ class SphericalSubspaceBO:
         """Create covariance kernel."""
         if self.kernel == "arccosine":
             return gpytorch.kernels.ScaleKernel(ArcCosineKernel())
-        elif self.kernel == "matern":
-            return gpytorch.kernels.ScaleKernel(
-                gpytorch.kernels.MaternKernel(nu=2.5)
-            )
-        elif self.kernel == "hvarfner":
+        if self.kernel == "matern":
+            return gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel(nu=2.5))
+        if self.kernel == "hvarfner":
             return None  # Use BoTorch defaults (RBF + LogNormal + ARD)
-        else:
-            raise ValueError(f"Unknown kernel '{self.kernel}'. Valid: arccosine, matern")
+        raise ValueError(f"Unknown kernel '{self.kernel}'. Valid: arccosine, matern, hvarfner")
 
     def _fit_gp(self):
         """Fit GP on subspace sphere."""
@@ -156,23 +153,18 @@ class SphericalSubspaceBO:
         X = self.train_V.double()
         Y = self.train_Y.double().unsqueeze(-1)
 
-        # For Hvarfner defaults: remap S^(d-1) coordinates from [-1,1] to [0,1]
         if self.kernel == "hvarfner":
-            X = (X + 1) / 2
+            X = (X + 1) / 2  # Remap S^(d-1) from [-1,1] to [0,1]
 
         try:
             covar_module = self._create_kernel()
-            if covar_module is not None:
-                self.gp = SingleTaskGP(X, Y, covar_module=covar_module).to(self.device)
-            else:
-                # BoTorch defaults: RBF + LogNormal(√2+log(d)/2, √3) + ARD + Standardize
-                self.gp = SingleTaskGP(X, Y).to(self.device)
+            kwargs = {"covar_module": covar_module} if covar_module is not None else {}
+            self.gp = SingleTaskGP(X, Y, **kwargs).to(self.device)
             self.likelihood = self.gp.likelihood
             mll = ExactMarginalLogLikelihood(self.likelihood, self.gp)
             fit_gpytorch_mll(mll)
             self.gp.eval()
 
-            # Full diagnostics with GPDiagnostics
             if self.verbose and self.iteration % 10 == 0:
                 metrics = self.gp_diagnostics.analyze(
                     self.gp, X.float(), Y.squeeze(-1).float()
@@ -184,7 +176,6 @@ class SphericalSubspaceBO:
         except (RuntimeError, torch.linalg.LinAlgError) as e:
             if isinstance(e, torch.cuda.OutOfMemoryError):
                 raise
-            # Numerical issues - use fallback
             self.fallback_count += 1
             logger.error(f"GP fit failed (fallback #{self.fallback_count}): {e}")
             self.gp = SingleTaskGP(
@@ -198,27 +189,17 @@ class SphericalSubspaceBO:
             self.gp.eval()
 
     def _generate_sobol_candidates(self, n_candidates: int) -> torch.Tensor:
-        """Generate candidates in trust region around best training point."""
-        # Find best training point in subspace
-        best_idx = self.train_Y.argmax()
-        v_best = self.train_V[best_idx:best_idx+1]  # [1, d]
+        """Generate Sobol candidates in trust region around best training point."""
+        v_best = self.train_V[self.train_Y.argmax():self.train_Y.argmax()+1]
 
-        # Trust region bounds
         half_length = self.trust_region / 2
         tr_lb = v_best - half_length
         tr_ub = v_best + half_length
 
-        # Generate Sobol sequence
         sobol = SobolEngine(self.subspace_dim, scramble=True)
         pert = sobol.draw(n_candidates).to(dtype=torch.float32, device=self.device)
 
-        # Scale to trust region
-        v_cand = tr_lb + (tr_ub - tr_lb) * pert  # [n_candidates, d]
-
-        # Project to sphere
-        v_cand = F.normalize(v_cand, p=2, dim=-1)
-
-        return v_cand
+        return F.normalize(tr_lb + (tr_ub - tr_lb) * pert, p=2, dim=-1)
 
     def _to_gp_space(self, v: torch.Tensor) -> torch.Tensor:
         """Map subspace coords to GP input space (identity or [0,1] remap)."""
@@ -231,64 +212,46 @@ class SphericalSubspaceBO:
         diag = {}
 
         try:
-            if self.acqf == "ts":
-                # Thompson Sampling with Sobol candidates
-                v_cand = self._generate_sobol_candidates(self.n_candidates)
-                x_cand = self._to_gp_space(v_cand)
+            v_cand = self._generate_sobol_candidates(self.n_candidates)
+            x_cand = self._to_gp_space(v_cand)
 
+            if self.acqf == "ts":
                 if self.kernel == "hvarfner":
-                    # Direct posterior sampling (avoids MaxPosteriorSampling shape issues)
                     with torch.no_grad():
-                        post = self.gp.posterior(x_cand.double())
-                        samples = post.rsample()  # [1, n_cand, 1]
+                        samples = self.gp.posterior(x_cand.double()).rsample()
                         best_idx = samples.squeeze().argmax()
                     v_opt = v_cand[best_idx:best_idx+1]
-                    v_opt = F.normalize(v_opt, p=2, dim=-1)
                 else:
                     thompson = MaxPosteriorSampling(model=self.gp, replacement=False)
                     v_opt = thompson(x_cand.double().unsqueeze(0), num_samples=1)
                     v_opt = v_opt.squeeze(0).float()
-                    v_opt = F.normalize(v_opt, p=2, dim=-1)
+                v_opt = F.normalize(v_opt, p=2, dim=-1)
 
             elif self.acqf == "ei":
-                # Expected Improvement with Sobol candidates
-                v_cand = self._generate_sobol_candidates(self.n_candidates)
-                x_cand = self._to_gp_space(v_cand)
-
                 ei = qExpectedImprovement(self.gp, best_f=self.train_Y.max().double())
                 with torch.no_grad():
                     ei_vals = ei(x_cand.double().unsqueeze(-2))
-                best_idx = ei_vals.argmax()
-                v_opt = v_cand[best_idx:best_idx+1]
+                v_opt = v_cand[ei_vals.argmax():ei_vals.argmax()+1]
 
             elif self.acqf == "ucb":
-                # UCB with Sobol candidates
-                v_cand = self._generate_sobol_candidates(self.n_candidates)
-                x_cand = self._to_gp_space(v_cand)
-
                 with torch.no_grad():
                     post = self.gp.posterior(x_cand.double())
                     ucb_vals = post.mean.squeeze() + self.ucb_beta * post.variance.sqrt().squeeze()
-                best_idx = ucb_vals.argmax()
-                v_opt = v_cand[best_idx:best_idx+1]
+                v_opt = v_cand[ucb_vals.argmax():ucb_vals.argmax()+1]
 
             else:
                 raise ValueError(f"Unknown acquisition function: {self.acqf}")
 
             # Diagnostics
-            x_opt = self._to_gp_space(v_opt)
             with torch.no_grad():
-                post = self.gp.posterior(x_opt.double())
+                post = self.gp.posterior(self._to_gp_space(v_opt).double())
                 diag["gp_mean"] = post.mean.item()
                 diag["gp_std"] = post.variance.sqrt().item()
-                cos_sims = (v_opt @ self.train_V.T).squeeze()
-                diag["nearest_train_cos"] = cos_sims.max().item()
+                diag["nearest_train_cos"] = (v_opt @ self.train_V.T).squeeze().max().item()
 
-            u_opt = self.lift_to_original(v_opt)
-            return u_opt, diag
+            return self.lift_to_original(v_opt), diag
 
         except (RuntimeError, torch.linalg.LinAlgError) as e:
-            # Numerical issues - use random fallback
             logger.error(f"Acquisition failed: {e}")
             u_opt = F.normalize(torch.randn(1, self.input_dim, device=self.device), dim=-1)
             return u_opt, {"gp_mean": 0, "gp_std": 1, "nearest_train_cos": 0, "is_fallback": True}
@@ -306,24 +269,18 @@ class SphericalSubspaceBO:
             embeddings.append(emb.cpu())
         embeddings = torch.cat(embeddings, dim=0).to(self.device)
 
-        # Compute mean norm from ALL cold start molecules
         self.mean_norm = embeddings.norm(dim=-1).mean().item()
         logger.info(f"Mean embedding norm: {self.mean_norm:.2f}")
 
-        # Store embeddings
         self.train_X = embeddings
-
-        # Extract directions
         self.train_U = F.normalize(embeddings, p=2, dim=-1)
         self.train_Y = scores.to(self.device).float()
         self.smiles_observed = smiles_list.copy()
 
-        # Track best
         best_idx = self.train_Y.argmax().item()
         self.best_score = self.train_Y[best_idx].item()
         self.best_smiles = smiles_list[best_idx]
 
-        # Fit GP
         self._fit_gp()
 
         logger.info(f"Cold start done. Best: {self.best_score:.4f} (n={len(self.train_Y)})")

@@ -302,8 +302,10 @@ class VLLMChatWrapper:
             sys.stdout.flush()
             sys.stderr.flush()
 
+        # Reflection calls (string input) need temperature>0 for diverse proposals
+        temp = 0.7 if isinstance(messages, str) else 0.0
         try:
-            response = self.llm_client.generate(prompt, max_new_tokens=512, temperature=0.0)
+            response = self.llm_client.generate(prompt, max_new_tokens=512, temperature=temp)
         except Exception as e:
             logger.error(f"LLM call #{self.call_count} failed: {e}")
             raise
@@ -533,11 +535,16 @@ def main():
     # Optimization parameters
     parser.add_argument(
         "--max-calls", type=int, default=50000,
-        help="Maximum LLM calls budget"
+        help="Maximum LLM calls budget (used to compute max-metric-calls if not set)"
+    )
+    parser.add_argument(
+        "--max-metric-calls", type=int, default=None,
+        help="Maximum metric calls (evaluator invocations). Overrides --max-calls calculation. "
+             "Each candidate eval costs ~1319 calls (full valset). For 100 candidates: ~150000."
     )
     parser.add_argument(
         "--minibatch-size", type=int, default=150,
-        help="Evaluation minibatch size"
+        help="Evaluation minibatch size (only used for --max-calls calculation)"
     )
 
     # GEPA parameters
@@ -588,10 +595,14 @@ def main():
     if args.reflection_model is None:
         args.reflection_model = args.model
 
-    # Calculate max_metric_calls from max_calls
-    # GEPA counts metric_calls as datapoints, not LLM calls
-    # With minibatch_size examples per evaluation, we need:
-    max_metric_calls = args.max_calls // args.minibatch_size
+    # Calculate max_metric_calls
+    # GEPA counts each evaluator(data, response) call as one metric call.
+    # Full valset eval = 1319 calls. Reflection mini-batch = 20 calls.
+    # Each new candidate costs ~1339 calls. For 100 candidates: ~135K calls.
+    if args.max_metric_calls is not None:
+        max_metric_calls = args.max_metric_calls
+    else:
+        max_metric_calls = args.max_calls // args.minibatch_size
 
     logger.info("=" * 60)
     logger.info("GEPA: Genetic-Pareto Prompt Optimization")
@@ -733,16 +744,56 @@ def main():
             seed=args.seed,
             run_dir=str(results_dir / "gepa_run"),
         )
-        # Extract best prompt from result
+        # Extract ALL candidates and scores from GEPAResult
+        # val_aggregate_scores are evaluated on the full valset (= trainset = 1319 test examples)
+        all_candidates = result.candidates  # list[dict[str, str]]
+        all_scores = result.val_aggregate_scores  # list[float]
+        best_idx = result.best_idx
         best_candidate = result.best_candidate
         best_prompt = best_candidate.get("system_prompt", str(best_candidate))
-        best_score = result.val_aggregate_scores[result.best_idx]
-        logger.info(f"GEPA found {result.num_candidates} candidates, best_idx={result.best_idx}")
+        best_score = all_scores[best_idx]
+        logger.info(f"GEPA produced {result.num_candidates} candidates, best_idx={best_idx}")
         logger.info(f"Total metric calls: {result.total_metric_calls}")
+
+        # Build convergence curve: best-so-far every eval_size metric calls
+        # discovery_eval_counts[i] = cumulative metric calls when candidate i was discovered
+        # We checkpoint at k * eval_size for k = 1, 2, ..., num_checkpoints
+        eval_size = len(trainset)
+        discovery_counts = result.discovery_eval_counts  # list[int]
+        num_checkpoints = max_metric_calls // eval_size  # should be 100
+
+        evaluated_prompts = []
+        best_so_far_score = -1.0
+        best_so_far_prompt = ""
+        candidate_idx = 0  # pointer into candidates sorted by discovery order
+
+        for k in range(1, num_checkpoints + 1):
+            budget_at_checkpoint = k * eval_size
+            # Advance through candidates discovered within this budget
+            while candidate_idx < len(all_candidates) and discovery_counts[candidate_idx] <= budget_at_checkpoint:
+                if all_scores[candidate_idx] > best_so_far_score:
+                    best_so_far_score = all_scores[candidate_idx]
+                    best_so_far_prompt = all_candidates[candidate_idx].get("system_prompt", str(all_candidates[candidate_idx]))
+                candidate_idx += 1
+
+            correct = int(round(best_so_far_score * eval_size))
+            evaluated_prompts.append({
+                "eval_id": k,
+                "iteration": k - 1,
+                "metric_calls": budget_at_checkpoint,
+                "prompt": best_so_far_prompt,
+                "score": best_so_far_score,
+                "correct": correct,
+                "total": eval_size,
+            })
+
+        logger.info(f"Built convergence curve: {len(evaluated_prompts)} checkpoints (every {eval_size} metric calls)")
+        logger.info(f"Candidates discovered: {len(all_candidates)}, checkpoints filled: {len(evaluated_prompts)}")
+
     except MaxPromptsReachedException:
         logger.info("Optimization stopped early due to max_prompts limit.")
         stopped_early = True
-        # Get best from tracking evaluator
+        evaluated_prompts = []
         if tracking_evaluator is not None:
             best_prompt, best_score = tracking_evaluator._get_best_prompt()
         else:
@@ -751,9 +802,29 @@ def main():
 
     elapsed = time.time() - start_time
 
-    # Finalize tracking if not stopped early (early stop already finalizes)
+    # Finalize tracking if active
     if tracking_evaluator is not None and not stopped_early:
         tracking_evaluator.finalize()
+
+    # Save benchmark JSON (same format as OPRO/ProTeGi)
+    if args.incremental_json and evaluated_prompts:
+        benchmark_data = {
+            "method": "gepa",
+            "model": args.model,
+            "eval_size": len(trainset),
+            "config": {
+                "max_metric_calls": max_metric_calls,
+                "minibatch_size": args.minibatch_size,
+                "frontier_type": args.frontier_type,
+                "max_prompts": args.max_prompts,
+                "split": args.split,
+                "reflection_model": args.reflection_model,
+            },
+            "evaluated_prompts": evaluated_prompts[:args.max_prompts] if args.max_prompts else evaluated_prompts,
+        }
+        with open(args.incremental_json, "w") as f:
+            json.dump(benchmark_data, f, indent=2, default=str)
+        logger.info(f"Benchmark JSON saved: {args.incremental_json} ({len(benchmark_data['evaluated_prompts'])} prompts)")
 
     logger.info("\n" + "=" * 60)
     logger.info("GEPA OPTIMIZATION RESULTS")

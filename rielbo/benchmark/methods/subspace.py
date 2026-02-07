@@ -39,14 +39,12 @@ class SubspaceBOBenchmark(BaseBenchmarkMethod):
     ):
         super().__init__(codec, oracle, seed, device, verbose)
 
-        # Store config for logging
         self.subspace_dim = subspace_dim
         self.n_candidates = n_candidates
         self.acqf = acqf
         self.trust_region = trust_region
         self.kernel = kernel
 
-        # Create underlying optimizer
         self.optimizer = SphericalSubspaceBO(
             codec=codec,
             oracle=oracle,
@@ -65,7 +63,6 @@ class SubspaceBOBenchmark(BaseBenchmarkMethod):
         """Initialize with cold start data."""
         self.optimizer.cold_start(smiles_list, scores)
 
-        # Sync state
         self.best_score = self.optimizer.best_score
         self.best_smiles = self.optimizer.best_smiles
         self.n_evaluated = len(smiles_list)
@@ -75,7 +72,6 @@ class SubspaceBOBenchmark(BaseBenchmarkMethod):
         """Execute a single optimization step."""
         result = self.optimizer.step()
 
-        # Update tracked state
         self.best_score = result["best_score"]
         self.best_smiles = self.optimizer.best_smiles
         if not result["is_duplicate"] and result["smiles"]:
